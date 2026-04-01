@@ -80,7 +80,7 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
   const [gen,setGen]=useState("");const [photo,setPhoto]=useState(null);const [preview,setPreview]=useState("");
   const [reading,setReading]=useState("");const [readingType,setReadingType]=useState("hours");
   const [analyzing,setAnalyzing]=useState(false);const [confirmed,setConfirmed]=useState(false);
-  const [saving,setSaving]=useState(false);const [msg,setMsg]=useState("");const [aiNotes,setAiNotes]=useState("");
+  const [saving,setSaving]=useState(false);const [msg,setMsg]=useState("");const [aiNotes,setAiNotes]=useState("");const [fuelPct,setFuelPct]=useState("");const [dieselBought,setDieselBought]=useState("");const [notes,setNotes]=useState("");
   const fileRef={current:null};
 
   const handlePhoto=async(e)=>{
@@ -102,7 +102,7 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
           model:"claude-sonnet-4-20250514",max_tokens:500,
           messages:[{role:"user",content:[
             {type:"image",source:{type:"base64",media_type:mediaType,data:imgData}},
-            {type:"text",text:"Look at this generator meter/gauge image. Extract the reading shown. Reply in JSON only, no markdown: {\"reading\": number, \"type\": \"hours\" or \"fuel_level\" or \"voltage\" or \"other\", \"unit\": string, \"confidence\": \"high\" or \"medium\" or \"low\", \"notes\": string}. If multiple readings visible, use the most prominent one. If you cannot read it, set reading to 0 and confidence to low."}
+            {type:"text",text:"This is a generator control panel display (commonly DCP-10 or similar). Extract ALL visible readings. These displays typically show: frequency (Hz), RPM, and run hours (labeled Kh, kh, h, or hrs). The run hours reading is the most important one.\n\nReply in JSON only, no markdown backticks:\n{\"readings\": [{\"type\": \"hours\" or \"rpm\" or \"frequency\" or \"voltage\" or \"fuel_level\", \"value\": number, \"unit\": string, \"confidence\": \"high\" or \"medium\" or \"low\"}], \"primary_hours\": number, \"fuel_gauge_percent\": number or null, \"notes\": string}\n\nIMPORTANT: Kh means kilohours (multiply the displayed value by 1000 to get total hours). For example 13.49 Kh = 13490 hours, 18.88 Kh = 18880 hours. If the unit is just h or hrs, the value IS the hours directly. Always return primary_hours as the TOTAL hours (already converted if Kh). If you see a fuel gauge bar, estimate the percentage. If display is off or unreadable, set primary_hours to 0."}
           ]}]
         })
       });
@@ -111,10 +111,12 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
       try{
         const clean=txt.replace(/```json|```/g,"").trim();
         const parsed=JSON.parse(clean);
-        setReading(String(parsed.reading||""));
-        setReadingType(parsed.type||"hours");
-        setAiNotes(`${parsed.confidence} confidence. ${parsed.unit||""} ${parsed.notes||""}`);
-        setMsg(parsed.confidence==="low"?"Could not read clearly - please enter manually":"Reading detected! Please verify.");
+        setReading(String(parsed.primary_hours||""));
+        setReadingType("hours");
+        if(parsed.fuel_gauge_percent!=null)setFuelPct(String(parsed.fuel_gauge_percent));
+        const allReadings=(parsed.readings||[]).map(r=>r.value+" "+r.unit+" ("+r.type+")").join(", ");
+        setAiNotes(allReadings+(parsed.notes?" | "+parsed.notes:""));
+        setMsg(parsed.primary_hours>0?"Readings detected! Please verify.":"Could not read clearly - please enter manually.");
       }catch{setMsg("Could not parse reading - please enter manually");setAiNotes(txt);}
     }catch(e){setMsg("Analysis failed: "+e.message);}
     setAnalyzing(false);
@@ -123,7 +125,12 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
   const handleSave=async()=>{
     if(!gen||!reading)return;setSaving(true);setMsg("");
     const val=parseFloat(reading);
+    const fuel=parseFloat(fuelPct)||null;
+    const diesel=parseFloat(dieselBought)||0;
     try{
+      // Try to get location
+      let loc=null;
+      try{const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:5000}));loc={lat:pos.coords.latitude,lng:pos.coords.longitude};}catch{}
       // Upload photo to Supabase Storage
       let photoUrl="";
       if(photo){
@@ -132,16 +139,29 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
         const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,photo);
         if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);photoUrl=urlData?.publicUrl||"";}
       }
-      // Save odo log
-      const saved=await db.addOdoLog({asset:gen,reading:val,date:new Date().toISOString().split("T")[0],type:"photo"});
+      // Save reading log with all data
+      const now=new Date();
+      const logEntry={asset:gen,reading:val,date:now.toISOString().split("T")[0],type:"photo",fuel_pct:fuel,diesel_bought:diesel,photo_url:photoUrl,location:loc?JSON.stringify(loc):null,notes:notes,timestamp:now.toISOString()};
+      const saved=await db.addOdoLog(logEntry);
       if(saved){setOdoLog(prev=>[...prev,toOdo(saved)]);}
-      // Update generator hours if type is hours
-      if(readingType==="hours"){
-        await db.updateGenerator(gen,{hrs:val});
-        setGenerators(prev=>prev.map(g=>g.id===gen?{...g,hrs:val}:g));
-      }
-      setMsg("Reading saved successfully!");setConfirmed(true);
-      setTimeout(()=>{setPhoto(null);setPreview("");setReading("");setGen("");setConfirmed(false);setMsg("");setAiNotes("");},2000);
+      // Update generator hours
+      await db.updateGenerator(gen,{hrs:val});
+      setGenerators(prev=>prev.map(g=>g.id===gen?{...g,hrs:val}:g));
+      // Check for discrepancy flag
+      const prevLogs=odoLog.filter(o=>o.asset===gen).sort((a,b)=>b.date.localeCompare(a.date));
+      if(prevLogs.length>0&&diesel>0){
+        const lastReading=prevLogs[0].reading;
+        const hrsUsed=val-lastReading;
+        const genData=generators.find(g=>g.id===gen);
+        const avgLPerHr=genData?.tank?genData.tank/10:15;
+        const expectedDiesel=hrsUsed*avgLPerHr;
+        const diff=Math.abs(diesel-expectedDiesel);
+        if(diff>expectedDiesel*0.4){
+          setMsg("Saved! WARNING: Diesel purchased ("+diesel+"L) vs expected consumption (~"+Math.round(expectedDiesel)+"L for "+hrsUsed.toFixed(0)+" hrs) shows a significant discrepancy.");
+        }else{setMsg("Reading saved! Diesel usage looks consistent.");}
+      }else{setMsg("Reading saved successfully!");}
+      setConfirmed(true);
+      setTimeout(()=>{setPhoto(null);setPreview("");setReading("");setGen("");setFuelPct("");setDieselBought("");setNotes("");setConfirmed(false);setMsg("");setAiNotes("");},4000);
     }catch(e){setMsg("Error: "+e.message);}
     setSaving(false);
   };
@@ -150,13 +170,21 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
       <Field label="Generator *"><SearchSelect options={generators.map(g=>({value:g.id,label:g.name+" ("+g.id+")"}))} value={gen} onChange={v=>setGen(v)} placeholder="Select generator..."/></Field>
       {gen&&<><div style={{marginBottom:14}}><label style={{display:"block",fontSize:12,fontWeight:600,color:"#525252",marginBottom:6}}>Photo of Meter</label>
         {!preview?(<div onClick={()=>document.getElementById("meter-file-input").click()} style={{border:"2px dashed #D0E2FF",borderRadius:12,padding:"30px 20px",textAlign:"center",cursor:"pointer",background:"#F8FAFF"}}><Camera size={32} color={P} style={{marginBottom:8}}/><div style={{fontSize:13,fontWeight:600,color:P}}>Tap to take photo</div><div style={{fontSize:11,color:"#8D8D8D",marginTop:4}}>or choose from gallery</div></div>)
-        :(<div style={{position:"relative"}}><img src={preview} style={{width:"100%",borderRadius:12,maxHeight:300,objectFit:"cover"}}/><button onClick={()=>{setPreview("");setPhoto(null);setReading("");setAiNotes("");}} style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={14} color="#fff"/></button></div>)}
+        :(<div style={{position:"relative"}}><img src={preview} style={{width:"100%",borderRadius:12,maxHeight:300,objectFit:"cover"}}/><button onClick={()=>{setPreview("");setPhoto(null);setReading("");setAiNotes("");setFuelPct("");}} style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={14} color="#fff"/></button></div>)}
         <input id="meter-file-input" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handlePhoto}/></div>
         {analyzing&&<div style={{display:"flex",alignItems:"center",gap:8,padding:12,background:"#D0E2FF",borderRadius:8,marginBottom:12}}><div style={{width:18,height:18,border:"2px solid "+P,borderTop:"2px solid transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/><span style={{fontSize:12,fontWeight:600,color:P}}>Analyzing meter...</span></div>}
         {aiNotes&&<div style={{padding:10,background:"#F4F4F4",borderRadius:8,fontSize:12,color:"#525252",marginBottom:12}}>AI: {aiNotes}</div>}
+        <div style={{background:"#F8FAFF",borderRadius:10,padding:14,marginBottom:12,border:"1px solid #D0E2FF"}}>
+          <div style={{fontSize:11,fontWeight:700,color:P,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.05em"}}>Detected Readings</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Field label="Run Hours *"><input style={{...inp,fontSize:20,fontWeight:700,textAlign:"center"}} type="number" step="0.1" placeholder="0" value={reading} onChange={e=>setReading(e.target.value)}/></Field>
+            <Field label="Fuel Gauge %"><input style={{...inp,fontSize:20,fontWeight:700,textAlign:"center"}} type="number" min="0" max="100" placeholder="-" value={fuelPct} onChange={e=>setFuelPct(e.target.value)}/></Field>
+          </div>
+          {fuelPct&&<div style={{marginTop:8,height:10,borderRadius:5,background:"#E0E0E0",overflow:"hidden"}}><div style={{height:"100%",borderRadius:5,background:parseInt(fuelPct)>50?"#24A148":parseInt(fuelPct)>20?"#FF832B":"#DA1E28",width:fuelPct+"%",transition:"width 0.3s"}}/></div>}
+        </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Field label="Reading Type"><select style={inp} value={readingType} onChange={e=>setReadingType(e.target.value)}><option value="hours">Run Hours</option><option value="fuel_level">Fuel Level</option><option value="voltage">Voltage</option><option value="other">Other</option></select></Field>
-          <Field label="Reading Value *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="0.1" placeholder="0" value={reading} onChange={e=>setReading(e.target.value)}/></Field>
+          <Field label="Diesel Bought (L)"><input style={inp} type="number" placeholder="e.g. 200 (if refueled)" value={dieselBought} onChange={e=>setDieselBought(e.target.value)}/></Field>
+          <Field label="Notes"><input style={inp} placeholder="e.g. refueled today" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
         </div>
         {msg&&<div style={{marginTop:10,padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":confirmed?"#24A14818":"#D0E2FF",color:msg.startsWith("Error")?"#DA1E28":confirmed?"#24A148":P,fontSize:12,fontWeight:500}}>{msg}</div>}
         <button onClick={handleSave} disabled={!reading||saving||confirmed} style={{width:"100%",marginTop:14,padding:"13px",borderRadius:10,border:"none",background:(reading&&!saving&&!confirmed)?P:"#C6C6C6",color:"#fff",fontSize:14,fontWeight:700,cursor:(reading&&!saving&&!confirmed)?"pointer":"not-allowed"}}>{saving?"Saving...":confirmed?"Saved!":"Confirm & Save Reading"}</button>
