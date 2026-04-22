@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
-import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, CheckCircle, Briefcase, Camera } from "lucide-react";
+import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown } from "lucide-react";
 import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
 
@@ -22,6 +22,12 @@ const fromP=(p)=>({vehicle:p.vehicle,doc_type:p.docType,issue_date:p.issueDate||
 const toSR=(r)=>({id:r.id,vehicle:r.vehicle,type:r.type,intervalKm:r.interval_km,intervalDays:r.interval_days,lastDoneKm:r.last_done_km,lastDoneDate:r.last_done_date,nextDueKm:r.next_due_km,nextDueDate:r.next_due_date,status:r.status});
 const fromSR=(s)=>({vehicle:s.vehicle,type:s.type,interval_km:s.intervalKm||0,interval_days:s.intervalDays||0,last_done_km:s.lastDoneKm||0,last_done_date:s.lastDoneDate||"",next_due_km:s.nextDueKm||0,next_due_date:s.nextDueDate||"",status:s.status||"Upcoming"});
 const toOdo=(r)=>({id:r.id,asset:r.asset,reading:Number(r.reading)||0,date:r.date,type:r.type});
+// Diesel module mappers
+const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:Number(r.discrepancy_litres)||null,discrepancyFlag:r.discrepancy_flag,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
+const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,submitted_by:d.submittedBy,notes:d.notes||""});
+const toDP=(r)=>({id:r.id,date:r.date,supplier:r.supplier,litres:Number(r.litres)||0,pricePerL:Number(r.price_per_litre)||0,totalCost:Number(r.total_cost)||0,notes:r.notes,purchasedBy:r.purchased_by,createdAt:r.created_at});
+const fromDP=(p)=>({date:p.date,supplier:p.supplier,litres:p.litres,price_per_litre:p.pricePerL,notes:p.notes||"",purchased_by:p.purchasedBy});
+const toDD=(r)=>({id:r.id,purchaseId:r.purchase_id,date:r.date,storeLoc:r.store_location,litres:Number(r.litres)||0,confirmed:r.received_confirmed,receivedDate:r.received_date,receivedBy:r.received_by,notes:r.notes,distributedBy:r.distributed_by,createdAt:r.created_at});
 const fmt=v=>"\u20A6"+Number(v).toLocaleString();
 const th={padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#6F6F6F",textTransform:"uppercase"};
 const tc={padding:"11px 14px",borderBottom:"1px solid #F4F4F4",fontSize:13};
@@ -394,16 +400,16 @@ function ProfileEditor({user,setUser}){
 
 function SettingsPage({locations,setLocations,users,setUsers,user,setUser}){
   const [tab,setTab]=useState("users");const [showAddUser,setShowAddUser]=useState(false);const [showAddLoc,setShowAddLoc]=useState(false);
-  const [uf,setUf]=useState({name:"",email:"",password:"",role:"Viewer"});const [newLoc,setNewLoc]=useState("");const [loading,setLoading]=useState(false);const [msg,setMsg]=useState("");
-  const handleAddUser=async()=>{if(!uf.email)return;setLoading(true);setMsg("");try{await inviteUser(uf.email,uf.name,uf.role,uf.password);setMsg("User created! They can now sign in.");const pr=await db.getProfiles();setUsers(pr);setShowAddUser(false);setUf({name:"",email:"",password:"",role:"Viewer"});}catch(e){setMsg("Error: "+e.message);}setLoading(false);};
+  const [uf,setUf]=useState({name:"",email:"",password:"",role:"Viewer",store_location:""});const [newLoc,setNewLoc]=useState("");const [loading,setLoading]=useState(false);const [msg,setMsg]=useState("");
+  const handleAddUser=async()=>{if(!uf.email)return;if(uf.role==="Store Staff"&&!uf.store_location){setMsg("Error: Store Staff must have a store location assigned.");return;}setLoading(true);setMsg("");try{const result=await inviteUser(uf.email,uf.name,uf.role,uf.password);if(uf.role==="Store Staff"&&uf.store_location&&result.user){await db.updateProfile(result.user.id,{store_location:uf.store_location});}setMsg("User created! They can now sign in.");const pr=await db.getProfiles();setUsers(pr);setShowAddUser(false);setUf({name:"",email:"",password:"",role:"Viewer",store_location:""});}catch(e){setMsg("Error: "+e.message);}setLoading(false);};
   const handleRoleChange=async(uid,role)=>{try{await db.updateProfile(uid,{role});setUsers(users.map(u=>u.id===uid?{...u,role}:u));}catch(e){alert("Error: "+e.message);}};
   const handleAddLoc=async()=>{if(!newLoc.trim())return;try{await db.addLocation(newLoc.trim());setLocations([...locations,newLoc.trim()]);setNewLoc("");setShowAddLoc(false);}catch(e){alert("Error: "+e.message);}};
   const isSA=user?.role==="Super Admin";
   return(<div style={{maxWidth:800}}><div style={{display:"flex",gap:8,marginBottom:20}}>{["profile","users","locations"].map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 20px",borderRadius:8,border:tab===t?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}</div>
     {tab==="profile"&&(<div style={{maxWidth:480}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>My Profile</h3><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20}}><div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}><div style={{width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${P},#6929C4)`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18,fontWeight:700}}>{user.avatar}</div><div><div style={{fontSize:16,fontWeight:700}}>{user.name}</div><div style={{fontSize:12,color:"#8D8D8D"}}>{user.email}</div><Badge label={user.role}/></div></div><ProfileEditor user={user} setUser={(u)=>{setUser(u);setUsers(users.map(x=>x.id===u.id?u:x));}} /></div></div>)}
     {tab==="users"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Team Members</h3>{isSA&&<button onClick={()=>setShowAddUser(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add User</button>}</div>
-      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Name","Email","Role",isSA?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{users.map(u=>(<tr key={u.id}><td style={{...tc,fontWeight:600}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:P}}>{u.avatar||"?"}</div>{u.name}</div></td><td style={tc}>{u.email}</td><td style={tc}><Badge label={u.role}/></td>{isSA&&<td style={tc}><select style={{...inp,width:140,padding:"5px 8px",fontSize:11}} value={u.role} onChange={e=>handleRoleChange(u.id,e.target.value)}><option>Super Admin</option><option>Fleet Manager</option><option>Viewer</option></select></td>}</tr>))}</tbody></table></div>
-      {showAddUser&&(<Modal title="Add Team Member" onClose={()=>setShowAddUser(false)}><Field label="Full Name *"><input style={inp} placeholder="e.g. John Doe" value={uf.name} onChange={e=>setUf({...uf,name:e.target.value})}/></Field><Field label="Email *"><input style={inp} type="email" placeholder="john@micmakin.com" value={uf.email} onChange={e=>setUf({...uf,email:e.target.value})}/></Field><Field label="Password *"><input style={inp} type="text" placeholder="Temporary password" value={uf.password} onChange={e=>setUf({...uf,password:e.target.value})}/></Field><Field label="Role"><select style={inp} value={uf.role} onChange={e=>setUf({...uf,role:e.target.value})}><option>Super Admin</option><option>Fleet Manager</option><option>Viewer</option></select></Field>{msg&&<div style={{padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12,marginBottom:10}}>{msg}</div>}<div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button onClick={()=>setShowAddUser(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddUser} disabled={!uf.email||!uf.password||loading} style={{padding:"9px 20px",borderRadius:8,border:"none",background:(uf.email&&uf.password&&!loading)?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(uf.email&&uf.password&&!loading)?"pointer":"not-allowed"}}>{loading?"Creating...":"Create User"}</button></div></Modal>)}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Name","Email","Role",isSA?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{users.map(u=>(<tr key={u.id}><td style={{...tc,fontWeight:600}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:P}}>{u.avatar||"?"}</div>{u.name}</div></td><td style={tc}>{u.email}</td><td style={tc}><Badge label={u.role}/></td>{isSA&&<td style={tc}><select style={{...inp,width:140,padding:"5px 8px",fontSize:11}} value={u.role} onChange={e=>handleRoleChange(u.id,e.target.value)}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option></select></td>}</tr>))}</tbody></table></div>
+      {showAddUser&&(<Modal title="Add Team Member" onClose={()=>setShowAddUser(false)}><Field label="Full Name *"><input style={inp} placeholder="e.g. John Doe" value={uf.name} onChange={e=>setUf({...uf,name:e.target.value})}/></Field><Field label="Email *"><input style={inp} type="email" placeholder="john@micmakin.com" value={uf.email} onChange={e=>setUf({...uf,email:e.target.value})}/></Field><Field label="Password *"><input style={inp} type="text" placeholder="Temporary password" value={uf.password} onChange={e=>setUf({...uf,password:e.target.value})}/></Field><Field label="Role"><select style={inp} value={uf.role} onChange={e=>setUf({...uf,role:e.target.value})}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option></select></Field>{uf.role==="Store Staff"&&<Field label="Store Location *"><select style={inp} value={uf.store_location||""} onChange={e=>setUf({...uf,store_location:e.target.value})}><option value="">-- Select Store --</option>{locations.map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>}{msg&&<div style={{padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12,marginBottom:10}}>{msg}</div>}<div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button onClick={()=>setShowAddUser(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddUser} disabled={!uf.email||!uf.password||loading} style={{padding:"9px 20px",borderRadius:8,border:"none",background:(uf.email&&uf.password&&!loading)?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(uf.email&&uf.password&&!loading)?"pointer":"not-allowed"}}>{loading?"Creating...":"Create User"}</button></div></Modal>)}
     </div>)}
     {tab==="locations"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Locations</h3><button onClick={()=>setShowAddLoc(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add Location</button></div>
       <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{locations.map((l,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",background:"#fff",borderRadius:8,border:"1px solid #E8ECF1"}}><span style={{fontSize:13}}>{l}</span></div>))}</div>
@@ -412,7 +418,435 @@ function SettingsPage({locations,setLocations,users,setUsers,user,setUser}){
   </div>);
 }
 
-const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"vehicles",path:"/vehicles",label:"Vehicles",icon:Truck},{id:"generators",path:"/generators",label:"Generators",icon:Zap},{id:"drivers",path:"/drivers",label:"Drivers",icon:Users},{id:"fuel",path:"/fuel",label:"Fuel & Energy",icon:Fuel},{id:"workorders",path:"/workorders",label:"Work Orders",icon:FileText},{id:"papers",path:"/papers",label:"Vehicle Papers",icon:FileCheck},{id:"service",path:"/service",label:"Service Reminders",icon:Bell},{id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle},{id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase},{id:"reports",path:"/reports",label:"Reports",icon:BarChart3},{id:"settings",path:"/settings",label:"Settings",icon:Settings}];
+// ============================================
+// DIESEL LOG PAGE - Daily Staff Input
+// ============================================
+function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,user,locations,odoLog,setOdoLog,genBaselines}){
+  const [step,setStep]=useState("select"); // select | input | review | done
+  const [selGen,setSelGen]=useState("");
+  const [inputMode,setInputMode]=useState("photo"); // photo | manual
+  const [photo,setPhoto]=useState(null);
+  const [preview,setPreview]=useState("");
+  const [analyzing,setAnalyzing]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState("");
+  const [aiNotes,setAiNotes]=useState("");
+  // Generator reading fields
+  const [hoursOpening,setHoursOpening]=useState("");
+  const [hoursClosing,setHoursClosing]=useState("");
+  const [dieselLevel,setDieselLevel]=useState("");
+  const [dieselAdded,setDieselAdded]=useState("");
+  // NEPA fields
+  const [nepaMode,setNepaMode]=useState("manual"); // photo | manual
+  const [nepaHours,setNepaHours]=useState("");
+  const [nepaPhoto,setNepaPhoto]=useState(null);
+  const [nepaPreview,setNepaPreview]=useState("");
+  const [nepaMeterOpen,setNepaMeterOpen]=useState("");
+  const [nepaMeterClose,setNepaMeterClose]=useState("");
+  const [nepaAnalyzing,setNepaAnalyzing]=useState(false);
+  const [notes,setNotes]=useState("");
+  // Second generator support
+  const [hasSecondGen,setHasSecondGen]=useState(false);
+  const [showHistory,setShowHistory]=useState(false);
+
+  const userStore=user?.store_location||"";
+  const isStoreStaff=user?.role==="Store Staff";
+  const storeGens=isStoreStaff?generators.filter(g=>g.loc===userStore):generators;
+  const todayStr=new Date().toISOString().split("T")[0];
+  const todayReadings=dieselReadings.filter(r=>r.date===todayStr&&r.storeLoc===(isStoreStaff?userStore:r.storeLoc));
+  const alreadySubmitted=(genId)=>todayReadings.some(r=>r.generatorId===genId);
+
+  // Get previous reading for a generator
+  const getPrevReading=(genId)=>{
+    const prev=dieselReadings.filter(r=>r.generatorId===genId).sort((a,b)=>b.date.localeCompare(a.date));
+    return prev[0]||null;
+  };
+
+  // Get baseline for a generator
+  const getBaseline=(genId)=>{
+    const bl=genBaselines?.find(b=>b.generator_id===genId);
+    return bl?.avg_litres_per_hour||null;
+  };
+
+  // Analyze generator meter photo
+  const analyzeGenPhoto=async(base64)=>{
+    setAnalyzing(true);setMsg("Analyzing generator meter...");
+    try{
+      const imgData=base64.split(",")[1];
+      const mediaType=base64.startsWith("data:image/png")?"image/png":"image/jpeg";
+      const resp=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:500,
+          messages:[{role:"user",content:[
+            {type:"image",source:{type:"base64",media_type:mediaType,data:imgData}},
+            {type:"text",text:"This is a generator control panel display (commonly DCP-10 or similar). Extract ALL visible readings. These displays typically show: frequency (Hz), RPM, and run hours (labeled Kh, kh, h, or hrs). The run hours reading is the most important one.\n\nReply in JSON only, no markdown backticks:\n{\"readings\": [{\"type\": \"hours\" or \"rpm\" or \"frequency\" or \"voltage\" or \"fuel_level\", \"value\": number, \"unit\": string, \"confidence\": \"high\" or \"medium\" or \"low\"}], \"primary_hours\": number, \"fuel_gauge_percent\": number or null, \"notes\": string}\n\nIMPORTANT: Kh means kilohours (multiply the displayed value by 1000 to get total hours). For example 13.49 Kh = 13490 hours, 18.88 Kh = 18880 hours. If the unit is just h or hrs, the value IS the hours directly. Always return primary_hours as the TOTAL hours (already converted if Kh). If you see a fuel gauge bar, estimate the fill level as a percentage (0-100). If display is off or unreadable, set primary_hours to 0."}
+          ]}]
+        })
+      });
+      const data=await resp.json();
+      const txt=data.content?.[0]?.text||"";
+      try{
+        const clean=txt.replace(/```json|```/g,"").trim();
+        const parsed=JSON.parse(clean);
+        const hrs=parsed.primary_hours||0;
+        setHoursClosing(String(hrs));
+        // Auto-fill opening from previous reading
+        const prev=getPrevReading(selGen);
+        if(prev&&prev.genHoursClosing){setHoursOpening(String(prev.genHoursClosing));}
+        // Fuel gauge
+        if(parsed.fuel_gauge_percent!=null){
+          const g=generators.find(x=>x.id===selGen);
+          const tank=g?.tank||0;
+          if(tank>0)setDieselLevel(String(Math.round(tank*parsed.fuel_gauge_percent/100)));
+        }
+        const allR=(parsed.readings||[]).map(r=>r.value+" "+r.unit+" ("+r.type+")").join(", ");
+        setAiNotes(allR+(parsed.notes?" | "+parsed.notes:""));
+        setMsg(hrs>0?"Readings detected! Please verify and continue.":"Could not read clearly - please enter manually.");
+      }catch{setMsg("Could not parse - please enter readings manually.");setAiNotes(txt);setInputMode("manual");}
+    }catch(e){setMsg("Analysis failed: "+e.message);setInputMode("manual");}
+    setAnalyzing(false);
+  };
+
+  // Analyze NEPA meter photo
+  const analyzeNepaPhoto=async(base64)=>{
+    setNepaAnalyzing(true);
+    try{
+      const imgData=base64.split(",")[1];
+      const mediaType=base64.startsWith("data:image/png")?"image/png":"image/jpeg";
+      const resp=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:300,
+          messages:[{role:"user",content:[
+            {type:"image",source:{type:"base64",media_type:mediaType,data:imgData}},
+            {type:"text",text:"This is an electricity/NEPA/power meter. Read the current kWh or unit reading displayed. Reply in JSON only, no markdown:\n{\"reading\": number, \"unit\": \"kWh\", \"confidence\": \"high\" or \"medium\" or \"low\", \"notes\": string}"}
+          ]}]
+        })
+      });
+      const data=await resp.json();
+      const txt=data.content?.[0]?.text||"";
+      try{
+        const clean=txt.replace(/```json|```/g,"").trim();
+        const parsed=JSON.parse(clean);
+        setNepaMeterClose(String(parsed.reading||""));
+        const prev=getPrevReading(selGen);
+        if(prev&&prev.nepaMeterClosing){setNepaMeterOpen(String(prev.nepaMeterClosing));}
+      }catch{}
+    }catch{}
+    setNepaAnalyzing(false);
+  };
+
+  const handleGenPhoto=async(e)=>{
+    const file=e.target.files?.[0];if(!file)return;
+    setPhoto(file);setMsg("");setAiNotes("");
+    const reader=new FileReader();
+    reader.onload=(ev)=>{setPreview(ev.target.result);analyzeGenPhoto(ev.target.result);};
+    reader.readAsDataURL(file);
+  };
+
+  const handleNepaPhotoCapture=async(e)=>{
+    const file=e.target.files?.[0];if(!file)return;
+    setNepaPhoto(file);
+    const reader=new FileReader();
+    reader.onload=(ev)=>{setNepaPreview(ev.target.result);analyzeNepaPhoto(ev.target.result);};
+    reader.readAsDataURL(file);
+  };
+
+  // Calculate theoretical consumption
+  const calcTheoretical=()=>{
+    const hrsRun=parseFloat(hoursClosing)-parseFloat(hoursOpening);
+    if(isNaN(hrsRun)||hrsRun<=0)return null;
+    const baseline=getBaseline(selGen);
+    const g=generators.find(x=>x.id===selGen);
+    const rate=baseline||(g?.tank?g.tank/10:15);
+    return hrsRun*rate;
+  };
+
+  // Save the daily reading
+  const handleSave=async()=>{
+    if(!selGen)return;
+    setSaving(true);setMsg("");
+    try{
+      const g=generators.find(x=>x.id===selGen);
+      const hOpen=parseFloat(hoursOpening)||null;
+      const hClose=parseFloat(hoursClosing)||null;
+      const hrsRun=(hOpen!=null&&hClose!=null)?hClose-hOpen:null;
+      const actualLevel=parseFloat(dieselLevel)||null;
+      const added=parseFloat(dieselAdded)||0;
+      const nHours=parseFloat(nepaHours)||0;
+      const baseline=getBaseline(selGen);
+      const rate=baseline||(g?.tank?g.tank/10:15);
+      const theoretical=hrsRun?hrsRun*rate:null;
+      const consumptionRate=hrsRun&&actualLevel!=null?null:rate;
+      // Discrepancy
+      let discrepancy=null;let discFlag=false;
+      if(actualLevel!=null&&theoretical!=null){
+        const prev=getPrevReading(selGen);
+        const prevLevel=prev?.dieselLevelActual||null;
+        if(prevLevel!=null){
+          const expectedLevel=prevLevel+added-theoretical;
+          discrepancy=actualLevel-expectedLevel;
+          discFlag=Math.abs(discrepancy)>theoretical*0.3;
+        }
+      }
+      // Get location
+      let loc=null;
+      try{const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:5000}));loc={lat:pos.coords.latitude,lng:pos.coords.longitude};}catch{}
+      // Upload gen photo
+      let genPhotoUrl="";
+      if(photo){
+        const ext=photo.name.split(".").pop();
+        const path="diesel-readings/"+selGen+"-"+Date.now()+"."+ext;
+        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,photo);
+        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);genPhotoUrl=urlData?.publicUrl||"";}
+      }
+      // Upload nepa photo
+      let nepaPhotoUrl="";
+      if(nepaPhoto){
+        const ext=nepaPhoto.name.split(".").pop();
+        const path="nepa-readings/"+selGen+"-"+Date.now()+"."+ext;
+        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,nepaPhoto);
+        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);nepaPhotoUrl=urlData?.publicUrl||"";}
+      }
+      // Build record
+      const record=fromDR({
+        generatorId:selGen,storeLoc:g?.loc||userStore||"",date:todayStr,
+        genHoursOpening:hOpen,genHoursClosing:hClose,
+        dieselLevelActual:actualLevel,dieselLevelTheoretical:theoretical?Math.round(theoretical):null,
+        dieselAdded:added,consumptionLitres:theoretical?Math.round(theoretical):null,consumptionRate:rate,
+        genPhotoUrl:genPhotoUrl,genSource:inputMode,
+        aiReadings:aiNotes?{raw:aiNotes}:null,aiConfidence:null,
+        nepaHours:nHours,nepaMeterOpening:parseFloat(nepaMeterOpen)||null,
+        nepaMeterClosing:parseFloat(nepaMeterClose)||null,nepaPhotoUrl:nepaPhotoUrl,nepaSource:nepaMode,
+        discrepancyLitres:discrepancy!=null?Math.round(discrepancy):null,discrepancyFlag:discFlag,
+        submittedBy:user?.uid||null,notes:notes
+      });
+      const saved=await db.addDieselReading(record);
+      if(saved){setDieselReadings(prev=>[toDR(saved),...prev]);}
+      // Update generator hours
+      if(hClose){
+        await db.updateGenerator(selGen,{hrs:hClose});
+        setGenerators(prev=>prev.map(gg=>gg.id===selGen?{...gg,hrs:hClose}:gg));
+      }
+      // Also save to odo_log for compatibility
+      if(hClose){
+        const odoEntry={asset:selGen,reading:hClose,date:todayStr,type:inputMode==="photo"?"photo":"manual"};
+        const savedOdo=await db.addOdoLog(odoEntry);
+        if(savedOdo)setOdoLog(prev=>[...prev,toOdo(savedOdo)]);
+      }
+      if(discFlag){
+        setMsg("Saved! WARNING: Diesel level discrepancy of "+Math.abs(Math.round(discrepancy))+"L detected. Expected ~"+Math.round(theoretical)+"L consumption but actual levels differ.");
+      }else{
+        setMsg("Reading saved successfully!");
+      }
+      setStep("done");
+    }catch(e){setMsg("Error: "+e.message);}
+    setSaving(false);
+  };
+
+  const resetForm=()=>{
+    setStep("select");setSelGen("");setInputMode("photo");setPhoto(null);setPreview("");
+    setAnalyzing(false);setMsg("");setAiNotes("");setHoursOpening("");setHoursClosing("");
+    setDieselLevel("");setDieselAdded("");setNepaMode("manual");setNepaHours("");
+    setNepaPhoto(null);setNepaPreview("");setNepaMeterOpen("");setNepaMeterClose("");setNotes("");
+  };
+
+  // Store ranking (anonymous)
+  const getStoreRank=()=>{
+    if(!userStore)return null;
+    const last30=dieselReadings.filter(r=>{const d=new Date(r.date);const ago=new Date();ago.setDate(ago.getDate()-30);return d>=ago;});
+    const storeData={};
+    last30.forEach(r=>{
+      if(!storeData[r.storeLoc])storeData[r.storeLoc]={totalHrs:0,totalConsumption:0,count:0};
+      storeData[r.storeLoc].totalHrs+=r.hoursRun||0;
+      storeData[r.storeLoc].totalConsumption+=r.consumptionLitres||0;
+      storeData[r.storeLoc].count++;
+    });
+    const ranked=Object.entries(storeData).filter(([,d])=>d.totalHrs>0).map(([loc,d])=>({loc,efficiency:d.totalConsumption/d.totalHrs})).sort((a,b)=>a.efficiency-b.efficiency);
+    const myRank=ranked.findIndex(r=>r.loc===userStore)+1;
+    return{rank:myRank,total:ranked.length,efficiency:ranked.find(r=>r.loc===userStore)?.efficiency};
+  };
+
+  const rank=isStoreStaff?getStoreRank():null;
+  const selectedGen=generators.find(g=>g.id===selGen);
+  const prevReading=selGen?getPrevReading(selGen):null;
+
+  // History view
+  if(showHistory){
+    const hist=dieselReadings.filter(r=>isStoreStaff?r.storeLoc===userStore:true).slice(0,30);
+    return(<div>
+      <button onClick={()=>setShowHistory(false)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to Log</button>
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+        <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Diesel Reading History</h3></div>
+        <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","NEPA Hrs","Source","Flag"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+        <tbody>{hist.map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>
+      </div>
+    </div>);
+  }
+
+  return(<div style={{maxWidth:560,margin:"0 auto"}}>
+    {/* Header Card */}
+    <div style={{background:"linear-gradient(135deg,#0F1A2E,#1A3A6B,#0F62FE)",borderRadius:16,padding:"22px 26px",color:"#fff",marginBottom:18}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:40,height:40,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center"}}><Droplet size={20}/></div>
+          <div><h2 style={{fontSize:18,fontWeight:700,margin:0}}>Daily Diesel Log</h2><div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{new Date().toLocaleDateString("en-NG",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div></div>
+        </div>
+        <button onClick={()=>setShowHistory(true)} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Clock size={13}/> History</button>
+      </div>
+      {isStoreStaff&&userStore&&<div style={{marginTop:12,padding:"10px 14px",background:"rgba(255,255,255,0.08)",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div><div style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>Your Store</div><div style={{fontSize:14,fontWeight:600}}>{userStore}</div></div>
+        {rank&&rank.rank>0&&<div style={{textAlign:"right"}}><div style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>Efficiency Rank</div><div style={{display:"flex",alignItems:"center",gap:4}}><Trophy size={14} color="#FFD700"/><span style={{fontSize:16,fontWeight:700}}>#{rank.rank}</span><span style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>of {rank.total}</span></div></div>}
+      </div>}
+      {todayReadings.length>0&&<div style={{marginTop:10,padding:"8px 12px",background:"rgba(36,161,72,0.2)",borderRadius:8,fontSize:12,display:"flex",alignItems:"center",gap:6}}><CheckCircle size={14} color="#24A148"/><span>{todayReadings.length} reading{todayReadings.length>1?"s":""} submitted today</span></div>}
+    </div>
+
+    {/* Step: Select Generator */}
+    {step==="select"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:22}}>
+      <h3 style={{fontSize:15,fontWeight:700,margin:"0 0 16px"}}>Select Generator</h3>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {storeGens.map(g=>{const done=alreadySubmitted(g.id);return(
+          <button key={g.id} onClick={()=>{if(!done){setSelGen(g.id);setStep("input");const prev=getPrevReading(g.id);if(prev&&prev.genHoursClosing)setHoursOpening(String(prev.genHoursClosing));}}} disabled={done}
+            style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:10,border:done?"1.5px solid #E0E0E0":"1.5px solid #D0E2FF",background:done?"#F4F4F4":"#F8FAFF",cursor:done?"not-allowed":"pointer",textAlign:"left",opacity:done?0.6:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{width:38,height:38,borderRadius:9,background:done?"#E0E0E0":"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center"}}><Zap size={18} color={done?"#8D8D8D":P}/></div>
+              <div><div style={{fontSize:14,fontWeight:600,color:done?"#8D8D8D":"#161616"}}>{g.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.brand} - {g.cap} - {g.loc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>Current: {g.hrs?.toLocaleString()||0} hrs</div></div>
+            </div>
+            {done?<span style={{fontSize:11,fontWeight:600,color:"#24A148",display:"flex",alignItems:"center",gap:4}}><CheckCircle size={13}/>Done</span>
+            :<ChevronRight size={16} color={P}/>}
+          </button>
+        );})}
+      </div>
+      {storeGens.length===0&&<div style={{textAlign:"center",padding:30,color:"#8D8D8D"}}><Zap size={32} style={{opacity:0.3,marginBottom:8}}/><div style={{fontSize:13}}>No generators assigned to {isStoreStaff?"your store":"this location"}</div></div>}
+    </div>)}
+
+    {/* Step: Input */}
+    {step==="input"&&selectedGen&&(<div>
+      <button onClick={()=>{resetForm();}} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:12}}><ChevronLeft size={16}/> Back</button>
+
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+        {/* Generator info bar */}
+        <div style={{padding:"14px 20px",background:"#F8FAFF",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div><div style={{fontSize:14,fontWeight:700}}>{selectedGen.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{selectedGen.brand} - {selectedGen.cap}</div></div>
+          <div style={{textAlign:"right"}}><div style={{fontSize:11,color:"#8D8D8D"}}>Last Reading</div><div style={{fontSize:14,fontWeight:700}}>{prevReading?prevReading.genHoursClosing?.toLocaleString()+" hrs":"No prior"}</div></div>
+        </div>
+
+        <div style={{padding:20}}>
+          {/* Section 1: Generator Meter */}
+          <div style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+              <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}><div style={{width:22,height:22,borderRadius:"50%",background:P,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>1</div> Generator Meter</div>
+              <div style={{display:"flex",gap:4}}>
+                <button onClick={()=>setInputMode("photo")} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:inputMode==="photo"?"1.5px solid "+P:"1.5px solid #E0E0E0",background:inputMode==="photo"?"#D0E2FF":"#fff",color:inputMode==="photo"?P:"#8D8D8D",cursor:"pointer"}}>Photo</button>
+                <button onClick={()=>setInputMode("manual")} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:inputMode==="manual"?"1.5px solid "+P:"1.5px solid #E0E0E0",background:inputMode==="manual"?"#D0E2FF":"#fff",color:inputMode==="manual"?P:"#8D8D8D",cursor:"pointer"}}>Manual</button>
+              </div>
+            </div>
+
+            {inputMode==="photo"&&(<div style={{marginBottom:14}}>
+              {!preview?(<div onClick={()=>document.getElementById("diesel-gen-photo").click()} style={{border:"2px dashed #D0E2FF",borderRadius:12,padding:"28px 20px",textAlign:"center",cursor:"pointer",background:"#F8FAFF"}}>
+                <Camera size={30} color={P} style={{marginBottom:6}}/><div style={{fontSize:13,fontWeight:600,color:P}}>Tap to take photo</div><div style={{fontSize:11,color:"#8D8D8D",marginTop:3}}>of generator control panel</div></div>)
+              :(<div style={{position:"relative"}}><img src={preview} style={{width:"100%",borderRadius:12,maxHeight:220,objectFit:"cover"}}/><button onClick={()=>{setPreview("");setPhoto(null);setHoursClosing("");setAiNotes("");}} style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={14} color="#fff"/></button></div>)}
+              <input id="diesel-gen-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleGenPhoto}/>
+              {analyzing&&<div style={{display:"flex",alignItems:"center",gap:8,padding:10,background:"#D0E2FF",borderRadius:8,marginTop:10}}><div style={{width:16,height:16,border:"2px solid "+P,borderTop:"2px solid transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/><span style={{fontSize:12,fontWeight:600,color:P}}>Analyzing meter...</span></div>}
+              {aiNotes&&<div style={{padding:8,background:"#F4F4F4",borderRadius:8,fontSize:11,color:"#525252",marginTop:8}}>AI: {aiNotes}</div>}
+            </div>)}
+
+            <div style={{background:"#F8FAFF",borderRadius:10,padding:14,border:"1px solid #D0E2FF"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <Field label="Opening Hours"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center",background:hoursOpening?"#E8F5E9":"#fff"}} type="number" step="0.1" placeholder="0" value={hoursOpening} onChange={e=>setHoursOpening(e.target.value)}/>{prevReading&&<div style={{fontSize:10,color:"#24A148",marginTop:2}}>Auto-filled from last reading</div>}</Field>
+                <Field label="Closing Hours *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="0.1" placeholder="0" value={hoursClosing} onChange={e=>setHoursClosing(e.target.value)}/></Field>
+              </div>
+              {hoursOpening&&hoursClosing&&parseFloat(hoursClosing)>parseFloat(hoursOpening)&&(
+                <div style={{marginTop:10,padding:8,background:"#E8F5E9",borderRadius:6,display:"flex",justifyContent:"space-between",fontSize:12}}>
+                  <span style={{color:"#525252"}}>Hours Run Today:</span>
+                  <span style={{fontWeight:700,color:"#24A148"}}>{(parseFloat(hoursClosing)-parseFloat(hoursOpening)).toFixed(1)} hours</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Section 2: Diesel Level */}
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6,marginBottom:10}}><div style={{width:22,height:22,borderRadius:"50%",background:"#FF832B",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>2</div> Diesel Level</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <Field label="Current Level (Litres) *"><input style={inp} type="number" placeholder="e.g. 150" value={dieselLevel} onChange={e=>setDieselLevel(e.target.value)}/></Field>
+              <Field label="Diesel Added Today (L)"><input style={inp} type="number" placeholder="0 if none" value={dieselAdded} onChange={e=>setDieselAdded(e.target.value)}/></Field>
+            </div>
+            {dieselLevel&&selectedGen.tank>0&&(()=>{
+              const pct=Math.min(100,Math.round(parseFloat(dieselLevel)/selectedGen.tank*100));
+              return(<div style={{marginTop:8}}>
+                <div style={{height:10,borderRadius:5,background:"#E0E0E0",overflow:"hidden"}}><div style={{height:"100%",borderRadius:5,background:pct>50?"#24A148":pct>20?"#FF832B":"#DA1E28",width:pct+"%",transition:"width 0.3s"}}/></div>
+                <div style={{fontSize:11,color:"#8D8D8D",marginTop:3}}>{dieselLevel}L of {selectedGen.tank}L tank ({pct}%)</div>
+              </div>);
+            })()}
+            {/* Theoretical comparison */}
+            {hoursOpening&&hoursClosing&&dieselLevel&&(()=>{
+              const theoretical=calcTheoretical();
+              if(!theoretical)return null;
+              return(<div style={{marginTop:10,padding:10,borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082",fontSize:12}}>
+                <div style={{fontWeight:600,color:"#F57F17",marginBottom:4}}>Theoretical Consumption</div>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>Expected usage:</span><span style={{fontWeight:700}}>{Math.round(theoretical)}L for {(parseFloat(hoursClosing)-parseFloat(hoursOpening)).toFixed(1)} hrs</span></div>
+              </div>);
+            })()}
+          </div>
+
+          {/* Section 3: NEPA */}
+          <div style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}><div style={{width:22,height:22,borderRadius:"50%",background:"#8B5CF6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>3</div> NEPA / Power</div>
+              <div style={{display:"flex",gap:4}}>
+                <button onClick={()=>setNepaMode("manual")} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:nepaMode==="manual"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:nepaMode==="manual"?"#EDE7F6":"#fff",color:nepaMode==="manual"?"#8B5CF6":"#8D8D8D",cursor:"pointer"}}>Manual</button>
+                <button onClick={()=>setNepaMode("photo")} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:nepaMode==="photo"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:nepaMode==="photo"?"#EDE7F6":"#fff",color:nepaMode==="photo"?"#8B5CF6":"#8D8D8D",cursor:"pointer"}}>Photo</button>
+              </div>
+            </div>
+
+            {nepaMode==="manual"?(
+              <Field label="Total NEPA Hours Today"><input style={inp} type="number" step="0.5" placeholder="e.g. 14" value={nepaHours} onChange={e=>setNepaHours(e.target.value)}/></Field>
+            ):(
+              <div>
+                {!nepaPreview?(<div onClick={()=>document.getElementById("diesel-nepa-photo").click()} style={{border:"2px dashed #D1C4E9",borderRadius:12,padding:"22px 16px",textAlign:"center",cursor:"pointer",background:"#F3E5F5",marginBottom:10}}>
+                  <Camera size={26} color="#8B5CF6" style={{marginBottom:4}}/><div style={{fontSize:12,fontWeight:600,color:"#8B5CF6"}}>Photo of NEPA meter</div></div>)
+                :(<div style={{position:"relative",marginBottom:10}}><img src={nepaPreview} style={{width:"100%",borderRadius:12,maxHeight:180,objectFit:"cover"}}/><button onClick={()=>{setNepaPreview("");setNepaPhoto(null);setNepaMeterClose("");}} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={12} color="#fff"/></button></div>)}
+                <input id="diesel-nepa-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleNepaPhotoCapture}/>
+                {nepaAnalyzing&&<div style={{display:"flex",alignItems:"center",gap:6,padding:8,background:"#EDE7F6",borderRadius:8,marginBottom:8}}><div style={{width:14,height:14,border:"2px solid #8B5CF6",borderTop:"2px solid transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/><span style={{fontSize:11,fontWeight:600,color:"#8B5CF6"}}>Reading meter...</span></div>}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <Field label="Opening Reading"><input style={inp} type="number" placeholder="0" value={nepaMeterOpen} onChange={e=>setNepaMeterOpen(e.target.value)}/></Field>
+                  <Field label="Closing Reading"><input style={inp} type="number" placeholder="0" value={nepaMeterClose} onChange={e=>setNepaMeterClose(e.target.value)}/></Field>
+                </div>
+                <Field label="Total NEPA Hours"><input style={inp} type="number" step="0.5" placeholder="e.g. 14" value={nepaHours} onChange={e=>setNepaHours(e.target.value)}/></Field>
+              </div>
+            )}
+          </div>
+
+          {/* Notes */}
+          <Field label="Notes (optional)"><input style={inp} placeholder="e.g. generator serviced today" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
+
+          {msg&&<div style={{marginTop:10,padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#D0E2FF",color:msg.startsWith("Error")?"#DA1E28":P,fontSize:12,fontWeight:500}}>{msg}</div>}
+
+          <button onClick={handleSave} disabled={(!hoursClosing&&!dieselLevel)||saving}
+            style={{width:"100%",marginTop:16,padding:"14px",borderRadius:10,border:"none",background:((hoursClosing||dieselLevel)&&!saving)?P:"#C6C6C6",color:"#fff",fontSize:14,fontWeight:700,cursor:((hoursClosing||dieselLevel)&&!saving)?"pointer":"not-allowed"}}>
+            {saving?"Saving...":"Submit Daily Reading"}
+          </button>
+        </div>
+      </div>
+    </div>)}
+
+    {/* Step: Done */}
+    {step==="done"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:30,textAlign:"center"}}>
+      <div style={{width:56,height:56,borderRadius:"50%",background:"#E8F5E9",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}><CheckCircle size={28} color="#24A148"/></div>
+      <h3 style={{fontSize:17,fontWeight:700,margin:"0 0 6px"}}>Reading Submitted!</h3>
+      <div style={{fontSize:13,color:"#8D8D8D",marginBottom:6}}>{selectedGen?.name} - {todayStr}</div>
+      {msg&&msg.includes("WARNING")&&<div style={{padding:10,borderRadius:8,background:"#FFF3E0",border:"1px solid #FFE0B2",color:"#E65100",fontSize:12,fontWeight:500,margin:"12px 0",textAlign:"left"}}><div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}><AlertTriangle size={14}/><span style={{fontWeight:700}}>Discrepancy Detected</span></div>{msg}</div>}
+      <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:18}}>
+        <button onClick={resetForm} style={{padding:"10px 24px",borderRadius:9,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>{storeGens.filter(g=>!alreadySubmitted(g.id)).length>0?"Log Another Generator":"Back"}</button>
+        <button onClick={()=>setShowHistory(true)} style={{padding:"10px 24px",borderRadius:9,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>View History</button>
+      </div>
+    </div>)}
+  </div>);
+}
+
+const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"diesel",path:"/diesel",label:"Diesel Log",icon:Droplet},{id:"vehicles",path:"/vehicles",label:"Vehicles",icon:Truck},{id:"generators",path:"/generators",label:"Generators",icon:Zap},{id:"drivers",path:"/drivers",label:"Drivers",icon:Users},{id:"fuel",path:"/fuel",label:"Fuel & Energy",icon:Fuel},{id:"workorders",path:"/workorders",label:"Work Orders",icon:FileText},{id:"papers",path:"/papers",label:"Vehicle Papers",icon:FileCheck},{id:"service",path:"/service",label:"Service Reminders",icon:Bell},{id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle},{id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase},{id:"reports",path:"/reports",label:"Reports",icon:BarChart3},{id:"settings",path:"/settings",label:"Settings",icon:Settings}];
 
 function LoginPage({onLogin}){
   const [email,setEmail]=useState("");const [pass,setPass]=useState("");const [err,setErr]=useState("");const [showPass,setShowPass]=useState(false);const [loading,setLoading]=useState(false);const [resetMode,setResetMode]=useState(false);const [resetMsg,setResetMsg]=useState("");
@@ -432,22 +866,32 @@ function FleetProAppInner(){
   const [locations,setLocations]=useState([]);const [vendors,setVendors]=useState([]);
   const [docTypes,setDocTypes]=useState([]);const [inspItems,setInspItems]=useState([]);
   const [users,setUsers]=useState([]);
-  const canEdit=user?.role!=="Viewer";
+  // Diesel module state
+  const [dieselReadings,setDieselReadings]=useState([]);
+  const [dieselPurchases,setDieselPurchases]=useState([]);
+  const [dieselDistributions,setDieselDistributions]=useState([]);
+  const [genBaselines,setGenBaselines]=useState([]);
+  const canEdit=user?.role!=="Viewer"&&user?.role!=="Store Staff";
+  const isStoreStaff=user?.role==="Store Staff";
 
   const loadAllData=useCallback(async()=>{
     try{
-      const [v,g,d,wo,fl,ol,vn,p,ins,sr,loc,dt,ii,pr]=await Promise.all([
+      const [v,g,d,wo,fl,ol,vn,p,ins,sr,loc,dt,ii,pr,dr,dp,dd,gb]=await Promise.all([
         db.getVehicles(),db.getGenerators(),db.getDrivers(),db.getWorkOrders(),
         db.getFuelLogs(),db.getOdoLog(),db.getVendors(),db.getPapers(),
         db.getInspections(),db.getSvcReminders(),db.getLocations(),
-        db.getDocTypes(),db.getInspItems(),db.getProfiles()
+        db.getDocTypes(),db.getInspItems(),db.getProfiles(),
+        db.getDieselReadings(),db.getDieselPurchases(),db.getDieselDistributions(),
+        db.getGeneratorBaselines()
       ]);
       setVehicles(v.map(toV));setGenerators(g.map(toG));setDrivers(d);setWorkOrders(wo.map(toWO));
       setFuelLogs(fl.map(toFL));setOdoLog(ol.map(toOdo));setVendors(vn);setPapers(p.map(toP));
       setInspections(ins);setSvcReminders(sr.map(toSR));
       setLocations(loc.map(l=>l.name));setDocTypes(dt.map(d=>d.name));
       setInspItems(ii.map(i=>i.name));setUsers(pr);
-      console.log("FleetPro: Data loaded",{v:v.length,g:g.length,fl:fl.length,wo:wo.length});
+      setDieselReadings(dr.map(toDR));setDieselPurchases(dp.map(toDP));
+      setDieselDistributions(dd.map(toDD));setGenBaselines(gb);
+      console.log("FleetPro: Data loaded",{v:v.length,g:g.length,fl:fl.length,wo:wo.length,dr:dr.length});
     }catch(e){console.error("FleetPro: Error loading data",e);}
   },[]);
 
@@ -470,12 +914,12 @@ function FleetProAppInner(){
   
   if(authLoading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#F4F4F4",fontFamily:"'DM Sans',sans-serif"}}><div style={{textAlign:"center"}}><div style={{width:32,height:32,border:"3px solid #E0E0E0",borderTop:"3px solid "+P,borderRadius:"50%",animation:"spin 1s linear infinite"}}/><div style={{marginTop:12,fontSize:14,color:"#8D8D8D"}}>Loading FleetPro...</div></div><style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style></div>;
   if(!user) return <LoginPage onLogin={handleLogin}/>;
-  const sw=mob?0:(col?64:240);const titles={dashboard:"Dashboard",vehicles:"Vehicles",generators:"Generators",drivers:"Drivers",fuel:"Fuel & Energy",workorders:"Work Orders",papers:"Vehicle Papers",service:"Service Reminders",inspections:"Daily Inspections",vendors:"Vendors",reports:"Reports",settings:"Settings"};
+  const sw=mob?0:(col?64:240);const titles={dashboard:"Dashboard",diesel:"Diesel Log",vehicles:"Vehicles",generators:"Generators",drivers:"Drivers",fuel:"Fuel & Energy",workorders:"Work Orders",papers:"Vehicle Papers",service:"Service Reminders",inspections:"Daily Inspections",vendors:"Vendors",reports:"Reports",settings:"Settings"};
   return(<div style={{minHeight:"100vh",background:"#F7F8FC",fontFamily:"'DM Sans',system-ui,sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
     {mob&&showNav&&<div onClick={()=>setShowNav(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:998}}/>}
     <div style={{width:mob?280:(col?64:240),minHeight:"100vh",background:"linear-gradient(180deg,#0F1A2E 0%,#162D50 100%)",position:"fixed",left:mob?(showNav?0:-280):0,top:0,zIndex:999,transition:mob?"left 0.25s ease":"width 0.2s",overflow:"hidden",boxShadow:mob&&showNav?"4px 0 20px rgba(0,0,0,0.3)":"none"}}>
       <div style={{padding:col&&!mob?"18px 12px":"18px 20px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid rgba(255,255,255,0.06)"}}><div style={{width:34,height:34,borderRadius:8,background:`linear-gradient(135deg,${P},#4589FF)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Truck size={18} color="#fff"/></div>{(!col||mob)&&<div><div style={{fontSize:16,fontWeight:700,color:"#fff"}}>FleetPro</div><div style={{fontSize:9,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Fleet Management</div></div>}</div>
-      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{NAV.map(item=>{const active=page===item.id;const Icon=item.icon;return(<div key={item.id}>{item.id==="settings"&&<div style={{height:1,background:"rgba(255,255,255,0.06)",margin:"8px 6px"}}/>}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}</button></div>);})}</nav>
+      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{NAV.filter(item=>isStoreStaff?["diesel","generators","settings"].includes(item.id):true).map(item=>{const active=page===item.id;const Icon=item.icon;return(<div key={item.id}>{item.id==="settings"&&<div style={{height:1,background:"rgba(255,255,255,0.06)",margin:"8px 6px"}}/>}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}</button></div>);})}</nav>
       {!mob&&<div style={{position:"absolute",bottom:0,left:0,right:0,padding:"10px 8px",borderTop:"1px solid rgba(255,255,255,0.06)"}}><button onClick={()=>setCol(!col)} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:8,borderRadius:7,border:"none",cursor:"pointer",width:"100%",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.35)",fontSize:12}}>{col?<ChevronRight size={15}/>:<><ChevronLeft size={15}/> Collapse</>}</button></div>}
     </div>
     <header style={{height:56,background:"#fff",borderBottom:"1px solid #E8ECF1",display:"flex",alignItems:"center",justifyContent:"space-between",padding:mob?"0 12px":"0 24px",position:"sticky",top:0,zIndex:50,marginLeft:sw,transition:"margin-left 0.2s"}}>
@@ -491,7 +935,8 @@ function FleetProAppInner(){
     </header>
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
-        <Route path="/" element={<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
+        <Route path="/" element={isStoreStaff?<Navigate to="/diesel" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
+        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>

@@ -153,4 +153,52 @@ export const db = {
   // Profiles
   async getProfiles() { return fetchAll('profiles', 'name'); },
   async updateProfile(id, updates) { return updateRow('profiles', id, updates); },
+
+  // ============================================
+  // DIESEL TRACKING MODULE
+  // ============================================
+
+  // Diesel Readings (daily staff entries)
+  async getDieselReadings() { return fetchAll('diesel_readings', 'date', false); },
+  async getDieselReadingsByStore(storeLoc) {
+    const { data, error } = await supabase.from('diesel_readings').select('*').eq('store_location', storeLoc).order('date', { ascending: false });
+    if (error) { console.error('Error fetching diesel readings:', error); return []; }
+    return data || [];
+  },
+  async addDieselReading(r) { return insertRow('diesel_readings', r); },
+  async updateDieselReading(id, r) { return updateRow('diesel_readings', id, r); },
+  async deleteDieselReading(id) { return deleteRow('diesel_readings', id); },
+
+  // Diesel Purchases (admin)
+  async getDieselPurchases() { return fetchAll('diesel_purchases', 'date', false); },
+  async addDieselPurchase(p) { return insertRow('diesel_purchases', p); },
+  async updateDieselPurchase(id, p) { return updateRow('diesel_purchases', id, p); },
+  async deleteDieselPurchase(id) { return deleteRow('diesel_purchases', id); },
+
+  // Diesel Distributions (admin to stores)
+  async getDieselDistributions() { return fetchAll('diesel_distributions', 'date', false); },
+  async getDieselDistributionsByStore(storeLoc) {
+    const { data, error } = await supabase.from('diesel_distributions').select('*').eq('store_location', storeLoc).order('date', { ascending: false });
+    if (error) { console.error('Error fetching distributions:', error); return []; }
+    return data || [];
+  },
+  async addDieselDistribution(d) { return insertRow('diesel_distributions', d); },
+  async updateDieselDistribution(id, d) { return updateRow('diesel_distributions', id, d); },
+
+  // Store Diesel Stock (ledger)
+  async getStoreDieselStock() { return fetchAll('store_diesel_stock', 'date', false); },
+  async getStoreDieselStockByStore(storeLoc) {
+    const { data, error } = await supabase.from('store_diesel_stock').select('*').eq('store_location', storeLoc).order('date', { ascending: false });
+    if (error) { console.error('Error fetching store stock:', error); return []; }
+    return data || [];
+  },
+  async addStoreDieselStock(s) { return insertRow('store_diesel_stock', s); },
+
+  // Generator Baselines
+  async getGeneratorBaselines() { return fetchAll('generator_baselines', 'generator_id'); },
+  async upsertGeneratorBaseline(b) {
+    const { data, error } = await supabase.from('generator_baselines').upsert(b, { onConflict: 'generator_id' }).select().maybeSingle();
+    if (error) { console.error('Error upserting baseline:', error); throw error; }
+    return data;
+  },
 };
