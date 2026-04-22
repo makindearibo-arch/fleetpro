@@ -422,7 +422,7 @@ function SettingsPage({locations,setLocations,users,setUsers,user,setUser}){
 // ============================================
 // DIESEL LOG PAGE - Daily Staff Input
 // ============================================
-function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,user,locations,odoLog,setOdoLog,genBaselines}){
+function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines}){
   const [step,setStep]=useState("select"); // select | input | review | done
   const [selGen,setSelGen]=useState("");
   const [inputMode,setInputMode]=useState("photo"); // photo | manual
@@ -448,7 +448,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const [notes,setNotes]=useState("");
   // Second generator support
   const [hasSecondGen,setHasSecondGen]=useState(false);
-  const [showHistory,setShowHistory]=useState(false);
+  const [showHistory,setShowHistory]=useState(false);const [showSupply,setShowSupply]=useState(false);
 
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
@@ -673,6 +673,31 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const selectedGen=generators.find(g=>g.id===selGen);
   const prevReading=selGen?getPrevReading(selGen):null;
 
+  // Supply view - Store Staff can see their diesel distributions & stock
+  if(showSupply){
+    const myStore=isStoreStaff?userStore:null;
+    const myDists=(dieselDistributions||[]).filter(d=>myStore?d.storeLoc===myStore:true).sort((a,b)=>b.date.localeCompare(a.date));
+    const myReadings=dieselReadings.filter(r=>myStore?r.storeLoc===myStore:true);
+    const totalReceived=myDists.reduce((s,d)=>s+d.litres,0);
+    const totalConsumed=myReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+    const latestLevel=myReadings.length>0?myReadings.sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
+    const balance=totalReceived-totalConsumed;
+    return(<div>
+      <button onClick={()=>setShowSupply(false)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to Log</button>
+      <div style={{marginBottom:16}}><h3 style={{fontSize:16,fontWeight:700,margin:"0 0 4px"}}>{myStore?myStore+" — ":""}Diesel Supply</h3><div style={{fontSize:12,color:"#8D8D8D"}}>Track diesel received and consumed at {myStore||"all stores"}</div></div>
+      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(3,1fr)",gap:12,marginBottom:18}}>
+        <Kpi icon={Send} label="Total Received" value={totalReceived.toLocaleString()+" L"} sub={myDists.length+" deliveries"}/>
+        <Kpi icon={Fuel} label="Total Consumed" value={totalConsumed.toLocaleString()+" L"} sub={myReadings.length+" readings"}/>
+        <Kpi icon={Package} label="Balance" value={balance.toLocaleString()+" L"} sub={latestLevel&&latestLevel.dieselLevelActual!=null?"Last reported: "+latestLevel.dieselLevelActual+"L":"No readings yet"} accent={balance<0?"#DA1E28":undefined}/>
+      </div>
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+        <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Diesel Received</h4></div>
+        {myDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No diesel distributed to {myStore||"stores"} yet</div>
+        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td></tr>);})}</tbody></table>}
+      </div>
+    </div>);
+  }
+
   // History view
   if(showHistory){
     const hist=dieselReadings.filter(r=>isStoreStaff?r.storeLoc===userStore:true).slice(0,30);
@@ -694,7 +719,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           <div style={{width:40,height:40,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center"}}><Droplet size={20}/></div>
           <div><h2 style={{fontSize:18,fontWeight:700,margin:0}}>Daily Diesel Log</h2><div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{new Date().toLocaleDateString("en-NG",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div></div>
         </div>
-        <button onClick={()=>setShowHistory(true)} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Clock size={13}/> History</button>
+        <div style={{display:"flex",gap:6}}><button onClick={()=>setShowSupply(true)} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Package size={13}/> Supply</button><button onClick={()=>setShowHistory(true)} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Clock size={13}/> History</button></div>
       </div>
       {isStoreStaff&&userStore&&<div style={{marginTop:12,padding:"10px 14px",background:"rgba(255,255,255,0.08)",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div><div style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>Your Store</div><div style={{fontSize:14,fontWeight:600}}>{userStore}</div></div>
@@ -1041,7 +1066,7 @@ function FleetProAppInner(){
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
         <Route path="/" element={isStoreStaff?<Navigate to="/diesel" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
-        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines}/>}/>
+        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines}/>}/>
         <Route path="/diesel-mgmt" element={isStoreStaff?<Navigate to="/diesel" replace/>:<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} user={user} dieselReadings={dieselReadings}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
