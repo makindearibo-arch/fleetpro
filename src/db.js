@@ -189,6 +189,7 @@ export const db = {
   },
   async addDieselDistribution(d) { return insertRow('diesel_distributions', d); },
   async updateDieselDistribution(id, d) { return updateRow('diesel_distributions', id, d); },
+  async deleteDieselDistribution(id) { return deleteRow('diesel_distributions', id); },
 
   // Store Diesel Stock (ledger)
   async getStoreDieselStock() { return fetchAll('store_diesel_stock', 'date', false); },
