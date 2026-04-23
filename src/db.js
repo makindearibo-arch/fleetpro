@@ -145,6 +145,11 @@ export const db = {
   async addDocType(name) { return insertRow('doc_types', { name }); },
   async deleteDocType(id) { return deleteRow('doc_types', id); },
 
+
+  // Vendor Types
+  async getVendorTypes() { return fetchAll('vendor_types', 'name'); },
+  async addVendorType(name) { return insertRow('vendor_types', { name }); },
+  async deleteVendorType(id) { return deleteRow('vendor_types', id); },
   // Inspection Items
   async getInspItems() { return fetchAll('insp_items', 'id'); },
   async addInspItem(name) { return insertRow('insp_items', { name }); },
