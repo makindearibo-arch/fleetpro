@@ -454,10 +454,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const [notes,setNotes]=useState("");
   // Second generator support
   const [hasSecondGen,setHasSecondGen]=useState(false);
-  const [showHistory,setShowHistory]=useState(false);const [showSupply,setShowSupply]=useState(false);const [showReports,setShowReports]=useState(false);
-  const nowD=new Date();const defMonthStart=new Date(nowD.getFullYear(),nowD.getMonth(),1).toISOString().split("T")[0];const defMonthEnd=new Date(nowD.getFullYear(),nowD.getMonth()+1,0).toISOString().split("T")[0];
-  const [dashTab,setDashTab]=useState("supply");const [dFrom,setDFrom]=useState(defMonthStart);const [dTo,setDTo]=useState(defMonthEnd);const [quickFilter,setQuickFilter]=useState("month");
-  const [rFrom,setRFrom]=useState(defMonthStart);const [rTo,setRTo]=useState(nowD.toISOString().split("T")[0]);const [rTab,setRTab]=useState("readings");
+  const [showHistory,setShowHistory]=useState(false);
 
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
@@ -682,139 +679,17 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const selectedGen=generators.find(g=>g.id===selGen);
   const prevReading=selGen?getPrevReading(selGen):null;
 
-  // Supply & History Dashboard
-  if(showSupply||showHistory){
-    const myStore=isStoreStaff?userStore:null;
 
-    const applyQuick=(q)=>{setQuickFilter(q);const t=new Date();if(q==="7d"){setDFrom(new Date(t-7*864e5).toISOString().split("T")[0]);setDTo(t.toISOString().split("T")[0]);}else if(q==="30d"){setDFrom(new Date(t-30*864e5).toISOString().split("T")[0]);setDTo(t.toISOString().split("T")[0]);}else if(q==="month"){setDFrom(new Date(t.getFullYear(),t.getMonth(),1).toISOString().split("T")[0]);setDTo(new Date(t.getFullYear(),t.getMonth()+1,0).toISOString().split("T")[0]);}else if(q==="prev"){setDFrom(new Date(t.getFullYear(),t.getMonth()-1,1).toISOString().split("T")[0]);setDTo(new Date(t.getFullYear(),t.getMonth(),0).toISOString().split("T")[0]);}};
-    const inRange=(d)=>d>=dFrom&&d<=dTo;
-    const myDists=(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&inRange(d.date)).sort((a,b)=>b.date.localeCompare(a.date));
-    const myReadings=dieselReadings.filter(r=>(myStore?r.storeLoc===myStore:true)&&inRange(r.date));
-    const allDists=(dieselDistributions||[]).filter(d=>myStore?d.storeLoc===myStore:true);
-    const allReadings=dieselReadings.filter(r=>myStore?r.storeLoc===myStore:true);
-    const totalReceived=myDists.reduce((s,d)=>s+d.litres,0);
-    const totalConsumed=myReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
-    const totalHoursRun=myReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
-    const overallBalance=allDists.reduce((s,d)=>s+d.litres,0)-allReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
-    // Per-generator breakdown
-    const genMap={};myReadings.forEach(r=>{if(!genMap[r.generatorId])genMap[r.generatorId]={hrs:0,consumed:0,readings:0};genMap[r.generatorId].hrs+=(r.hoursRun||0);genMap[r.generatorId].consumed+=(r.consumptionLitres||0);genMap[r.generatorId].readings++;});
-    const genBreakdown=Object.entries(genMap).map(([gid,d])=>{const g=generators.find(x=>x.id===gid);return{id:gid,name:g?.name||gid,...d,rate:d.hrs>0?(d.consumed/d.hrs):0};}).sort((a,b)=>b.consumed-a.consumed);
-    // Daily chart data
-    const dayMap={};myReadings.forEach(r=>{if(!dayMap[r.date])dayMap[r.date]={consumed:0,hrs:0};dayMap[r.date].consumed+=(r.consumptionLitres||0);dayMap[r.date].hrs+=(r.hoursRun||0);});
-    const chartData=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,d])=>({date:date.slice(5),consumed:Math.round(d.consumed*10)/10,hrs:Math.round(d.hrs*10)/10}));
+  // Simple reading history
+  if(showHistory){
+    const hist=dieselReadings.filter(r=>isStoreStaff?r.storeLoc===userStore:true).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
     return(<div>
-      <button onClick={()=>{setShowSupply(false);setShowHistory(false);}} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to Log</button>
-      <div style={{marginBottom:16}}><h3 style={{fontSize:16,fontWeight:700,margin:"0 0 4px"}}>{myStore?myStore+" \u2014 ":""}Diesel Dashboard</h3><div style={{fontSize:12,color:"#8D8D8D"}}>Supply, consumption & history for {myStore||"all stores"}</div></div>
-      {/* Date filter bar */}
-      <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-        {[{k:"7d",l:"7 Days"},{k:"30d",l:"30 Days"},{k:"month",l:"This Month"},{k:"prev",l:"Last Month"}].map(q=>(<button key={q.k} onClick={()=>applyQuick(q.k)} style={{padding:"6px 14px",borderRadius:7,border:quickFilter===q.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:quickFilter===q.k?"#D0E2FF":"#fff",color:quickFilter===q.k?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{q.l}</button>))}
-        <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:4}}><Calendar size={13} color="#8D8D8D"/><input type="date" value={dFrom} onChange={e=>{setDFrom(e.target.value);setQuickFilter("");}} style={{padding:"5px 8px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:11}}/><span style={{fontSize:11,color:"#8D8D8D"}}>to</span><input type="date" value={dTo} onChange={e=>{setDTo(e.target.value);setQuickFilter("");}} style={{padding:"5px 8px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:11}}/></div>
-      </div>
-      {/* Tab switcher */}
-      <div style={{display:"flex",gap:6,marginBottom:16}}>{[{k:"supply",l:"Supply"},{k:"history",l:"History"},{k:"generators",l:"Generators"}].map(t=>(<button key={t.k} onClick={()=>setDashTab(t.k)} style={{padding:"7px 18px",borderRadius:8,border:dashTab===t.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:dashTab===t.k?"#D0E2FF":"#fff",color:dashTab===t.k?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.l}</button>))}</div>
-      {/* KPI Cards */}
-      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:18}}>
-        <Kpi icon={Send} label="Received" value={totalReceived.toLocaleString()+" L"} sub={myDists.length+" deliveries"}/>
-        <Kpi icon={Fuel} label="Consumed" value={totalConsumed.toLocaleString()+" L"} sub={myReadings.length+" readings"}/>
-        <Kpi icon={Clock} label="Hours Run" value={totalHoursRun.toFixed(1)+" h"} sub={genBreakdown.length+" generators"}/>
-        <Kpi icon={Package} label="Overall Balance" value={overallBalance.toLocaleString()+" L"} sub="All time" accent={overallBalance<0?"#DA1E28":undefined}/>
-      </div>
-      {/* Daily consumption chart */}
-      {chartData.length>1&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18,marginBottom:16}}>
-        <h4 style={{fontSize:14,fontWeight:700,margin:"0 0 12px",display:"flex",alignItems:"center",gap:6}}><BarChart3 size={16} color={P}/>Daily Consumption</h4>
-        <ResponsiveContainer width="100%" height={200}><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="date" tick={{fontSize:10}} stroke="#8D8D8D"/><YAxis tick={{fontSize:10}} stroke="#8D8D8D"/><Tooltip contentStyle={{borderRadius:8,fontSize:12}}/><Bar dataKey="consumed" name="Litres" fill={P} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>
-      </div>}
-      {/* Supply Tab */}
-      {dashTab==="supply"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
-        <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Diesel Received</h4></div>
-        {myDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
-        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{!d.confirmed&&<button onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});const updated=dieselDistributions.map(x=>x.id===d.id?toDD(row):x);setDieselDistributions(updated);}catch(e){alert("Error: "+e.message);}}} style={{padding:"5px 12px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer"}}>Accept Delivery</button>}</td></tr>);})}</tbody></table>}
-      </div>)}
-      {/* History Tab */}
-      {dashTab==="history"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
-        <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Reading History</h4></div>
-        {myReadings.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings in this period</div>
-        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","Consumed","NEPA","Source","Flag"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-        <tbody>{myReadings.sort((a,b)=>b.date.localeCompare(a.date)).map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
-      </div>)}
-      {/* Generators Tab */}
-      {dashTab==="generators"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
-        <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Per-Generator Breakdown</h4></div>
-        {genBreakdown.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No generator data in this period</div>
-        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Generator","Hours Run","Consumed (L)","Avg L/hr","Readings"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-        <tbody>{genBreakdown.map(g=>(<tr key={g.id}><td style={{...tc,fontWeight:600}}>{g.name}</td><td style={tc}>{g.hrs.toFixed(1)} h</td><td style={{...tc,fontWeight:600,color:P}}>{g.consumed.toFixed(1)} L</td><td style={tc}>{g.rate.toFixed(2)} L/hr</td><td style={tc}>{g.readings}</td></tr>))}</tbody></table>}
-      </div>)}
-    </div>);
-  }
-
-
-
-  // Reports view - full store data with export
-  if(showReports){
-    const myStore=isStoreStaff?userStore:null;
-
-    const inR=(d)=>d>=rFrom&&d<=rTo;
-    const rReadings=dieselReadings.filter(r=>(myStore?r.storeLoc===myStore:true)&&inR(r.date)).sort((a,b)=>b.date.localeCompare(a.date));
-    const rDists=(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&inR(d.date)).sort((a,b)=>b.date.localeCompare(a.date));
-    const rTotalConsumed=rReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
-    const rTotalReceived=rDists.reduce((s,d)=>s+d.litres,0);
-    const rTotalHrs=rReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
-    // Export CSV
-    const exportCSV=(type)=>{
-      let csv="",rows=[];
-      if(type==="readings"){csv="Date,Generator,Hours Opening,Hours Closing,Hours Run,Diesel Level (L),Consumed (L),NEPA Hours,Source,Discrepancy\n";rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);csv+=`${r.date},${g?.name||r.generatorId},${r.genHoursOpening||""},${r.genHoursClosing||""},${r.hoursRun||""},${r.dieselLevelActual!=null?r.dieselLevelActual:""},${r.consumptionLitres||""},${r.nepaHours||""},${r.genSource||"manual"},${r.discrepancyFlag?"YES":"NO"}\n`;});}
-      else{csv="Date,Litres,Supplier,Notes,Status\n";rDists.forEach(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);csv+=`${d.date},${d.litres},${p?.supplier||""},${(d.notes||"").replace(/,/g," ")},${d.confirmed?"Confirmed":"Pending"}\n`;});}
-      const blob=new Blob([csv],{type:"text/csv"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${myStore||"all"}_${type}_${rFrom}_to_${rTo}.csv`;a.click();URL.revokeObjectURL(url);
-    };
-    // Export PDF (simple HTML-to-print)
-    const exportPDF=(type)=>{
-      let html="<html><head><title>"+((myStore||"All Stores")+" "+type+" Report")+"</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #ddd;padding:8px;font-size:12px;text-align:left}th{background:#f4f4f4;font-weight:700}h1{font-size:18px}h2{font-size:14px;color:#666}.summary{display:flex;gap:20px;margin:12px 0}.summary div{padding:10px;background:#f9f9f9;border-radius:8px;flex:1}.summary .val{font-size:18px;font-weight:700}</style></head><body>";
-      html+="<h1>"+(myStore||"All Stores")+" \u2014 "+type.charAt(0).toUpperCase()+type.slice(1)+" Report</h1>";
-      html+="<h2>"+rFrom+" to "+rTo+"</h2>";
-      if(type==="readings"){
-        html+="<div class=\"summary\"><div><div>Total Consumed</div><div class=\"val\">"+rTotalConsumed.toFixed(1)+" L</div></div><div><div>Total Hours</div><div class=\"val\">"+rTotalHrs.toFixed(1)+" h</div></div><div><div>Readings</div><div class=\"val\">"+rReadings.length+"</div></div></div>";
-        html+="<table><thead><tr><th>Date</th><th>Generator</th><th>Hours Run</th><th>Diesel Level</th><th>Consumed</th><th>NEPA</th><th>Source</th><th>Flag</th></tr></thead><tbody>";
-        rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);html+="<tr><td>"+r.date+"</td><td>"+(g?.name||r.generatorId)+"</td><td>"+(r.hoursRun?r.hoursRun.toFixed(1)+"h":"-")+"</td><td>"+(r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-")+"</td><td>"+(r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-")+"</td><td>"+(r.nepaHours?r.nepaHours+"h":"-")+"</td><td>"+(r.genSource||"manual")+"</td><td>"+(r.discrepancyFlag?"YES":"-")+"</td></tr>";});
-        html+="</tbody></table>";
-      }else{
-        html+="<div class=\"summary\"><div><div>Total Received</div><div class=\"val\">"+rTotalReceived.toFixed(1)+" L</div></div><div><div>Deliveries</div><div class=\"val\">"+rDists.length+"</div></div></div>";
-        html+="<table><thead><tr><th>Date</th><th>Litres</th><th>Supplier</th><th>Notes</th><th>Status</th></tr></thead><tbody>";
-        rDists.forEach(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);html+="<tr><td>"+d.date+"</td><td>"+d.litres+" L</td><td>"+(p?.supplier||"\u2014")+"</td><td>"+(d.notes||"\u2014")+"</td><td>"+(d.confirmed?"Confirmed":"Pending")+"</td></tr>";});
-        html+="</tbody></table>";
-      }
-      html+="</body></html>";
-      const w=window.open("","_blank","width=800,height=600");w.document.write(html);w.document.close();setTimeout(()=>{w.print();},500);
-    };
-    return(<div>
-      <button onClick={()=>setShowReports(false)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to Log</button>
-      <div style={{marginBottom:16}}><h3 style={{fontSize:16,fontWeight:700,margin:"0 0 4px"}}>{myStore?myStore+" \u2014 ":""}Reports</h3><div style={{fontSize:12,color:"#8D8D8D"}}>Filter and export your store data</div></div>
-      {/* Date filter */}
-      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-        <Calendar size={14} color="#8D8D8D"/><input type="date" value={rFrom} onChange={e=>setRFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:12}}/><span style={{fontSize:12,color:"#8D8D8D"}}>to</span><input type="date" value={rTo} onChange={e=>setRTo(e.target.value)} style={{padding:"6px 10px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:12}}/>
-      </div>
-      {/* Report tabs */}
-      <div style={{display:"flex",gap:6,marginBottom:14}}>{[{k:"readings",l:"Diesel Readings"},{k:"supply",l:"Diesel Supply"}].map(t=>(<button key={t.k} onClick={()=>setRTab(t.k)} style={{padding:"7px 18px",borderRadius:8,border:rTab===t.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:rTab===t.k?"#D0E2FF":"#fff",color:rTab===t.k?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.l}</button>))}</div>
-      {/* Summary */}
-      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(3,1fr)",gap:12,marginBottom:16}}>
-        {rTab==="readings"?<><Kpi icon={Fuel} label="Consumed" value={rTotalConsumed.toFixed(1)+" L"} sub={rReadings.length+" readings"}/><Kpi icon={Clock} label="Hours Run" value={rTotalHrs.toFixed(1)+" h"} sub="Total"/><Kpi icon={Gauge} label="Avg L/hr" value={rTotalHrs>0?(rTotalConsumed/rTotalHrs).toFixed(2):"-"} sub="Efficiency"/></>
-        :<><Kpi icon={Send} label="Received" value={rTotalReceived.toFixed(1)+" L"} sub={rDists.length+" deliveries"}/><Kpi icon={Package} label="Balance" value={(rTotalReceived-rTotalConsumed).toFixed(1)+" L"} sub="Period balance"/></>}
-      </div>
-      {/* Export buttons */}
-      <div style={{display:"flex",gap:8,marginBottom:16}}>
-        <button onClick={()=>exportCSV(rTab)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid #24A148",background:"#E8F5E9",color:"#24A148",fontSize:12,fontWeight:600,cursor:"pointer"}}><FileDown size={14}/>Export CSV</button>
-        <button onClick={()=>exportPDF(rTab)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid #DA1E28",background:"#FFF1F1",color:"#DA1E28",fontSize:12,fontWeight:600,cursor:"pointer"}}><FileDown size={14}/>Export PDF</button>
-      </div>
-      {/* Data table */}
+      <button onClick={()=>setShowHistory(false)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to Log</button>
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
-        {rTab==="readings"?(<>
-          {rReadings.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings in this period</div>
-          :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","Consumed","NEPA","Source","Flag"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-          <tbody>{rReadings.map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
-        </>):(<>
-          {rDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
-          :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Supplier","Notes","Status"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-          <tbody>{rDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?.supplier||"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td></tr>);})}</tbody></table>}
-        </>)}
+        <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Recent Readings</h3></div>
+        {hist.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings yet</div>
+        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","NEPA","Source"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+        <tbody>{hist.map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td></tr>);})}</tbody></table>}
       </div>
     </div>);
   }
@@ -827,7 +702,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           <div style={{width:40,height:40,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center"}}><Droplet size={20}/></div>
           <div><h2 style={{fontSize:18,fontWeight:700,margin:0}}>Daily Diesel Log</h2><div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{new Date().toLocaleDateString("en-NG",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div></div>
         </div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button onClick={()=>{setShowSupply(true);setDashTab("supply");}} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Package size={13}/> Dashboard</button><button onClick={()=>setShowReports(true)} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><FileDown size={13}/> Reports</button></div>
+        <button onClick={()=>setShowHistory(true)} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 12px",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Clock size={13}/> History</button>
       </div>
       {isStoreStaff&&userStore&&<div style={{marginTop:12,padding:"10px 14px",background:"rgba(255,255,255,0.08)",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div><div style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>Your Store</div><div style={{fontSize:14,fontWeight:600}}>{userStore}</div></div>
@@ -980,7 +855,147 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   </div>);
 }
 
-const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"diesel",path:"/diesel",label:"Diesel Log",icon:Droplet},{id:"diesel-mgmt",path:"/diesel-mgmt",label:"Diesel Management",icon:Package},{id:"vehicles",path:"/vehicles",label:"Vehicles",icon:Truck},{id:"generators",path:"/generators",label:"Generators",icon:Zap},{id:"drivers",path:"/drivers",label:"Drivers",icon:Users},{id:"fuel",path:"/fuel",label:"Fuel & Energy",icon:Fuel},{id:"workorders",path:"/workorders",label:"Work Orders",icon:FileText},{id:"papers",path:"/papers",label:"Vehicle Papers",icon:FileCheck},{id:"service",path:"/service",label:"Service Reminders",icon:Bell},{id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle},{id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase},{id:"reports",path:"/reports",label:"Reports",icon:BarChart3},{id:"settings",path:"/settings",label:"Settings",icon:Settings}];
+// ============================================
+// STAFF DASHBOARD PAGE - Supply, History, Generators, Reports
+// ============================================
+function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user}){
+  const userStore=user?.store_location||"";
+  const isStoreStaff=user?.role==="Store Staff";
+  const myStore=isStoreStaff?userStore:null;
+  const nowD=new Date();const defMonthStart=new Date(nowD.getFullYear(),nowD.getMonth(),1).toISOString().split("T")[0];const defMonthEnd=new Date(nowD.getFullYear(),nowD.getMonth()+1,0).toISOString().split("T")[0];
+  const [dashTab,setDashTab]=useState("supply");
+  const [dFrom,setDFrom]=useState(defMonthStart);const [dTo,setDTo]=useState(defMonthEnd);const [quickFilter,setQuickFilter]=useState("month");
+  const [rFrom,setRFrom]=useState(defMonthStart);const [rTo,setRTo]=useState(nowD.toISOString().split("T")[0]);const [rTab,setRTab]=useState("readings");
+  const [showReports,setShowReports]=useState(false);
+
+  const applyQuick=(q)=>{setQuickFilter(q);const t=new Date();if(q==="7d"){setDFrom(new Date(t-7*864e5).toISOString().split("T")[0]);setDTo(t.toISOString().split("T")[0]);}else if(q==="30d"){setDFrom(new Date(t-30*864e5).toISOString().split("T")[0]);setDTo(t.toISOString().split("T")[0]);}else if(q==="month"){setDFrom(new Date(t.getFullYear(),t.getMonth(),1).toISOString().split("T")[0]);setDTo(new Date(t.getFullYear(),t.getMonth()+1,0).toISOString().split("T")[0]);}else if(q==="prev"){setDFrom(new Date(t.getFullYear(),t.getMonth()-1,1).toISOString().split("T")[0]);setDTo(new Date(t.getFullYear(),t.getMonth(),0).toISOString().split("T")[0]);}};
+  const inRange=(d)=>d>=dFrom&&d<=dTo;
+  const myDists=(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&inRange(d.date)).sort((a,b)=>b.date.localeCompare(a.date));
+  const myReadings=dieselReadings.filter(r=>(myStore?r.storeLoc===myStore:true)&&inRange(r.date));
+  const allDists=(dieselDistributions||[]).filter(d=>myStore?d.storeLoc===myStore:true);
+  const allReadings=dieselReadings.filter(r=>myStore?r.storeLoc===myStore:true);
+  const totalReceived=myDists.reduce((s,d)=>s+d.litres,0);
+  const totalConsumed=myReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  const totalHoursRun=myReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
+  const overallBalance=allDists.reduce((s,d)=>s+d.litres,0)-allReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  // Per-generator breakdown
+  const genMap={};myReadings.forEach(r=>{if(!genMap[r.generatorId])genMap[r.generatorId]={hrs:0,consumed:0,readings:0};genMap[r.generatorId].hrs+=(r.hoursRun||0);genMap[r.generatorId].consumed+=(r.consumptionLitres||0);genMap[r.generatorId].readings++;});
+  const genBreakdown=Object.entries(genMap).map(([gid,d])=>{const g=generators.find(x=>x.id===gid);return{id:gid,name:g?.name||gid,...d,rate:d.hrs>0?(d.consumed/d.hrs):0};}).sort((a,b)=>b.consumed-a.consumed);
+  // Daily chart data
+  const dayMap={};myReadings.forEach(r=>{if(!dayMap[r.date])dayMap[r.date]={consumed:0,hrs:0};dayMap[r.date].consumed+=(r.consumptionLitres||0);dayMap[r.date].hrs+=(r.hoursRun||0);});
+  const chartData=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,d])=>({date:date.slice(5),consumed:Math.round(d.consumed*10)/10,hrs:Math.round(d.hrs*10)/10}));
+
+  // Reports export functions
+  const inR=(d)=>d>=rFrom&&d<=rTo;
+  const rReadings=dieselReadings.filter(r=>(myStore?r.storeLoc===myStore:true)&&inR(r.date)).sort((a,b)=>b.date.localeCompare(a.date));
+  const rDists=(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&inR(d.date)).sort((a,b)=>b.date.localeCompare(a.date));
+  const rTotalConsumed=rReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  const rTotalReceived=rDists.reduce((s,d)=>s+d.litres,0);
+  const rTotalHrs=rReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
+  const exportCSV=(type)=>{
+    let csv="";
+    if(type==="readings"){csv="Date,Generator,Hours Opening,Hours Closing,Hours Run,Diesel Level (L),Consumed (L),NEPA Hours,Source,Discrepancy\n";rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);csv+=`${r.date},${g?.name||r.generatorId},${r.genHoursOpening||""},${r.genHoursClosing||""},${r.hoursRun||""},${r.dieselLevelActual!=null?r.dieselLevelActual:""},${r.consumptionLitres||""},${r.nepaHours||""},${r.genSource||"manual"},${r.discrepancyFlag?"YES":"NO"}\n`;});}
+    else{csv="Date,Litres,Supplier,Notes,Status\n";rDists.forEach(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);csv+=`${d.date},${d.litres},${p?.supplier||""},${(d.notes||"").replace(/,/g," ")},${d.confirmed?"Confirmed":"Pending"}\n`;});}
+    const blob=new Blob([csv],{type:"text/csv"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${myStore||"all"}_${type}_${rFrom}_to_${rTo}.csv`;a.click();URL.revokeObjectURL(url);
+  };
+  const exportPDF=(type)=>{
+    let html="<html><head><title>"+((myStore||"All Stores")+" "+type+" Report")+"</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #ddd;padding:8px;font-size:12px;text-align:left}th{background:#f4f4f4;font-weight:700}h1{font-size:18px}h2{font-size:14px;color:#666}.summary{display:flex;gap:20px;margin:12px 0}.summary div{padding:10px;background:#f9f9f9;border-radius:8px;flex:1}.summary .val{font-size:18px;font-weight:700}</style></head><body>";
+    html+="<h1>"+(myStore||"All Stores")+" \u2014 "+type.charAt(0).toUpperCase()+type.slice(1)+" Report</h1>";
+    html+="<h2>"+rFrom+" to "+rTo+"</h2>";
+    if(type==="readings"){
+      html+="<div class=\"summary\"><div><div>Total Consumed</div><div class=\"val\">"+rTotalConsumed.toFixed(1)+" L</div></div><div><div>Total Hours</div><div class=\"val\">"+rTotalHrs.toFixed(1)+" h</div></div><div><div>Readings</div><div class=\"val\">"+rReadings.length+"</div></div></div>";
+      html+="<table><thead><tr><th>Date</th><th>Generator</th><th>Hours Run</th><th>Diesel Level</th><th>Consumed</th><th>NEPA</th><th>Source</th><th>Flag</th></tr></thead><tbody>";
+      rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);html+="<tr><td>"+r.date+"</td><td>"+(g?.name||r.generatorId)+"</td><td>"+(r.hoursRun?r.hoursRun.toFixed(1)+"h":"-")+"</td><td>"+(r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-")+"</td><td>"+(r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-")+"</td><td>"+(r.nepaHours?r.nepaHours+"h":"-")+"</td><td>"+(r.genSource||"manual")+"</td><td>"+(r.discrepancyFlag?"YES":"-")+"</td></tr>";});
+      html+="</tbody></table>";
+    }else{
+      html+="<div class=\"summary\"><div><div>Total Received</div><div class=\"val\">"+rTotalReceived.toFixed(1)+" L</div></div><div><div>Deliveries</div><div class=\"val\">"+rDists.length+"</div></div></div>";
+      html+="<table><thead><tr><th>Date</th><th>Litres</th><th>Supplier</th><th>Notes</th><th>Status</th></tr></thead><tbody>";
+      rDists.forEach(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);html+="<tr><td>"+d.date+"</td><td>"+d.litres+" L</td><td>"+(p?.supplier||"\u2014")+"</td><td>"+(d.notes||"\u2014")+"</td><td>"+(d.confirmed?"Confirmed":"Pending")+"</td></tr>";});
+      html+="</tbody></table>";
+    }
+    html+="</body></html>";
+    const w=window.open("","_blank","width=800,height=600");w.document.write(html);w.document.close();setTimeout(()=>{w.print();},500);
+  };
+
+  // Reports sub-view
+  if(showReports){return(<div>
+    <button onClick={()=>setShowReports(false)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to Dashboard</button>
+    <div style={{marginBottom:16}}><h3 style={{fontSize:16,fontWeight:700,margin:"0 0 4px"}}>{myStore?myStore+" \u2014 ":""}Reports</h3><div style={{fontSize:12,color:"#8D8D8D"}}>Filter and export your store data</div></div>
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+      <Calendar size={14} color="#8D8D8D"/><input type="date" value={rFrom} onChange={e=>setRFrom(e.target.value)} style={{padding:"6px 10px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:12}}/><span style={{fontSize:12,color:"#8D8D8D"}}>to</span><input type="date" value={rTo} onChange={e=>setRTo(e.target.value)} style={{padding:"6px 10px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:12}}/>
+    </div>
+    <div style={{display:"flex",gap:6,marginBottom:14}}>{[{k:"readings",l:"Diesel Readings"},{k:"supply",l:"Diesel Supply"}].map(t=>(<button key={t.k} onClick={()=>setRTab(t.k)} style={{padding:"7px 18px",borderRadius:8,border:rTab===t.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:rTab===t.k?"#D0E2FF":"#fff",color:rTab===t.k?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.l}</button>))}</div>
+    <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(3,1fr)",gap:12,marginBottom:16}}>
+      {rTab==="readings"?<><Kpi icon={Fuel} label="Consumed" value={rTotalConsumed.toFixed(1)+" L"} sub={rReadings.length+" readings"}/><Kpi icon={Clock} label="Hours Run" value={rTotalHrs.toFixed(1)+" h"} sub="Total"/><Kpi icon={Gauge} label="Avg L/hr" value={rTotalHrs>0?(rTotalConsumed/rTotalHrs).toFixed(2):"-"} sub="Efficiency"/></>
+      :<><Kpi icon={Send} label="Received" value={rTotalReceived.toFixed(1)+" L"} sub={rDists.length+" deliveries"}/><Kpi icon={Package} label="Balance" value={(rTotalReceived-rTotalConsumed).toFixed(1)+" L"} sub="Period balance"/></>}
+    </div>
+    <div style={{display:"flex",gap:8,marginBottom:16}}>
+      <button onClick={()=>exportCSV(rTab)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid #24A148",background:"#E8F5E9",color:"#24A148",fontSize:12,fontWeight:600,cursor:"pointer"}}><FileDown size={14}/>Export CSV</button>
+      <button onClick={()=>exportPDF(rTab)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid #DA1E28",background:"#FFF1F1",color:"#DA1E28",fontSize:12,fontWeight:600,cursor:"pointer"}}><FileDown size={14}/>Export PDF</button>
+    </div>
+    <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+      {rTab==="readings"?(<>
+        {rReadings.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings in this period</div>
+        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","Consumed","NEPA","Source","Flag"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+        <tbody>{rReadings.map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
+      </>):(<>
+        {rDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
+        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Supplier","Notes","Status"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+        <tbody>{rDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?.supplier||"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td></tr>);})}</tbody></table>}
+      </>)}
+    </div>
+  </div>);}
+
+  return(<div>
+    <div style={{marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <div><h3 style={{fontSize:18,fontWeight:700,margin:"0 0 4px"}}>{myStore?myStore+" \u2014 ":""}Dashboard</h3><div style={{fontSize:12,color:"#8D8D8D"}}>Supply, consumption & history</div></div>
+        <button onClick={()=>setShowReports(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><FileDown size={14}/>Reports & Export</button>
+      </div>
+    </div>
+    {/* Date filter bar */}
+    <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+      {[{k:"7d",l:"7 Days"},{k:"30d",l:"30 Days"},{k:"month",l:"This Month"},{k:"prev",l:"Last Month"}].map(q=>(<button key={q.k} onClick={()=>applyQuick(q.k)} style={{padding:"6px 14px",borderRadius:7,border:quickFilter===q.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:quickFilter===q.k?"#D0E2FF":"#fff",color:quickFilter===q.k?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{q.l}</button>))}
+      <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:4}}><Calendar size={13} color="#8D8D8D"/><input type="date" value={dFrom} onChange={e=>{setDFrom(e.target.value);setQuickFilter("");}} style={{padding:"5px 8px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:11}}/><span style={{fontSize:11,color:"#8D8D8D"}}>to</span><input type="date" value={dTo} onChange={e=>{setDTo(e.target.value);setQuickFilter("");}} style={{padding:"5px 8px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:11}}/></div>
+    </div>
+    {/* Tab switcher */}
+    <div style={{display:"flex",gap:6,marginBottom:16}}>{[{k:"supply",l:"Supply"},{k:"history",l:"History"},{k:"generators",l:"Generators"}].map(t=>(<button key={t.k} onClick={()=>setDashTab(t.k)} style={{padding:"7px 18px",borderRadius:8,border:dashTab===t.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:dashTab===t.k?"#D0E2FF":"#fff",color:dashTab===t.k?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.l}</button>))}</div>
+    {/* KPI Cards */}
+    <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:18}}>
+      <Kpi icon={Send} label="Received" value={totalReceived.toLocaleString()+" L"} sub={myDists.length+" deliveries"}/>
+      <Kpi icon={Fuel} label="Consumed" value={totalConsumed.toLocaleString()+" L"} sub={myReadings.length+" readings"}/>
+      <Kpi icon={Clock} label="Hours Run" value={totalHoursRun.toFixed(1)+" h"} sub={genBreakdown.length+" generators"}/>
+      <Kpi icon={Package} label="Overall Balance" value={overallBalance.toLocaleString()+" L"} sub="All time" accent={overallBalance<0?"#DA1E28":undefined}/>
+    </div>
+    {/* Daily consumption chart */}
+    {chartData.length>1&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18,marginBottom:16}}>
+      <h4 style={{fontSize:14,fontWeight:700,margin:"0 0 12px",display:"flex",alignItems:"center",gap:6}}><BarChart3 size={16} color={P}/>Daily Consumption</h4>
+      <ResponsiveContainer width="100%" height={200}><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="date" tick={{fontSize:10}} stroke="#8D8D8D"/><YAxis tick={{fontSize:10}} stroke="#8D8D8D"/><Tooltip contentStyle={{borderRadius:8,fontSize:12}}/><Bar dataKey="consumed" name="Litres" fill={P} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>
+    </div>}
+    {/* Supply Tab */}
+    {dashTab==="supply"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Diesel Received</h4></div>
+      {myDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
+      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{!d.confirmed&&<button onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});const updated=dieselDistributions.map(x=>x.id===d.id?toDD(row):x);setDieselDistributions(updated);}catch(e){alert("Error: "+e.message);}}} style={{padding:"5px 12px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer"}}>Accept Delivery</button>}</td></tr>);})}</tbody></table>}
+    </div>)}
+    {/* History Tab */}
+    {dashTab==="history"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Reading History</h4></div>
+      {myReadings.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings in this period</div>
+      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","Consumed","NEPA","Source","Flag"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+      <tbody>{myReadings.sort((a,b)=>b.date.localeCompare(a.date)).map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
+    </div>)}
+    {/* Generators Tab */}
+    {dashTab==="generators"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Per-Generator Breakdown</h4></div>
+      {genBreakdown.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No generator data in this period</div>
+      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Generator","Hours Run","Consumed (L)","Avg L/hr","Readings"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+      <tbody>{genBreakdown.map(g=>(<tr key={g.id}><td style={{...tc,fontWeight:600}}>{g.name}</td><td style={tc}>{g.hrs.toFixed(1)} h</td><td style={{...tc,fontWeight:600,color:P}}>{g.consumed.toFixed(1)} L</td><td style={tc}>{g.rate.toFixed(2)} L/hr</td><td style={tc}>{g.readings}</td></tr>))}</tbody></table>}
+    </div>)}
+  </div>);
+}
+
+const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"staff-dashboard",path:"/staff-dashboard",label:"My Dashboard",icon:BarChart3},{id:"diesel",path:"/diesel",label:"Diesel Log",icon:Droplet},{id:"diesel-mgmt",path:"/diesel-mgmt",label:"Diesel Management",icon:Package},{id:"vehicles",path:"/vehicles",label:"Vehicles",icon:Truck},{id:"generators",path:"/generators",label:"Generators",icon:Zap},{id:"drivers",path:"/drivers",label:"Drivers",icon:Users},{id:"fuel",path:"/fuel",label:"Fuel & Energy",icon:Fuel},{id:"workorders",path:"/workorders",label:"Work Orders",icon:FileText},{id:"papers",path:"/papers",label:"Vehicle Papers",icon:FileCheck},{id:"service",path:"/service",label:"Service Reminders",icon:Bell},{id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle},{id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase},{id:"reports",path:"/reports",label:"Reports",icon:BarChart3},{id:"settings",path:"/settings",label:"Settings",icon:Settings}];
 // ============================================
 // DIESEL MANAGEMENT PAGE - Admin Purchase & Distribution (Phase 2)
 // ============================================
@@ -1191,9 +1206,10 @@ function FleetProAppInner(){
     </header>
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
-        <Route path="/" element={isStoreStaff?<Navigate to="/diesel" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
+        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines}/>}/>
-        <Route path="/diesel-mgmt" element={isStoreStaff?<Navigate to="/diesel" replace/>:<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings}/>}/>
+        <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
+        <Route path="/diesel-mgmt" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
