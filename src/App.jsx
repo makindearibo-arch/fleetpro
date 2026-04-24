@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
-import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown } from "lucide-react";
+import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin } from "lucide-react";
 import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
+import LiveMapPage from "./LiveMapPage.jsx";
 
 const CD=[{m:"Sep",fuel:4.2,maint:2.8},{m:"Oct",fuel:4.5,maint:2.3},{m:"Nov",fuel:4.0,maint:3.2},{m:"Dec",fuel:3.5,maint:2.4},{m:"Jan",fuel:3.9,maint:3.8},{m:"Feb",fuel:4.4,maint:1.9}];
 const isMob=()=>typeof window!=="undefined"&&window.innerWidth<768;
@@ -1020,7 +1021,7 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
   </div>);
 }
 
-const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"staff-dashboard",path:"/staff-dashboard",label:"My Dashboard",icon:BarChart3},{id:"diesel",path:"/diesel",label:"Diesel Log",icon:Droplet},{id:"diesel-mgmt",path:"/diesel-mgmt",label:"Diesel Management",icon:Package},{id:"vehicles",path:"/vehicles",label:"Vehicles",icon:Truck},{id:"generators",path:"/generators",label:"Generators",icon:Zap},{id:"drivers",path:"/drivers",label:"Drivers",icon:Users},{id:"fuel",path:"/fuel",label:"Fuel & Energy",icon:Fuel},{id:"workorders",path:"/workorders",label:"Work Orders",icon:FileText},{id:"papers",path:"/papers",label:"Vehicle Papers",icon:FileCheck},{id:"service",path:"/service",label:"Service Reminders",icon:Bell},{id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle},{id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase},{id:"reports",path:"/reports",label:"Reports",icon:BarChart3},{id:"settings",path:"/settings",label:"Settings",icon:Settings}];
+const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"staff-dashboard",path:"/staff-dashboard",label:"My Dashboard",icon:BarChart3},{id:"diesel",path:"/diesel",label:"Diesel Log",icon:Droplet},{id:"diesel-mgmt",path:"/diesel-mgmt",label:"Diesel Management",icon:Package},{id:"vehicles",path:"/vehicles",label:"Vehicles",icon:Truck},{id:"generators",path:"/generators",label:"Generators",icon:Zap},{id:"drivers",path:"/drivers",label:"Drivers",icon:Users},{id:"fuel",path:"/fuel",label:"Fuel & Energy",icon:Fuel},{id:"workorders",path:"/workorders",label:"Work Orders",icon:FileText},{id:"papers",path:"/papers",label:"Vehicle Papers",icon:FileCheck},{id:"service",path:"/service",label:"Service Reminders",icon:Bell},{id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle},{id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase},{id:"reports",path:"/reports",label:"Reports",icon:BarChart3},{id:"live-map",path:"/live-map",label:"Live Map",icon:MapPin},{id:"settings",path:"/settings",label:"Settings",icon:Settings}];
 // ============================================
 // DIESEL MANAGEMENT PAGE - Admin Purchase & Distribution (Phase 2)
 // ============================================
@@ -1272,6 +1273,7 @@ function FleetProAppInner(){
         <Route path="/inspections" element={<InspectionPage vehicles={vehicles} drivers={drivers} inspections={inspections} setInspections={setInspections} canEdit={canEdit} inspItems={inspItems} setInspItems={setInspItems}/>}/>
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs}/>}/>
+        <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
