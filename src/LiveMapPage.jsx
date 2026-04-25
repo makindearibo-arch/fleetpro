@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { GoogleMap, LoadScript, Marker, InfoWindow, Polyline } from "@react-google-maps/api";
+import { GoogleMap, useJsApiLoader, Marker, InfoWindow, Polyline } from "@react-google-maps/api";
 import { BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer } from "recharts";
 import { Truck, Clock, Gauge, AlertTriangle, Search, ChevronRight, ChevronLeft, X, MapPin, Navigation, Play, Pause, RotateCcw } from "lucide-react";
 import { getDevices, getPositions, getRoute, getTrips, isConfigured, toKmh, toKm, formatDuration, statusColor, timeAgo } from "./traccar.js";
@@ -59,6 +59,9 @@ export default function LiveMapPage() {
 
   // Default center (Akure, Nigeria)
   const defaultCenter = useMemo(() => ({ lat: 7.25, lng: 5.2 }), []);
+
+  // Load Google Maps
+  const { isLoaded } = useJsApiLoader({ googleMapsApiKey: GMAP_KEY });
 
   // ============================================
   // LIVE DATA - auto refresh
@@ -324,7 +327,7 @@ export default function LiveMapPage() {
 
         {/* GOOGLE MAP */}
         <div style={{ flex: 1 }}>
-          <LoadScript googleMapsApiKey={GMAP_KEY}>
+          {isLoaded ? (
             <GoogleMap
               mapContainerStyle={{ height: "100%", width: "100%" }}
               center={defaultCenter}
@@ -391,7 +394,11 @@ export default function LiveMapPage() {
                 </>
               )}
             </GoogleMap>
-          </LoadScript>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+              <div style={{ fontSize: 14, color: "#6F6F6F" }}>Loading map...</div>
+            </div>
+          )}
         </div>
 
         {/* BOTTOM DETAIL PANEL */}
@@ -550,6 +557,14 @@ export default function LiveMapPage() {
 }
 
 function InfoCard({ label, value }) {
+  return (
+    <div style={{ background: "#F4F4F4", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 10, color: "#6F6F6F", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+Card({ label, value }) {
   return (
     <div style={{ background: "#F4F4F4", borderRadius: 8, padding: "8px 10px" }}>
       <div style={{ fontSize: 10, color: "#6F6F6F", marginBottom: 2 }}>{label}</div>
