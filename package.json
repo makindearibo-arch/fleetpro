@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-google-maps/api": "^2.20.8",
     "@react-leaflet/core": "^2.1.0",
     "@supabase/supabase-js": "^2.47.0",
     "leaflet": "^1.9.4",
