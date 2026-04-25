@@ -564,11 +564,3 @@ function InfoCard({ label, value }) {
     </div>
   );
 }
-Card({ label, value }) {
-  return (
-    <div style={{ background: "#F4F4F4", borderRadius: 8, padding: "8px 10px" }}>
-      <div style={{ fontSize: 10, color: "#6F6F6F", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 600 }}>{value}</div>
-    </div>
-  );
-}
