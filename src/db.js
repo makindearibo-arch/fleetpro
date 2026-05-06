@@ -207,4 +207,30 @@ export const db = {
     if (error) { console.error('Error upserting baseline:', error); throw error; }
     return data;
   },
+
+  // App Settings (key/value)
+  async getAppSettings() {
+    const { data, error } = await supabase.from('app_settings').select('*');
+    if (error) { console.error('Error fetching app_settings:', error); return []; }
+    return data || [];
+  },
+  async setAppSetting(key, value, userId) {
+    const { data, error } = await supabase.from('app_settings').upsert(
+      { key, value, updated_at: new Date().toISOString(), updated_by: userId || null },
+      { onConflict: 'key' }
+    ).select().maybeSingle();
+    if (error) { console.error('Error upserting app_setting:', error); throw error; }
+    return data;
+  },
+
+  // Diesel Locks (manual admin locks on date ranges)
+  async getDieselLocks() { return fetchAll('diesel_locks', 'from_date', false); },
+  async addDieselLock(l) { return insertRow('diesel_locks', l); },
+  async deleteDieselLock(id) { return deleteRow('diesel_locks', id); },
+
+  // NEPA Period Logs (custom date-range NEPA tracking)
+  async getNepaPeriodLogs() { return fetchAll('nepa_period_logs', 'from_date', false); },
+  async addNepaPeriodLog(n) { return insertRow('nepa_period_logs', n); },
+  async updateNepaPeriodLog(id, n) { return updateRow('nepa_period_logs', id, n); },
+  async deleteNepaPeriodLog(id) { return deleteRow('nepa_period_logs', id); },
 };

@@ -24,8 +24,11 @@ const toSR=(r)=>({id:r.id,vehicle:r.vehicle,type:r.type,intervalKm:r.interval_km
 const fromSR=(s)=>({vehicle:s.vehicle,type:s.type,interval_km:s.intervalKm||0,interval_days:s.intervalDays||0,last_done_km:s.lastDoneKm||0,last_done_date:s.lastDoneDate||"",next_due_km:s.nextDueKm||0,next_due_date:s.nextDueDate||"",status:s.status||"Upcoming"});
 const toOdo=(r)=>({id:r.id,asset:r.asset,reading:Number(r.reading)||0,date:r.date,type:r.type});
 // Diesel module mappers
-const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:Number(r.discrepancy_litres)||null,discrepancyFlag:r.discrepancy_flag,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
-const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,submitted_by:d.submittedBy,notes:d.notes||""});
+const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",dieselLevelPhotoUrl:r.diesel_level_photo_url||"",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:Number(r.discrepancy_litres)||null,discrepancyFlag:r.discrepancy_flag,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
+const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",diesel_level_photo_url:d.dieselLevelPhotoUrl||"",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,submitted_by:d.submittedBy,notes:d.notes||""});
+const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate:r.to_date,totalHours:Number(r.total_hours)||0,meterOpening:r.meter_opening!=null?Number(r.meter_opening):null,meterClosing:r.meter_closing!=null?Number(r.meter_closing):null,photoUrl:r.photo_url||"",notes:r.notes||"",submittedBy:r.submitted_by,createdAt:r.created_at});
+const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
+const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
 const toDP=(r)=>({id:r.id,date:r.date,supplier:r.supplier,litres:Number(r.litres)||0,pricePerL:Number(r.price_per_litre)||0,totalCost:Number(r.total_cost)||0,notes:r.notes,purchasedBy:r.purchased_by,createdAt:r.created_at});
 const fromDP=(p)=>({date:p.date,supplier:p.supplier,litres:p.litres,price_per_litre:p.pricePerL,notes:p.notes||"",purchased_by:p.purchasedBy});
 const toDD=(r)=>({id:r.id,purchaseId:r.purchase_id,date:r.date,storeLoc:r.store_location,litres:Number(r.litres)||0,confirmed:r.received_confirmed,receivedDate:r.received_date,receivedBy:r.received_by,notes:r.notes,distributedBy:r.distributed_by,createdAt:r.created_at});
@@ -400,15 +403,41 @@ function ProfileEditor({user,setUser}){
   return(<div><Field label="Full Name"><div style={{display:"flex",gap:8}}><input style={{...inp,flex:1}} value={name} onChange={e=>setName(e.target.value)}/><button onClick={handleSaveName} disabled={saving||name===user.name} style={{padding:"9px 16px",borderRadius:8,border:"none",background:(name!==user.name)?P:"#C6C6C6",color:"#fff",fontSize:12,fontWeight:600,cursor:(name!==user.name)?"pointer":"not-allowed"}}>{saving?"...":"Save"}</button></div></Field>{!showPw?<button onClick={()=>setShowPw(true)} style={{background:"none",border:"none",color:P,fontSize:12,fontWeight:600,cursor:"pointer",marginTop:8}}>Change Password</button>:<div style={{marginTop:12}}><Field label="New Password"><input style={inp} type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="Min 6 characters"/></Field><Field label="Confirm Password"><input style={inp} type="password" value={pw2} onChange={e=>setPw2(e.target.value)} placeholder="Re-enter password"/></Field><div style={{display:"flex",gap:8,marginTop:8}}><button onClick={()=>{setShowPw(false);setPw("");setPw2("");}} style={{padding:"8px 16px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#525252"}}>Cancel</button><button onClick={handleChangePw} disabled={saving||!pw} style={{padding:"8px 16px",borderRadius:8,border:"none",background:pw?P:"#C6C6C6",color:"#fff",fontSize:12,fontWeight:600,cursor:pw?"pointer":"not-allowed"}}>{saving?"...":"Update Password"}</button></div></div>}{msg&&<div style={{marginTop:10,padding:8,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12}}>{msg}</div>}</div>);
 }
 
-function SettingsPage({locations,setLocations,vendorTypes,setVendorTypes,users,setUsers,user,setUser}){
+function SettingsPage({locations,setLocations,vendorTypes,setVendorTypes,users,setUsers,user,setUser,appSettings,setAppSettings,dieselLocks,setDieselLocks}){
+  const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
   const [tab,setTab]=useState(user?.role==="Store Staff"?"profile":"users");const [showAddUser,setShowAddUser]=useState(false);const [showAddLoc,setShowAddLoc]=useState(false);
   const [uf,setUf]=useState({name:"",email:"",password:"",role:"Viewer",store_location:""});const [newLoc,setNewLoc]=useState("");const [newVT,setNewVT]=useState("");const [showAddVT,setShowAddVT]=useState(false);const [loading,setLoading]=useState(false);const [msg,setMsg]=useState("");
+  // Diesel admin local state
+  const [lockForm,setLockForm]=useState({storeLoc:"",fromDate:"",toDate:"",reason:""});
+  const [showAddLock,setShowAddLock]=useState(false);
+  const [savingSetting,setSavingSetting]=useState(false);
   const handleAddUser=async()=>{if(!uf.email)return;if(uf.role==="Store Staff"&&!uf.store_location){setMsg("Error: Store Staff must have a store location assigned.");return;}setLoading(true);setMsg("");try{const result=await inviteUser(uf.email,uf.name,uf.role,uf.password);if(uf.role==="Store Staff"&&uf.store_location&&result.user){await db.updateProfile(result.user.id,{store_location:uf.store_location});}setMsg("User created! They can now sign in.");const pr=await db.getProfiles();setUsers(pr);setShowAddUser(false);setUf({name:"",email:"",password:"",role:"Viewer",store_location:""});}catch(e){setMsg("Error: "+e.message);}setLoading(false);};
   const handleRoleChange=async(uid,role)=>{try{await db.updateProfile(uid,{role});setUsers(users.map(u=>u.id===uid?{...u,role}:u));}catch(e){alert("Error: "+e.message);}};
   const handleAddLoc=async()=>{if(!newLoc.trim())return;try{await db.addLocation(newLoc.trim());setLocations([...locations,newLoc.trim()]);setNewLoc("");setShowAddLoc(false);}catch(e){alert("Error: "+e.message);}};
   const handleAddVT=async()=>{if(!newVT.trim())return;try{await db.addVendorType(newVT.trim());setVendorTypes([...vendorTypes,newVT.trim()]);setNewVT("");setShowAddVT(false);}catch(e){alert("Error: "+e.message);}};
+  const handleSaveSetting=async(key,value)=>{
+    setSavingSetting(true);
+    try{await db.setAppSetting(key,value,user?.uid);setAppSettings(prev=>({...prev,[key]:value}));}
+    catch(e){alert("Error: "+e.message);}
+    setSavingSetting(false);
+  };
+  const handleAddLock=async()=>{
+    if(!lockForm.fromDate||!lockForm.toDate){alert("From and To dates required");return;}
+    if(lockForm.fromDate>lockForm.toDate){alert("From must be before To");return;}
+    try{
+      const row=await db.addDieselLock({store_location:lockForm.storeLoc||null,from_date:lockForm.fromDate,to_date:lockForm.toDate,reason:lockForm.reason||null,locked_by:user?.uid||null});
+      if(row)setDieselLocks(prev=>[toLOCK(row),...prev]);
+      setShowAddLock(false);setLockForm({storeLoc:"",fromDate:"",toDate:"",reason:""});
+    }catch(e){alert("Error: "+e.message);}
+  };
+  const handleDeleteLock=async(id)=>{
+    if(!confirm("Remove this lock?"))return;
+    try{await db.deleteDieselLock(id);setDieselLocks(prev=>prev.filter(l=>l.id!==id));}
+    catch(e){alert("Error: "+e.message);}
+  };
   const isSA=user?.role==="Super Admin";
-  return(<div style={{maxWidth:800}}><div style={{display:"flex",gap:8,marginBottom:20}}>{(user?.role==="Store Staff"?["profile"]:["profile","users","locations","vendor types"]).map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 20px",borderRadius:8,border:tab===t?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}</div>
+  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vendor types","diesel"]:["profile","users","locations","vendor types"];
+  return(<div style={{maxWidth:800}}><div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 20px",borderRadius:8,border:tab===t?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}</div>
     {tab==="profile"&&(<div style={{maxWidth:480}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>My Profile</h3><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20}}><div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}><div style={{width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${P},#6929C4)`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18,fontWeight:700}}>{user.avatar}</div><div><div style={{fontSize:16,fontWeight:700}}>{user.name}</div><div style={{fontSize:12,color:"#8D8D8D"}}>{user.email}</div><Badge label={user.role}/></div></div><ProfileEditor user={user} setUser={(u)=>{setUser(u);setUsers(users.map(x=>x.id===u.id?u:x));}} /></div></div>)}
     {tab==="users"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Team Members</h3>{isSA&&<button onClick={()=>setShowAddUser(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add User</button>}</div>
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Name","Email","Role",isSA?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{users.map(u=>(<tr key={u.id}><td style={{...tc,fontWeight:600}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:P}}>{u.avatar||"?"}</div>{u.name}</div></td><td style={tc}>{u.email}</td><td style={tc}><Badge label={u.role}/></td>{isSA&&<td style={tc}><select style={{...inp,width:140,padding:"5px 8px",fontSize:11}} value={u.role} onChange={e=>handleRoleChange(u.id,e.target.value)}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option></select></td>}</tr>))}</tbody></table></div>
@@ -423,15 +452,65 @@ function SettingsPage({locations,setLocations,vendorTypes,setVendorTypes,users,s
       {vendorTypes.length===0&&<div style={{padding:20,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No vendor types yet. Add types like "Diesel Supplier", "Mechanic", "Parts Dealer".</div>}
       {showAddVT&&(<Modal title="Add Vendor Type" onClose={()=>setShowAddVT(false)}><Field label="Type Name *"><input style={inp} placeholder="e.g. Diesel Supplier" value={newVT} onChange={e=>setNewVT(e.target.value)}/></Field><div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button onClick={()=>setShowAddVT(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddVT} disabled={!newVT.trim()} style={{padding:"9px 20px",borderRadius:8,border:"none",background:newVT.trim()?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:newVT.trim()?"pointer":"not-allowed"}}>Add</button></div></Modal>)}
     </div>)}
+    {tab==="diesel"&&isAdmin&&(<div>
+      <h3 style={{fontSize:15,fontWeight:700,margin:"0 0 14px"}}>Diesel Entry Settings</h3>
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20,marginBottom:18}}>
+        <div style={{marginBottom:18}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Auto-lock days</div>
+              <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>How many days back staff can still enter or edit. 0 = today only. Older entries lock automatically.</div>
+            </div>
+            <input type="number" min="0" max="30" value={appSettings?.diesel_auto_lock_days??1} onChange={e=>{const v=parseInt(e.target.value)||0;handleSaveSetting("diesel_auto_lock_days",v);}} disabled={savingSetting} style={{width:70,padding:"7px 10px",borderRadius:7,border:"1px solid #E0E0E0",fontSize:14,fontWeight:600,textAlign:"center"}}/>
+          </div>
+        </div>
+        <div style={{borderTop:"1px solid #F4F4F4",paddingTop:14}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Require photo for backdated entries</div>
+              <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>When ON, generator photo is mandatory if entry is for a past date.</div>
+            </div>
+            <button onClick={()=>handleSaveSetting("diesel_require_photo_backdated",!(appSettings?.diesel_require_photo_backdated!==false))} disabled={savingSetting} style={{width:46,height:26,borderRadius:13,border:"none",background:appSettings?.diesel_require_photo_backdated!==false?"#24A148":"#C6C6C6",position:"relative",cursor:"pointer",transition:"background 0.2s"}}>
+              <div style={{position:"absolute",top:2,left:appSettings?.diesel_require_photo_backdated!==false?22:2,width:22,height:22,borderRadius:"50%",background:"#fff",transition:"left 0.2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h4 style={{fontSize:14,fontWeight:700,margin:0}}>Manual Date Locks</h4>
+        <button onClick={()=>setShowAddLock(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:8,background:"#DA1E28",color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={14}/>Add Lock</button>
+      </div>
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+        {(dieselLocks||[]).length===0?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No manual locks. Auto-lock applies based on days setting above.</div>
+        :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Period","Store","Reason","Created","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+        <tbody>{dieselLocks.map(l=>(<tr key={l.id}><td style={tc}><div>{l.fromDate}</div><div style={{fontSize:10,color:"#8D8D8D"}}>to {l.toDate}</div></td><td style={tc}>{l.storeLoc||<span style={{color:"#8D8D8D",fontStyle:"italic"}}>All stores</span>}</td><td style={tc}>{l.reason||"-"}</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}}>{l.createdAt?new Date(l.createdAt).toLocaleDateString():"-"}</td><td style={tc}><button onClick={()=>handleDeleteLock(l.id)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #FFD7DA",background:"#FFF1F1",color:"#DA1E28",cursor:"pointer",fontSize:11,fontWeight:600}}>Remove</button></td></tr>))}</tbody></table>}
+      </div>
+
+      {showAddLock&&(<Modal title="Add Manual Lock" onClose={()=>setShowAddLock(false)}>
+        <Field label="Store Location"><select style={inp} value={lockForm.storeLoc} onChange={e=>setLockForm({...lockForm,storeLoc:e.target.value})}><option value="">All stores</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>
+        <Field label="From Date *"><input type="date" style={inp} value={lockForm.fromDate} onChange={e=>setLockForm({...lockForm,fromDate:e.target.value})}/></Field>
+        <Field label="To Date *"><input type="date" style={inp} value={lockForm.toDate} onChange={e=>setLockForm({...lockForm,toDate:e.target.value})}/></Field>
+        <Field label="Reason"><input style={inp} placeholder="e.g. Month-end close" value={lockForm.reason} onChange={e=>setLockForm({...lockForm,reason:e.target.value})}/></Field>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={()=>setShowAddLock(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+          <button onClick={handleAddLock} disabled={!lockForm.fromDate||!lockForm.toDate} style={{padding:"9px 20px",borderRadius:8,border:"none",background:(lockForm.fromDate&&lockForm.toDate)?"#DA1E28":"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(lockForm.fromDate&&lockForm.toDate)?"pointer":"not-allowed"}}>Add Lock</button>
+        </div>
+      </Modal>)}
+    </div>)}
   </div>);
 }
 
 // ============================================
 // DIESEL LOG PAGE - Daily Staff Input
 // ============================================
-function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines}){
+function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings}){
+  const [pageTab,setPageTab]=useState("daily"); // daily | nepa
   const [step,setStep]=useState("select"); // select | input | review | done
   const [selGen,setSelGen]=useState("");
+  const [editingId,setEditingId]=useState(null); // id of reading being edited (null = new)
+  const todayStr=new Date().toISOString().split("T")[0];
+  const [entryDate,setEntryDate]=useState(todayStr);
   const [inputMode,setInputMode]=useState("photo"); // photo | manual
   const [photo,setPhoto]=useState(null);
   const [preview,setPreview]=useState("");
@@ -444,6 +523,9 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const [hoursClosing,setHoursClosing]=useState("");
   const [dieselLevel,setDieselLevel]=useState("");
   const [dieselAdded,setDieselAdded]=useState("");
+  // Diesel level (tank) photo
+  const [tankPhoto,setTankPhoto]=useState(null);
+  const [tankPreview,setTankPreview]=useState("");
   // NEPA fields
   const [nepaMode,setNepaMode]=useState("manual"); // photo | manual
   const [nepaHours,setNepaHours]=useState("");
@@ -459,10 +541,32 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
+  const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
   const storeGens=isStoreStaff?generators.filter(g=>g.loc===userStore):generators;
-  const todayStr=new Date().toISOString().split("T")[0];
+  const autoLockDays=Number(appSettings?.diesel_auto_lock_days??1);
+  const requirePhotoBackdated=appSettings?.diesel_require_photo_backdated!==false;
+
+  // Lock check: returns {locked:boolean, reason:string}
+  const checkDateLock=(dateStr,storeLoc)=>{
+    if(isAdmin)return{locked:false};
+    if(!dateStr)return{locked:false};
+    if(dateStr>todayStr)return{locked:true,reason:"Future dates not allowed"};
+    // Auto-lock window
+    const today=new Date(todayStr);const entry=new Date(dateStr);
+    const diffDays=Math.round((today-entry)/86400000);
+    if(diffDays>autoLockDays)return{locked:true,reason:`Auto-locked (older than ${autoLockDays} day${autoLockDays===1?"":"s"})`};
+    // Manual locks
+    const manualLock=(dieselLocks||[]).find(l=>(!l.storeLoc||l.storeLoc===storeLoc)&&dateStr>=l.fromDate&&dateStr<=l.toDate);
+    if(manualLock)return{locked:true,reason:manualLock.reason||"Locked by admin"};
+    return{locked:false};
+  };
+
+  const dateReadings=dieselReadings.filter(r=>r.date===entryDate&&r.storeLoc===(isStoreStaff?userStore:r.storeLoc));
   const todayReadings=dieselReadings.filter(r=>r.date===todayStr&&r.storeLoc===(isStoreStaff?userStore:r.storeLoc));
-  const alreadySubmitted=(genId)=>todayReadings.some(r=>r.generatorId===genId);
+  const alreadySubmitted=(genId)=>dateReadings.some(r=>r.generatorId===genId&&r.id!==editingId);
+  const existingForGenDate=(genId)=>dateReadings.find(r=>r.generatorId===genId);
+  const isBackdated=entryDate!==todayStr;
+  const lockInfo=checkDateLock(entryDate,isStoreStaff?userStore:(generators.find(g=>g.id===selGen)?.loc||""));
 
   // Get previous reading for a generator
   const getPrevReading=(genId)=>{
@@ -561,6 +665,14 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     reader.readAsDataURL(file);
   };
 
+  const handleTankPhoto=async(e)=>{
+    const file=e.target.files?.[0];if(!file)return;
+    setTankPhoto(file);
+    const reader=new FileReader();
+    reader.onload=(ev)=>{setTankPreview(ev.target.result);};
+    reader.readAsDataURL(file);
+  };
+
   // Calculate theoretical consumption
   const calcTheoretical=()=>{
     const hrsRun=parseFloat(hoursClosing)-parseFloat(hoursOpening);
@@ -574,6 +686,10 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   // Save the daily reading
   const handleSave=async()=>{
     if(!selGen)return;
+    // Lock check
+    if(lockInfo.locked){setMsg("Cannot save: "+lockInfo.reason);return;}
+    // Require photo for backdated entries (if toggle on)
+    if(isBackdated&&requirePhotoBackdated&&!photo&&!editingId){setMsg("A generator photo is required for backdated entries.");return;}
     setSaving(true);setMsg("");
     try{
       const g=generators.find(x=>x.id===selGen);
@@ -602,48 +718,50 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           discFlag=pctDiff>thresholdPct;
         }
       }
-      // Get location
-      let loc=null;
-      try{const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:5000}));loc={lat:pos.coords.latitude,lng:pos.coords.longitude};}catch{}
-      // Upload gen photo
-      let genPhotoUrl="";
-      if(photo){
-        const ext=photo.name.split(".").pop();
-        const path="diesel-readings/"+selGen+"-"+Date.now()+"."+ext;
-        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,photo);
-        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);genPhotoUrl=urlData?.publicUrl||"";}
-      }
-      // Upload nepa photo
-      let nepaPhotoUrl="";
-      if(nepaPhoto){
-        const ext=nepaPhoto.name.split(".").pop();
-        const path="nepa-readings/"+selGen+"-"+Date.now()+"."+ext;
-        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,nepaPhoto);
-        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);nepaPhotoUrl=urlData?.publicUrl||"";}
-      }
+      // Helper for photo upload
+      const uploadPhoto=async(file,folder)=>{
+        if(!file)return"";
+        const ext=file.name.split(".").pop();
+        const path=folder+"/"+selGen+"-"+Date.now()+"."+ext;
+        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,file);
+        if(upErr||!upData)return"";
+        const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);
+        return urlData?.publicUrl||"";
+      };
+      const existing=editingId?dieselReadings.find(r=>r.id===editingId):null;
+      const genPhotoUrl=photo?await uploadPhoto(photo,"diesel-readings"):(existing?.genPhotoUrl||"");
+      const nepaPhotoUrl=nepaPhoto?await uploadPhoto(nepaPhoto,"nepa-readings"):(existing?.nepaPhotoUrl||"");
+      const tankPhotoUrl=tankPhoto?await uploadPhoto(tankPhoto,"diesel-tank"):(existing?.dieselLevelPhotoUrl||"");
       // Build record
       const record=fromDR({
-        generatorId:selGen,storeLoc:g?.loc||userStore||"",date:todayStr,
+        generatorId:selGen,storeLoc:g?.loc||userStore||"",date:entryDate,
         genHoursOpening:hOpen,genHoursClosing:hClose,
         dieselLevelActual:actualLevel,dieselLevelTheoretical:theoretical?Math.round(theoretical):null,
         dieselAdded:added,consumptionLitres:theoretical?Math.round(theoretical):null,consumptionRate:rate,
         genPhotoUrl:genPhotoUrl,genSource:inputMode,
+        dieselLevelPhotoUrl:tankPhotoUrl,
         aiReadings:aiNotes?{raw:aiNotes}:null,aiConfidence:null,
         nepaHours:nHours,nepaMeterOpening:parseFloat(nepaMeterOpen)||null,
         nepaMeterClosing:parseFloat(nepaMeterClose)||null,nepaPhotoUrl:nepaPhotoUrl,nepaSource:nepaMode,
         discrepancyLitres:discrepancy!=null?Math.round(discrepancy):null,discrepancyFlag:discFlag,
         submittedBy:user?.uid||null,notes:notes
       });
-      const saved=await db.addDieselReading(record);
-      if(saved){setDieselReadings(prev=>[toDR(saved),...prev]);}
-      // Update generator hours
-      if(hClose){
+      let saved;
+      if(editingId){
+        saved=await db.updateDieselReading(editingId,record);
+        if(saved){setDieselReadings(prev=>prev.map(r=>r.id===editingId?toDR(saved):r));}
+      }else{
+        saved=await db.addDieselReading(record);
+        if(saved){setDieselReadings(prev=>[toDR(saved),...prev]);}
+      }
+      // Update generator hours (only when entering today's reading, to avoid backwards-overwriting)
+      if(hClose&&!isBackdated){
         await db.updateGenerator(selGen,{hrs:hClose});
         setGenerators(prev=>prev.map(gg=>gg.id===selGen?{...gg,hrs:hClose}:gg));
       }
-      // Also save to odo_log for compatibility
-      if(hClose){
-        const odoEntry={asset:selGen,reading:hClose,date:todayStr,type:inputMode==="photo"?"photo":"manual"};
+      // Also save to odo_log for compatibility (only for new entries, not edits)
+      if(hClose&&!editingId){
+        const odoEntry={asset:selGen,reading:hClose,date:entryDate,type:inputMode==="photo"?"photo":"manual"};
         const savedOdo=await db.addOdoLog(odoEntry);
         if(savedOdo)setOdoLog(prev=>[...prev,toOdo(savedOdo)]);
       }
@@ -679,10 +797,27 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   };
 
   const resetForm=()=>{
-    setStep("select");setSelGen("");setInputMode("photo");setPhoto(null);setPreview("");
+    setStep("select");setSelGen("");setEditingId(null);setEntryDate(todayStr);
+    setInputMode("photo");setPhoto(null);setPreview("");
     setAnalyzing(false);setMsg("");setAiNotes("");setHoursOpening("");setHoursClosing("");
-    setDieselLevel("");setDieselAdded("");setNepaMode("manual");setNepaHours("");
+    setDieselLevel("");setDieselAdded("");setTankPhoto(null);setTankPreview("");
+    setNepaMode("manual");setNepaHours("");
     setNepaPhoto(null);setNepaPreview("");setNepaMeterOpen("");setNepaMeterClose("");setNotes("");
+  };
+
+  // Load existing reading into form for edit
+  const loadForEdit=(r)=>{
+    setEditingId(r.id);setSelGen(r.generatorId);setEntryDate(r.date);
+    setHoursOpening(r.genHoursOpening?String(r.genHoursOpening):"");
+    setHoursClosing(r.genHoursClosing?String(r.genHoursClosing):"");
+    setDieselLevel(r.dieselLevelActual!=null?String(r.dieselLevelActual):"");
+    setDieselAdded(r.dieselAdded?String(r.dieselAdded):"");
+    setNepaHours(r.nepaHours?String(r.nepaHours):"");
+    setNepaMeterOpen(r.nepaMeterOpening?String(r.nepaMeterOpening):"");
+    setNepaMeterClose(r.nepaMeterClosing?String(r.nepaMeterClosing):"");
+    setNotes(r.notes||"");setInputMode(r.genSource||"manual");setNepaMode(r.nepaSource||"manual");
+    setPreview(r.genPhotoUrl||"");setNepaPreview(r.nepaPhotoUrl||"");setTankPreview(r.dieselLevelPhotoUrl||"");
+    setStep("input");
   };
 
   // Store ranking (anonymous)
@@ -737,18 +872,38 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       {todayReadings.length>0&&<div style={{marginTop:10,padding:"8px 12px",background:"rgba(36,161,72,0.2)",borderRadius:8,fontSize:12,display:"flex",alignItems:"center",gap:6}}><CheckCircle size={14} color="#24A148"/><span>{todayReadings.length} reading{todayReadings.length>1?"s":""} submitted today</span></div>}
     </div>
 
-    {/* Step: Select Generator */}
-    {step==="select"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:22}}>
-      <h3 style={{fontSize:15,fontWeight:700,margin:"0 0 16px"}}>Select Generator</h3>
+    {/* Page-level tab switcher: Daily Reading | NEPA Period */}
+    <div style={{display:"flex",gap:6,marginBottom:14}}>
+      <button onClick={()=>setPageTab("daily")} style={{padding:"8px 18px",borderRadius:8,border:pageTab==="daily"?"1.5px solid "+P:"1.5px solid #E0E0E0",background:pageTab==="daily"?"#D0E2FF":"#fff",color:pageTab==="daily"?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Daily Reading</button>
+      <button onClick={()=>setPageTab("nepa")} style={{padding:"8px 18px",borderRadius:8,border:pageTab==="nepa"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:pageTab==="nepa"?"#EDE7F6":"#fff",color:pageTab==="nepa"?"#8B5CF6":"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>NEPA Period</button>
+    </div>
+
+    {/* Step: Select Generator (Daily Reading tab) */}
+    {pageTab==="daily"&&step==="select"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:22}}>
+      <h3 style={{fontSize:15,fontWeight:700,margin:"0 0 12px"}}>Reading Date</h3>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+        <input type="date" value={entryDate} max={todayStr} onChange={e=>setEntryDate(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"1px solid #E0E0E0",fontSize:13,fontFamily:"inherit"}}/>
+        {isBackdated&&<span style={{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:6,background:"#FFF3E0",color:"#E65100",display:"flex",alignItems:"center",gap:4}}><Clock size={12}/>Backdated</span>}
+        {entryDate===todayStr&&<span style={{fontSize:11,color:"#8D8D8D"}}>(today)</span>}
+      </div>
+      {lockInfo.locked&&<div style={{padding:"10px 12px",borderRadius:8,background:"#FFF1F1",border:"1px solid #FFD7DA",color:"#DA1E28",fontSize:12,fontWeight:500,marginBottom:14,display:"flex",alignItems:"center",gap:6}}><AlertTriangle size={14}/>Date locked: {lockInfo.reason}. Contact a Fleet Manager or Super Admin to make changes.</div>}
+      {isBackdated&&!lockInfo.locked&&requirePhotoBackdated&&<div style={{padding:"10px 12px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,marginBottom:14,display:"flex",alignItems:"center",gap:6}}><Camera size={13}/>A generator photo is required for backdated entries.</div>}
+      <h3 style={{fontSize:15,fontWeight:700,margin:"16px 0 12px"}}>Select Generator</h3>
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {storeGens.map(g=>{const done=alreadySubmitted(g.id);return(
-          <button key={g.id} onClick={()=>{if(!done){setSelGen(g.id);setStep("input");const prev=getPrevReading(g.id);if(prev&&prev.genHoursClosing)setHoursOpening(String(prev.genHoursClosing));}}} disabled={done}
-            style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:10,border:done?"1.5px solid #E0E0E0":"1.5px solid #D0E2FF",background:done?"#F4F4F4":"#F8FAFF",cursor:done?"not-allowed":"pointer",textAlign:"left",opacity:done?0.6:1}}>
+        {storeGens.map(g=>{const existing=existingForGenDate(g.id);const blocked=lockInfo.locked&&!existing;return(
+          <button key={g.id} onClick={()=>{
+            if(blocked)return;
+            if(existing){loadForEdit(existing);return;}
+            setEditingId(null);setSelGen(g.id);setStep("input");
+            const prev=getPrevReading(g.id);if(prev&&prev.genHoursClosing)setHoursOpening(String(prev.genHoursClosing));
+          }} disabled={blocked}
+            style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:10,border:blocked?"1.5px solid #E0E0E0":existing?"1.5px solid #FFE082":"1.5px solid #D0E2FF",background:blocked?"#F4F4F4":existing?"#FFFBEA":"#F8FAFF",cursor:blocked?"not-allowed":"pointer",textAlign:"left",opacity:blocked?0.55:1}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <div style={{width:38,height:38,borderRadius:9,background:done?"#E0E0E0":"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center"}}><Zap size={18} color={done?"#8D8D8D":P}/></div>
-              <div><div style={{fontSize:14,fontWeight:600,color:done?"#8D8D8D":"#161616"}}>{g.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.brand} - {g.cap} - {g.loc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>Current: {g.hrs?.toLocaleString()||0} hrs</div></div>
+              <div style={{width:38,height:38,borderRadius:9,background:blocked?"#E0E0E0":existing?"#FFE082":"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center"}}><Zap size={18} color={blocked?"#8D8D8D":existing?"#F57F17":P}/></div>
+              <div><div style={{fontSize:14,fontWeight:600,color:blocked?"#8D8D8D":"#161616"}}>{g.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.brand} - {g.cap} - {g.loc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>Current: {g.hrs?.toLocaleString()||0} hrs</div></div>
             </div>
-            {done?<span style={{fontSize:11,fontWeight:600,color:"#24A148",display:"flex",alignItems:"center",gap:4}}><CheckCircle size={13}/>Done</span>
+            {existing?<span style={{fontSize:11,fontWeight:600,color:"#F57F17",display:"flex",alignItems:"center",gap:4}}><CheckCircle size={13}/>Edit Entry</span>
+            :blocked?<span style={{fontSize:11,fontWeight:600,color:"#8D8D8D"}}>Locked</span>
             :<ChevronRight size={16} color={P}/>}
           </button>
         );})}
@@ -756,16 +911,18 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       {storeGens.length===0&&<div style={{textAlign:"center",padding:30,color:"#8D8D8D"}}><Zap size={32} style={{opacity:0.3,marginBottom:8}}/><div style={{fontSize:13}}>No generators assigned to {isStoreStaff?"your store":"this location"}</div></div>}
     </div>)}
 
-    {/* Step: Input */}
-    {step==="input"&&selectedGen&&(<div>
+    {/* Step: Input (Daily Reading tab) */}
+    {pageTab==="daily"&&step==="input"&&selectedGen&&(<div>
       <button onClick={()=>{resetForm();}} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600,marginBottom:12}}><ChevronLeft size={16}/> Back</button>
 
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
         {/* Generator info bar */}
-        <div style={{padding:"14px 20px",background:"#F8FAFF",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div><div style={{fontSize:14,fontWeight:700}}>{selectedGen.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{selectedGen.brand} - {selectedGen.cap}</div></div>
+        <div style={{padding:"14px 20px",background:"#F8FAFF",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+          <div><div style={{fontSize:14,fontWeight:700,display:"flex",alignItems:"center",gap:6}}>{selectedGen.name}{editingId&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:4,background:"#FFF3E0",color:"#E65100",fontWeight:700}}>EDITING</span>}{isBackdated&&!editingId&&<span style={{fontSize:10,padding:"2px 8px",borderRadius:4,background:"#FFF3E0",color:"#E65100",fontWeight:700}}>BACKDATED</span>}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{selectedGen.brand} - {selectedGen.cap} - {entryDate}</div></div>
           <div style={{textAlign:"right"}}><div style={{fontSize:11,color:"#8D8D8D"}}>Last Reading</div><div style={{fontSize:14,fontWeight:700}}>{prevReading?prevReading.genHoursClosing?.toLocaleString()+" hrs":"No prior"}</div></div>
         </div>
+        {lockInfo.locked&&<div style={{padding:"10px 16px",background:"#FFF1F1",borderBottom:"1px solid #FFD7DA",color:"#DA1E28",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><AlertTriangle size={14}/>Date locked: {lockInfo.reason}. Only Fleet Manager or Super Admin can change.</div>}
+        {isBackdated&&requirePhotoBackdated&&!editingId&&<div style={{padding:"10px 16px",background:"#FFF8E1",borderBottom:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><Camera size={13}/>Generator photo required for backdated entry.</div>}
 
         <div style={{padding:20}}>
           {/* Section 1: Generator Meter */}
@@ -804,6 +961,13 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           {/* Section 2: Diesel Level */}
           <div style={{marginBottom:20}}>
             <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6,marginBottom:10}}><div style={{width:22,height:22,borderRadius:"50%",background:"#FF832B",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>2</div> Diesel Level</div>
+            {/* Diesel level photo (tank/dipstick) */}
+            <div style={{marginBottom:12}}>
+              {!tankPreview?(<div onClick={()=>document.getElementById("diesel-tank-photo").click()} style={{border:"2px dashed #FFD7B5",borderRadius:12,padding:"22px 16px",textAlign:"center",cursor:"pointer",background:"#FFF4EC"}}>
+                <Camera size={26} color="#FF832B" style={{marginBottom:4}}/><div style={{fontSize:12,fontWeight:600,color:"#FF832B"}}>Photo of diesel tank / dipstick</div><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>Optional but recommended</div></div>)
+              :(<div style={{position:"relative"}}><img src={tankPreview} style={{width:"100%",borderRadius:12,maxHeight:180,objectFit:"cover"}}/><button onClick={()=>{setTankPreview("");setTankPhoto(null);}} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={12} color="#fff"/></button></div>)}
+              <input id="diesel-tank-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleTankPhoto}/>
+            </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <Field label="Current Level (Litres) *"><input style={inp} type="number" placeholder="e.g. 150" value={dieselLevel} onChange={e=>setDieselLevel(e.target.value)}/></Field>
               {user?.role!=="Store Staff"&&<Field label="Diesel Added Today (L)"><input style={inp} type="number" placeholder="0 if none" value={dieselAdded} onChange={e=>setDieselAdded(e.target.value)}/></Field>}
@@ -859,25 +1023,151 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 
           {msg&&<div style={{marginTop:10,padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#D0E2FF",color:msg.startsWith("Error")?"#DA1E28":P,fontSize:12,fontWeight:500}}>{msg}</div>}
 
-          <button onClick={handleSave} disabled={(!hoursClosing&&!dieselLevel)||saving}
-            style={{width:"100%",marginTop:16,padding:"14px",borderRadius:10,border:"none",background:((hoursClosing||dieselLevel)&&!saving)?P:"#C6C6C6",color:"#fff",fontSize:14,fontWeight:700,cursor:((hoursClosing||dieselLevel)&&!saving)?"pointer":"not-allowed"}}>
-            {saving?"Saving...":"Submit Daily Reading"}
+          <button onClick={handleSave} disabled={(!hoursClosing&&!dieselLevel)||saving||lockInfo.locked}
+            style={{width:"100%",marginTop:16,padding:"14px",borderRadius:10,border:"none",background:((hoursClosing||dieselLevel)&&!saving&&!lockInfo.locked)?P:"#C6C6C6",color:"#fff",fontSize:14,fontWeight:700,cursor:((hoursClosing||dieselLevel)&&!saving&&!lockInfo.locked)?"pointer":"not-allowed"}}>
+            {saving?"Saving...":lockInfo.locked?"Date Locked":editingId?"Update Reading":"Submit Reading"}
           </button>
         </div>
       </div>
     </div>)}
 
-    {/* Step: Done */}
-    {step==="done"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:30,textAlign:"center"}}>
+    {/* Step: Done (Daily Reading tab) */}
+    {pageTab==="daily"&&step==="done"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:30,textAlign:"center"}}>
       <div style={{width:56,height:56,borderRadius:"50%",background:"#E8F5E9",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}><CheckCircle size={28} color="#24A148"/></div>
-      <h3 style={{fontSize:17,fontWeight:700,margin:"0 0 6px"}}>Reading Submitted!</h3>
-      <div style={{fontSize:13,color:"#8D8D8D",marginBottom:6}}>{selectedGen?.name} - {todayStr}</div>
+      <h3 style={{fontSize:17,fontWeight:700,margin:"0 0 6px"}}>{editingId?"Reading Updated!":"Reading Submitted!"}</h3>
+      <div style={{fontSize:13,color:"#8D8D8D",marginBottom:6}}>{selectedGen?.name} - {entryDate}</div>
       {msg&&msg.includes("WARNING")&&<div style={{padding:10,borderRadius:8,background:"#FFF3E0",border:"1px solid #FFE0B2",color:"#E65100",fontSize:12,fontWeight:500,margin:"12px 0",textAlign:"left"}}><div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}><AlertTriangle size={14}/><span style={{fontWeight:700}}>Discrepancy Detected</span></div>{msg}</div>}
       <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:18}}>
-        <button onClick={resetForm} style={{padding:"10px 24px",borderRadius:9,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>{storeGens.filter(g=>!alreadySubmitted(g.id)).length>0?"Log Another Generator":"Back"}</button>
+        <button onClick={resetForm} style={{padding:"10px 24px",borderRadius:9,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Back</button>
         <button onClick={()=>setShowHistory(true)} style={{padding:"10px 24px",borderRadius:9,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>View History</button>
       </div>
     </div>)}
+
+    {/* NEPA Period Tab */}
+    {pageTab==="nepa"&&<NepaPeriodSection user={user} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} locations={locations}/>}
+  </div>);
+}
+
+// ============================================
+// NEPA PERIOD SECTION - inside Diesel Log page
+// Custom date-range NEPA tracking (separate from daily readings)
+// ============================================
+function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations}){
+  const isStoreStaff=user?.role==="Store Staff";
+  const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
+  const userStore=user?.store_location||"";
+  const todayStr=new Date().toISOString().split("T")[0];
+  const monthStart=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().split("T")[0];
+  const [showForm,setShowForm]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [storeLoc,setStoreLoc]=useState(isStoreStaff?userStore:"");
+  const [fromDate,setFromDate]=useState(monthStart);
+  const [toDate,setToDate]=useState(todayStr);
+  const [meterOpen,setMeterOpen]=useState("");
+  const [meterClose,setMeterClose]=useState("");
+  const [totalHours,setTotalHours]=useState("");
+  const [photo,setPhoto]=useState(null);
+  const [preview,setPreview]=useState("");
+  const [notes,setNotes]=useState("");
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState("");
+
+  const visible=(nepaPeriodLogs||[]).filter(n=>isStoreStaff?n.storeLoc===userStore:true).sort((a,b)=>b.fromDate.localeCompare(a.fromDate));
+
+  const handlePhoto=(e)=>{
+    const file=e.target.files?.[0];if(!file)return;
+    setPhoto(file);
+    const reader=new FileReader();
+    reader.onload=(ev)=>setPreview(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const resetForm=()=>{
+    setEditId(null);setStoreLoc(isStoreStaff?userStore:"");setFromDate(monthStart);setToDate(todayStr);
+    setMeterOpen("");setMeterClose("");setTotalHours("");setPhoto(null);setPreview("");setNotes("");setMsg("");
+  };
+
+  const startEdit=(n)=>{
+    setEditId(n.id);setStoreLoc(n.storeLoc);setFromDate(n.fromDate);setToDate(n.toDate);
+    setMeterOpen(n.meterOpening!=null?String(n.meterOpening):"");
+    setMeterClose(n.meterClosing!=null?String(n.meterClosing):"");
+    setTotalHours(n.totalHours?String(n.totalHours):"");
+    setPreview(n.photoUrl||"");setPhoto(null);setNotes(n.notes||"");
+    setShowForm(true);setMsg("");
+  };
+
+  const handleSave=async()=>{
+    if(!storeLoc){setMsg("Store is required.");return;}
+    if(!fromDate||!toDate){setMsg("From and To dates are required.");return;}
+    if(fromDate>toDate){setMsg("From date must be before To date.");return;}
+    if(!totalHours&&!(meterOpen&&meterClose)){setMsg("Provide total hours OR both meter readings.");return;}
+    setSaving(true);setMsg("");
+    try{
+      let photoUrl=preview&&!photo?preview:"";
+      if(photo){
+        const ext=photo.name.split(".").pop();
+        const path="nepa-period/"+storeLoc.replace(/\s+/g,"_")+"-"+Date.now()+"."+ext;
+        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,photo);
+        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);photoUrl=urlData?.publicUrl||"";}
+      }
+      const computedHours=totalHours?parseFloat(totalHours):(meterClose&&meterOpen?parseFloat(meterClose)-parseFloat(meterOpen):null);
+      const record=fromNPL({storeLoc,fromDate,toDate,totalHours:computedHours,meterOpening:parseFloat(meterOpen)||null,meterClosing:parseFloat(meterClose)||null,photoUrl,notes,submittedBy:user?.uid||null});
+      let saved;
+      if(editId){
+        saved=await db.updateNepaPeriodLog(editId,record);
+        if(saved)setNepaPeriodLogs(prev=>prev.map(n=>n.id===editId?toNPL(saved):n));
+      }else{
+        saved=await db.addNepaPeriodLog(record);
+        if(saved)setNepaPeriodLogs(prev=>[toNPL(saved),...prev]);
+      }
+      setShowForm(false);resetForm();
+    }catch(e){setMsg("Error: "+e.message);}
+    setSaving(false);
+  };
+
+  const handleDelete=async(id)=>{
+    if(!confirm("Delete this NEPA period log?"))return;
+    try{await db.deleteNepaPeriodLog(id);setNepaPeriodLogs(prev=>prev.filter(n=>n.id!==id));}
+    catch(e){alert("Error: "+e.message);}
+  };
+
+  return(<div>
+    {!showForm&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>NEPA Period Logs</h3><div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Track NEPA/power hours for any custom date range</div></div>
+        <button onClick={()=>{resetForm();setShowForm(true);}} style={{padding:"8px 14px",borderRadius:8,border:"none",background:"#8B5CF6",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><Plus size={13}/>Add Log</button>
+      </div>
+      {visible.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No NEPA period logs yet</div>
+      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Period","Store","Hours","Meter Reading","Photo","Submitted","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+      <tbody>{visible.map(n=>(<tr key={n.id}><td style={tc}><div>{n.fromDate}</div><div style={{fontSize:10,color:"#8D8D8D"}}>to {n.toDate}</div></td><td style={tc}>{n.storeLoc}</td><td style={{...tc,fontWeight:700,color:"#8B5CF6"}}>{n.totalHours?n.totalHours.toFixed(1)+"h":"-"}</td><td style={tc}>{n.meterOpening!=null&&n.meterClosing!=null?n.meterOpening+" → "+n.meterClosing:"-"}</td><td style={tc}>{n.photoUrl?<a href={n.photoUrl} target="_blank" rel="noreferrer" style={{color:"#8B5CF6",fontSize:11,fontWeight:600}}>View</a>:"-"}</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}}>{n.createdAt?new Date(n.createdAt).toLocaleDateString():"-"}</td><td style={tc}><div style={{display:"flex",gap:6}}><button onClick={()=>startEdit(n)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer",fontSize:11,fontWeight:600,color:"#525252"}}>Edit</button>{isAdmin&&<button onClick={()=>handleDelete(n.id)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #FFD7DA",background:"#FFF1F1",color:"#DA1E28",cursor:"pointer",fontSize:11,fontWeight:600}}>Delete</button>}</div></td></tr>))}</tbody></table>}
+    </div>}
+
+    {showForm&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:22}}>
+      <button onClick={()=>{setShowForm(false);resetForm();}} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:"#8B5CF6",fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to List</button>
+      <h3 style={{fontSize:16,fontWeight:700,margin:"0 0 16px"}}>{editId?"Edit NEPA Period Log":"New NEPA Period Log"}</h3>
+      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr":"1fr 1fr",gap:12,marginBottom:14}}>
+        <Field label="Store *">
+          {isStoreStaff?<input style={{...inp,background:"#F4F4F4"}} value={userStore} disabled/>
+          :<select style={inp} value={storeLoc} onChange={e=>setStoreLoc(e.target.value)}><option value="">Select store...</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select>}
+        </Field>
+        <Field label=""><div/></Field>
+        <Field label="From Date *"><input type="date" style={inp} value={fromDate} max={toDate} onChange={e=>setFromDate(e.target.value)}/></Field>
+        <Field label="To Date *"><input type="date" style={inp} value={toDate} min={fromDate} max={todayStr} onChange={e=>setToDate(e.target.value)}/></Field>
+        <Field label="Meter Opening"><input style={inp} type="number" placeholder="Optional" value={meterOpen} onChange={e=>setMeterOpen(e.target.value)}/></Field>
+        <Field label="Meter Closing"><input style={inp} type="number" placeholder="Optional" value={meterClose} onChange={e=>setMeterClose(e.target.value)}/></Field>
+        <Field label="Total Hours"><input style={inp} type="number" step="0.5" placeholder={meterOpen&&meterClose?"Auto from meters":"e.g. 320"} value={totalHours} onChange={e=>setTotalHours(e.target.value)}/></Field>
+        <Field label="Notes"><input style={inp} placeholder="Optional notes" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
+      </div>
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:600,color:"#525252",marginBottom:6}}>Meter Photo</div>
+        {!preview?(<div onClick={()=>document.getElementById("nepa-period-photo").click()} style={{border:"2px dashed #D1C4E9",borderRadius:12,padding:"22px 16px",textAlign:"center",cursor:"pointer",background:"#F3E5F5"}}>
+          <Camera size={26} color="#8B5CF6" style={{marginBottom:4}}/><div style={{fontSize:12,fontWeight:600,color:"#8B5CF6"}}>Photo of NEPA meter</div></div>)
+        :(<div style={{position:"relative"}}><img src={preview} style={{width:"100%",borderRadius:12,maxHeight:200,objectFit:"cover"}}/><button onClick={()=>{setPreview("");setPhoto(null);}} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={12} color="#fff"/></button></div>)}
+        <input id="nepa-period-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handlePhoto}/>
+      </div>
+      {msg&&<div style={{marginBottom:10,padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#FFF8E1",color:msg.startsWith("Error")?"#DA1E28":"#F57F17",fontSize:12,fontWeight:500}}>{msg}</div>}
+      <button onClick={handleSave} disabled={saving} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:saving?"#C6C6C6":"#8B5CF6",color:"#fff",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer"}}>{saving?"Saving...":editId?"Update Log":"Save Log"}</button>
+    </div>}
   </div>);
 }
 
@@ -1194,18 +1484,21 @@ function FleetProAppInner(){
   const [dieselPurchases,setDieselPurchases]=useState([]);
   const [dieselDistributions,setDieselDistributions]=useState([]);
   const [genBaselines,setGenBaselines]=useState([]);
+  const [nepaPeriodLogs,setNepaPeriodLogs]=useState([]);
+  const [dieselLocks,setDieselLocks]=useState([]);
+  const [appSettings,setAppSettings]=useState({diesel_auto_lock_days:1,diesel_require_photo_backdated:true});
   const canEdit=user?.role!=="Viewer"&&user?.role!=="Store Staff";
   const isStoreStaff=user?.role==="Store Staff";
 
   const loadAllData=useCallback(async()=>{
     try{
-      const [v,g,d,wo,fl,ol,vn,p,ins,sr,loc,dt,vt,ii,pr,dr,dp,dd,gb]=await Promise.all([
+      const [v,g,d,wo,fl,ol,vn,p,ins,sr,loc,dt,vt,ii,pr,dr,dp,dd,gb,npl,dlk,as]=await Promise.all([
         db.getVehicles(),db.getGenerators(),db.getDrivers(),db.getWorkOrders(),
         db.getFuelLogs(),db.getOdoLog(),db.getVendors(),db.getPapers(),
         db.getInspections(),db.getSvcReminders(),db.getLocations(),
         db.getDocTypes(),db.getVendorTypes(),db.getInspItems(),db.getProfiles(),
         db.getDieselReadings(),db.getDieselPurchases(),db.getDieselDistributions(),
-        db.getGeneratorBaselines()
+        db.getGeneratorBaselines(),db.getNepaPeriodLogs(),db.getDieselLocks(),db.getAppSettings()
       ]);
       setVehicles(v.map(toV));setGenerators(g.map(toG));setDrivers(d);setWorkOrders(wo.map(toWO));
       setFuelLogs(fl.map(toFL));setOdoLog(ol.map(toOdo));setVendors(vn);setPapers(p.map(toP));
@@ -1214,7 +1507,11 @@ function FleetProAppInner(){
       setInspItems(ii.map(i=>i.name));setUsers(pr);
       setDieselReadings(dr.map(toDR));setDieselPurchases(dp.map(toDP));
       setDieselDistributions(dd.map(toDD));setGenBaselines(gb);
-      console.log("FleetPro: Data loaded",{v:v.length,g:g.length,fl:fl.length,wo:wo.length,dr:dr.length});
+      setNepaPeriodLogs((npl||[]).map(toNPL));setDieselLocks((dlk||[]).map(toLOCK));
+      const settingsObj={diesel_auto_lock_days:1,diesel_require_photo_backdated:true};
+      (as||[]).forEach(row=>{settingsObj[row.key]=row.value;});
+      setAppSettings(settingsObj);
+      console.log("FleetPro: Data loaded",{v:v.length,g:g.length,fl:fl.length,wo:wo.length,dr:dr.length,npl:(npl||[]).length});
     }catch(e){console.error("FleetPro: Error loading data",e);}
   },[]);
 
@@ -1259,7 +1556,7 @@ function FleetProAppInner(){
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
-        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines}/>}/>
+        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
         <Route path="/diesel-mgmt" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
@@ -1274,7 +1571,7 @@ function FleetProAppInner(){
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
-        <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser}/>}/>
+        <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
     </main>
