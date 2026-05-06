@@ -49,3 +49,8 @@ CREATE TABLE IF NOT EXISTS nepa_period_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_nepa_period_store ON nepa_period_logs(store_location, from_date);
+
+-- 5. Disable RLS to match the rest of the schema (auth is enforced client-side via role checks).
+ALTER TABLE app_settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE diesel_locks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE nepa_period_logs DISABLE ROW LEVEL SECURITY;
