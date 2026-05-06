@@ -17,19 +17,21 @@ FleetPro is a React-based fleet management web application built by **MicMakin**
   - Domain: `tracker.micmakin.com` (SSL via Let's Encrypt + nginx reverse proxy)
   - Traccar web UI: `https://tracker.micmakin.com` (port 8082 proxied through nginx)
   - Tracker data port: `5013` (GT06/H02 protocol, direct TCP — NOT proxied)
-  - Traccar admin: `makindearibo@gmail.com` / `Balzman007!`
+  - Traccar admin credentials: stored in Vercel env vars + 1Password (NOT in this file)
 - **GPS Hardware**: SinoTrack ST-906L (4G) with Nigerian MTN SIM cards
-  - SMS command password: `0000`
+  - SMS command password: SinoTrack factory default (changeable via `7770000 newpass`)
   - APN: `web.gprs.mtnnigeria.net,web,web`
-  - Currently 1 tracker installed (device ID: `7026233272`), plan is ~30 units
+  - Currently 1 tracker installed, plan is ~30 units
 
 ## Vercel Environment Variables
 
+Names only — actual values live in Vercel → Project → Settings → Environment Variables. **Never commit real values to this file.**
+
 ```
 VITE_TRACCAR_URL=https://tracker.micmakin.com
-VITE_TRACCAR_EMAIL=makindearibo@gmail.com
-VITE_TRACCAR_PASSWORD=Balzman007!
-VITE_GOOGLE_MAPS_KEY=AIzaSyAb2XhYwQa0EZxeH-vo97gTBD60exGmts8
+VITE_TRACCAR_EMAIL=<set in Vercel>
+VITE_TRACCAR_PASSWORD=<set in Vercel>
+VITE_GOOGLE_MAPS_KEY=<set in Vercel>
 ```
 
 ## File Structure
@@ -171,7 +173,7 @@ Created via `setup-stores.js`. Each store has an email like `Akure1.CR@Micmakin.
 - nginx config: `/etc/nginx/sites-available/traccar`
 - SSL cert auto-renews via certbot
 
-### SinoTrack ST-906L SMS Commands (password: 0000)
+### SinoTrack ST-906L SMS Commands (password: factory default; change with `7770000 newpass`)
 - Check settings: `RCONF`
 - Set APN: `8030000 apn_name` (e.g., `8030000 web.gprs.mtnnigeria.net web web`)
 - Set server IP/port: `8040000 IP PORT` (e.g., `8040000 178.62.48.233 5013`)
