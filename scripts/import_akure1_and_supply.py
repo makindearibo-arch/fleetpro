@@ -74,16 +74,19 @@ SKIP_STORES = {"BALANCE", "STORE SUPPLIED", None, ""}
 
 # ---------- .env loader (no python-dotenv dep) ----------
 def load_env_file():
-    p = Path(".env")
-    if not p.exists():
-        return
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    # Try common filenames in order; first match wins.
+    for name in (".env", "SupabaseCreds.env", "supabase.env"):
+        p = Path(name)
+        if not p.exists():
             continue
-        k, _, v = line.partition("=")
-        v = v.strip().strip('"').strip("'")
-        os.environ.setdefault(k.strip(), v)
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            v = v.strip().strip('"').strip("'")
+            os.environ.setdefault(k.strip(), v)
+        return
 
 
 # ---------- Supabase REST client (stdlib only) ----------
