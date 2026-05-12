@@ -139,18 +139,23 @@ Created via `setup-stores.js`. Each store has an email like `Akure1.CR@Micmakin.
 - **Phase 3**: StaffDashboardPage at `/staff-dashboard`, date filters (7d/30d/This Month/Last Month/This Year/Last Year + custom), KPI cards, daily consumption bar chart, 3 tabs (Supply, History, Generators), Reports with CSV/PDF export, calculation engine (auto-learn baselines, discrepancy detection at 20% threshold)
 
 ### Historical Import (Partially Done)
-- Test import completed for 2 stores:
-  - Akure 6: 467 readings (Jan 2025 – Apr 2026), generator_id = `308ca49f-c94a-42b6-a32a-65e7be1dba3a`
-  - Ado 1: 121 readings (Jan 2026 – Apr 2026), generator_id = `cc9b62f3-eb66-4f08-ac8d-ec51b0c2175e`
-- Baselines recalculated from imported data (Akure 6: 45.6% flagged, Ado 1: 33.9% flagged)
-- Import script: `import_test_stores_v2.py` (in Cowork outputs folder, not in repo)
-- Mapping file: `FleetPro_Import_Mapping_FINAL.xlsx` (in FLEET MANAGEMENT folder)
+- Test import completed for 3 stores:
+  - Akure 6: 467 readings (Jan 2025 – Apr 2026), generator_id = `308ca49f-c94a-42b6-a32a-65e7be1dba3a`. Baseline flagged 45.6%
+  - Ado 1: 121 readings (Jan 2026 – Apr 2026), generator_id = `cc9b62f3-eb66-4f08-ac8d-ec51b0c2175e`. Baseline flagged 33.9%
+  - **Akure 1**: 457 readings (Mar 2025 – May 2026), generator_id = `G-004`. Baseline 46.53 L/hr; flagged 79.7% (artificially high because transfer-out to vehicles was not yet subtracted from level deltas — re-run after the vehicle-transfer feature lands)
+- Admin diesel supply imported (Jan–Apr 2026):
+  - 14 `diesel_purchases` (incl. the pre-existing test row)
+  - 118 `diesel_distributions` to 19 stores; 2 flagged `is_overage`
+- Import script (canonical, in repo): `scripts/import_akure1_and_supply.py` — stdlib-only, dedups by key. Run with `--apply` to write, `--recalc-baseline` to rebuild baselines. Reads creds from `.env` or `SupabaseCreds.env`.
+- Historical baselines were NOT back-filled into `diesel_readings.discrepancy_flag` — only the per-generator baseline row was upserted. Forward readings get flagged correctly; old rows stay `false`.
 
 ### Pending Diesel Tasks
 1. **Fix Staff Dashboard data display** — user said "There is lot to discuss on that"
-2. **Import admin purchases + distributions** from DIESEL REPORT TEMPLATE.xlsx
-3. **Roll out import to remaining stores** after test verification
-4. **Build admin Import page in FleetPro UI**
+2. **Vehicle diesel transfer feature** — the Akure 1 sheet's `DIESEL TRANSFER OUT` + `DIESEL RECEIVED BY` columns capture diesel given to vehicles (e.g., "LSD 80XA (45), Water Tanter (40)"). Need a new flow / table to track store → vehicle transfers so baselines stop counting them as gen consumption. User said they'd share a distribution-mapping doc.
+3. **Import Ado 1/2/3 supply data** — user collecting; ado stores buy locally but admin supplies them too
+4. **Roll out import to remaining stores** (Akure 2/3/4/5, Akungba, Idanre, Igbokoda, Ikare Bakery/CR, Okitipupa Bakery/CR, Ondo Bakery/CR/Ondo 2 CR, Owo Bakery/CR, Oye Bakery, Pie Express/Warehouse)
+5. **Build admin Import page in FleetPro UI** (replace the standalone Python script with an in-app upload+preview flow)
+6. **Back-fill historical discrepancy flags** on `diesel_readings` (run the per-record check against the now-set baseline)
 
 ### Deferred Features
 - Full activity/audit trail (log every action, who/what/when)
