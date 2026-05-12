@@ -375,9 +375,10 @@ def main(apply_mode):
     print("\n=== WRITING ===")
     sn_to_id = {}
     if new_purchases:
+        # total_cost is a generated column in Supabase — don't include it
         payload = [{
             "date": p["date"], "supplier": p["supplier"], "litres": p["litres"],
-            "price_per_litre": p["price_per_litre"], "total_cost": p["total_cost"],
+            "price_per_litre": p["price_per_litre"],
         } for p in new_purchases]
         inserted = sb.insert("diesel_purchases", payload)
         ins_map = {(x["date"], (x["supplier"] or "").upper(), float(x["litres"])): x["id"] for x in inserted}
