@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""
+r"""
 FleetPro: Import Akure 1 daily diesel readings + admin diesel purchases/distributions.
 
 Talks to Supabase via its REST API (PostgREST) using only stdlib + openpyxl.
@@ -8,16 +8,21 @@ Usage:
   # Dry-run (prints what would be inserted, doesn't write):
   py scripts\import_akure1_and_supply.py
 
-  # Apply (actually writes to Supabase):
+  # Apply (writes to Supabase):
   py scripts\import_akure1_and_supply.py --apply
 
-Env vars required (place in .env or set in shell):
+  # Recalculate the Akure 1 generator baseline from imported readings:
+  py scripts\import_akure1_and_supply.py --recalc-baseline
+
+  # Both at once:
+  py scripts\import_akure1_and_supply.py --apply --recalc-baseline
+
+Env vars required (place in .env or SupabaseCreds.env):
   SUPABASE_URL                = https://bddmsrbfygbuyfdpieyl.supabase.co
-  SUPABASE_SERVICE_ROLE_KEY   = <service_role key from Supabase Dashboard → Project Settings → API>
+  SUPABASE_SERVICE_ROLE_KEY   = <service_role key from Supabase Dashboard -> Project Settings -> API>
 
 Install deps:
   py -m pip install openpyxl
-  (No supabase / no python-dotenv needed — we parse .env manually below.)
 """
 import json
 import os
@@ -299,8 +304,62 @@ def parse_distributions(purchases):
     return out
 
 
+# ---------- Baseline recalc ----------
+def recalc_baseline(sb, gen_id):
+    """Walk all readings for this generator (date asc), compute avg L/hr from
+    pairs where we have hours run + previous & current diesel level. Filters out
+    obvious junk (negative consumption, rates outside 1-100 L/hr).
+    """
+    rows = sb._req("GET", "diesel_readings", params={
+        "select": "date,gen_hours_opening,gen_hours_closing,diesel_level_actual,diesel_added",
+        "generator_id": f"eq.{gen_id}",
+        "order": "date.asc",
+    })
+    rates = []
+    prev_level = None
+    for r in rows:
+        h_open = r.get("gen_hours_opening")
+        h_close = r.get("gen_hours_closing")
+        level = r.get("diesel_level_actual")
+        added = r.get("diesel_added") or 0
+        hrs_run = (h_close - h_open) if (h_open is not None and h_close is not None) else None
+        if hrs_run and hrs_run > 0 and level is not None and prev_level is not None:
+            actual = prev_level + added - level
+            if actual > 0:
+                rate = actual / hrs_run
+                if 1 <= rate <= 100:
+                    rates.append(rate)
+        if level is not None:
+            prev_level = level
+    flagged_pct = None
+    if not rates:
+        print("  No valid rate pairs found — skipping baseline.")
+        return
+    avg = sum(rates) / len(rates)
+    min_r, max_r = min(rates), max(rates)
+    # % of rate pairs that fall outside ±20% of mean — proxy for "flagged for review"
+    flagged = sum(1 for r in rates if abs(r - avg) / avg > 0.20)
+    flagged_pct = flagged / len(rates) * 100
+    print(f"  Pairs analyzed: {len(rates)}")
+    print(f"  Avg L/hr: {avg:.2f}  (min {min_r:.2f}, max {max_r:.2f})")
+    print(f"  ~{flagged_pct:.1f}% of pairs are >20% off mean (rough discrepancy estimate)")
+    body = [{
+        "generator_id": gen_id,
+        "avg_litres_per_hour": round(avg, 2),
+        "baseline_readings_count": len(rates),
+        "last_calculated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "min_rate": round(min_r, 2),
+        "max_rate": round(max_r, 2),
+    }]
+    sb._req("POST", "generator_baselines",
+            params={"on_conflict": "generator_id"},
+            body=body,
+            extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"})
+    print("  Baseline upserted.")
+
+
 # ---------- Main ----------
-def main(apply_mode):
+def main(apply_mode, recalc_mode):
     load_env_file()
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -370,6 +429,9 @@ def main(apply_mode):
 
     if not apply_mode:
         print("\nDRY RUN — no writes performed. Re-run with --apply to write.")
+        if recalc_mode:
+            print("\n=== BASELINE RECALC (Akure 1) ===")
+            recalc_baseline(sb, gen_id)
         return
 
     print("\n=== WRITING ===")
@@ -441,7 +503,12 @@ def main(apply_mode):
 
     print("\nDONE.")
 
+    if recalc_mode:
+        print("\n=== BASELINE RECALC (Akure 1) ===")
+        recalc_baseline(sb, gen_id)
+
 
 if __name__ == "__main__":
     apply_mode = "--apply" in sys.argv
-    main(apply_mode)
+    recalc_mode = "--recalc-baseline" in sys.argv
+    main(apply_mode, recalc_mode)
