@@ -464,7 +464,7 @@ function SettingsPage({locations,setLocations,vendorTypes,setVendorTypes,users,s
             <input type="number" min="0" max="30" value={appSettings?.diesel_auto_lock_days??1} onChange={e=>{const v=parseInt(e.target.value)||0;handleSaveSetting("diesel_auto_lock_days",v);}} disabled={savingSetting} style={{width:70,padding:"7px 10px",borderRadius:7,border:"1px solid #E0E0E0",fontSize:14,fontWeight:600,textAlign:"center"}}/>
           </div>
         </div>
-        <div style={{borderTop:"1px solid #F4F4F4",paddingTop:14}}>
+        <div style={{borderTop:"1px solid #F4F4F4",paddingTop:14,marginBottom:18}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <div>
               <div style={{fontSize:13,fontWeight:600}}>Require photo for backdated entries</div>
@@ -473,6 +473,15 @@ function SettingsPage({locations,setLocations,vendorTypes,setVendorTypes,users,s
             <button onClick={()=>handleSaveSetting("diesel_require_photo_backdated",!(appSettings?.diesel_require_photo_backdated!==false))} disabled={savingSetting} style={{width:46,height:26,borderRadius:13,border:"none",background:appSettings?.diesel_require_photo_backdated!==false?"#24A148":"#C6C6C6",position:"relative",cursor:"pointer",transition:"background 0.2s"}}>
               <div style={{position:"absolute",top:2,left:appSettings?.diesel_require_photo_backdated!==false?22:2,width:22,height:22,borderRadius:"50%",background:"#fff",transition:"left 0.2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
             </button>
+          </div>
+        </div>
+        <div style={{borderTop:"1px solid #F4F4F4",paddingTop:14}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600}}>Edit window (minutes)</div>
+              <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>After a staff member submits a log, they can edit it for this many minutes. After that, only Fleet Manager / Super Admin can change it. Default 60.</div>
+            </div>
+            <input type="number" min="0" max="1440" value={appSettings?.diesel_edit_window_minutes??60} onChange={e=>{const v=parseInt(e.target.value)||0;handleSaveSetting("diesel_edit_window_minutes",v);}} disabled={savingSetting} style={{width:80,padding:"7px 10px",borderRadius:7,border:"1px solid #E0E0E0",fontSize:14,fontWeight:600,textAlign:"center"}}/>
           </div>
         </div>
       </div>
@@ -545,6 +554,19 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const storeGens=isStoreStaff?generators.filter(g=>g.loc===userStore):generators;
   const autoLockDays=Number(appSettings?.diesel_auto_lock_days??1);
   const requirePhotoBackdated=appSettings?.diesel_require_photo_backdated!==false;
+  const editWindowMinutes=Number(appSettings?.diesel_edit_window_minutes??60);
+
+  // Edit-window check: store staff can only edit their own entry within N minutes
+  // of submission (default 60). Admin / Fleet Manager bypass. Returns {canEdit, reason}.
+  const checkEditWindow=(entry)=>{
+    if(isAdmin)return{canEdit:true};
+    if(!entry||!entry.createdAt)return{canEdit:true}; // safety: no timestamp → allow
+    const elapsedMin=(Date.now()-new Date(entry.createdAt).getTime())/60000;
+    if(elapsedMin>editWindowMinutes){
+      return{canEdit:false,reason:`Edit window expired (submitted ${Math.round(elapsedMin)}min ago). Contact a Fleet Manager or Super Admin.`};
+    }
+    return{canEdit:true,remainingMin:Math.max(0,Math.round(editWindowMinutes-elapsedMin))};
+  };
 
   // Lock check: returns {locked:boolean, reason:string}
   const checkDateLock=(dateStr,storeLoc)=>{
@@ -688,6 +710,12 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     if(!selGen)return;
     // Lock check
     if(lockInfo.locked){setMsg("Cannot save: "+lockInfo.reason);return;}
+    // Edit-window check: store staff can only edit within N min of submission
+    if(editingId){
+      const existing=dieselReadings.find(r=>r.id===editingId);
+      const ed=checkEditWindow(existing);
+      if(!ed.canEdit){setMsg("Cannot save: "+ed.reason);return;}
+    }
     // Require photo for backdated entries (if toggle on)
     if(isBackdated&&requirePhotoBackdated&&!photo&&!editingId){setMsg("A generator photo is required for backdated entries.");return;}
     setSaving(true);setMsg("");
@@ -890,19 +918,33 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       {isBackdated&&!lockInfo.locked&&requirePhotoBackdated&&<div style={{padding:"10px 12px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,marginBottom:14,display:"flex",alignItems:"center",gap:6}}><Camera size={13}/>A generator photo is required for backdated entries.</div>}
       <h3 style={{fontSize:15,fontWeight:700,margin:"16px 0 12px"}}>Select Generator</h3>
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {storeGens.map(g=>{const existing=existingForGenDate(g.id);const blocked=lockInfo.locked&&!existing;return(
+        {storeGens.map(g=>{
+          const existing=existingForGenDate(g.id);
+          // For NEW entries (no existing record): block if the date is locked
+          // For EXISTING entries: block if EITHER the date is locked OR the edit window has elapsed
+          let blocked=false;let blockMsg=null;let blockLabel="Locked";
+          if(existing){
+            const edit=checkEditWindow(existing);
+            if(!edit.canEdit){blocked=true;blockMsg=edit.reason;blockLabel="Edit window expired";}
+            else if(lockInfo.locked&&!isAdmin){blocked=true;blockMsg="Date locked: "+lockInfo.reason;}
+          }else{
+            if(lockInfo.locked){blocked=true;blockMsg="Date locked: "+lockInfo.reason;}
+          }
+          return(
           <button key={g.id} onClick={()=>{
-            if(blocked)return;
+            if(blocked){alert(blockMsg);return;}
             if(existing){loadForEdit(existing);return;}
             setEditingId(null);setSelGen(g.id);setStep("input");
             const prev=getPrevReading(g.id);if(prev&&prev.genHoursClosing)setHoursOpening(String(prev.genHoursClosing));
           }} disabled={blocked}
+            title={blockMsg||""}
             style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:10,border:blocked?"1.5px solid #E0E0E0":existing?"1.5px solid #FFE082":"1.5px solid #D0E2FF",background:blocked?"#F4F4F4":existing?"#FFFBEA":"#F8FAFF",cursor:blocked?"not-allowed":"pointer",textAlign:"left",opacity:blocked?0.55:1}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
               <div style={{width:38,height:38,borderRadius:9,background:blocked?"#E0E0E0":existing?"#FFE082":"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center"}}><Zap size={18} color={blocked?"#8D8D8D":existing?"#F57F17":P}/></div>
               <div><div style={{fontSize:14,fontWeight:600,color:blocked?"#8D8D8D":"#161616"}}>{g.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.brand} - {g.cap} - {g.loc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>Current: {g.hrs?.toLocaleString()||0} hrs</div></div>
             </div>
-            {existing?<span style={{fontSize:11,fontWeight:600,color:"#F57F17",display:"flex",alignItems:"center",gap:4}}><CheckCircle size={13}/>Edit Entry</span>
+            {existing&&blocked?<span style={{fontSize:11,fontWeight:600,color:"#8D8D8D",display:"flex",alignItems:"center",gap:4,textAlign:"right"}}><AlertTriangle size={13}/>{blockLabel}</span>
+            :existing?(()=>{const ed=checkEditWindow(existing);return(<span style={{fontSize:11,fontWeight:600,color:"#F57F17",display:"flex",alignItems:"center",gap:4}}><CheckCircle size={13}/>Edit{ed.remainingMin!=null?` (${ed.remainingMin}m left)`:""}</span>);})()
             :blocked?<span style={{fontSize:11,fontWeight:600,color:"#8D8D8D"}}>Locked</span>
             :<ChevronRight size={16} color={P}/>}
           </button>
@@ -922,6 +964,10 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           <div style={{textAlign:"right"}}><div style={{fontSize:11,color:"#8D8D8D"}}>Last Reading</div><div style={{fontSize:14,fontWeight:700}}>{prevReading?prevReading.genHoursClosing?.toLocaleString()+" hrs":"No prior"}</div></div>
         </div>
         {lockInfo.locked&&<div style={{padding:"10px 16px",background:"#FFF1F1",borderBottom:"1px solid #FFD7DA",color:"#DA1E28",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><AlertTriangle size={14}/>Date locked: {lockInfo.reason}. Only Fleet Manager or Super Admin can change.</div>}
+        {editingId&&(()=>{const ed=checkEditWindow(dieselReadings.find(r=>r.id===editingId));
+          if(!ed.canEdit)return(<div style={{padding:"10px 16px",background:"#FFF1F1",borderBottom:"1px solid #FFD7DA",color:"#DA1E28",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><AlertTriangle size={14}/>{ed.reason}</div>);
+          if(ed.remainingMin!=null&&!isAdmin)return(<div style={{padding:"10px 16px",background:"#FFF8E1",borderBottom:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><Clock size={13}/>Edit window: {ed.remainingMin} min remaining. After that, only Fleet Manager / Super Admin can change.</div>);
+          return null;})()}
         {isBackdated&&requirePhotoBackdated&&!editingId&&<div style={{padding:"10px 16px",background:"#FFF8E1",borderBottom:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><Camera size={13}/>Generator photo required for backdated entry.</div>}
 
         <div style={{padding:20}}>
@@ -1023,10 +1069,14 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 
           {msg&&<div style={{marginTop:10,padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#D0E2FF",color:msg.startsWith("Error")?"#DA1E28":P,fontSize:12,fontWeight:500}}>{msg}</div>}
 
-          <button onClick={handleSave} disabled={(!hoursClosing&&!dieselLevel)||saving||lockInfo.locked}
-            style={{width:"100%",marginTop:16,padding:"14px",borderRadius:10,border:"none",background:((hoursClosing||dieselLevel)&&!saving&&!lockInfo.locked)?P:"#C6C6C6",color:"#fff",fontSize:14,fontWeight:700,cursor:((hoursClosing||dieselLevel)&&!saving&&!lockInfo.locked)?"pointer":"not-allowed"}}>
-            {saving?"Saving...":lockInfo.locked?"Date Locked":editingId?"Update Reading":"Submit Reading"}
-          </button>
+          {(()=>{const editLocked=editingId&&!checkEditWindow(dieselReadings.find(r=>r.id===editingId)).canEdit;
+            const disabled=(!hoursClosing&&!dieselLevel)||saving||lockInfo.locked||editLocked;
+            return(
+              <button onClick={handleSave} disabled={disabled}
+                style={{width:"100%",marginTop:16,padding:"14px",borderRadius:10,border:"none",background:disabled?"#C6C6C6":P,color:"#fff",fontSize:14,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>
+                {saving?"Saving...":lockInfo.locked?"Date Locked":editLocked?"Edit Window Expired":editingId?"Update Reading":"Submit Reading"}
+              </button>
+            );})()}
         </div>
       </div>
     </div>)}
@@ -1044,7 +1094,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     </div>)}
 
     {/* NEPA Period Tab */}
-    {pageTab==="nepa"&&<NepaPeriodSection user={user} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} locations={locations}/>}
+    {pageTab==="nepa"&&<NepaPeriodSection user={user} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} locations={locations} appSettings={appSettings}/>}
   </div>);
 }
 
@@ -1052,9 +1102,16 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 // NEPA PERIOD SECTION - inside Diesel Log page
 // Custom date-range NEPA tracking (separate from daily readings)
 // ============================================
-function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations}){
+function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appSettings}){
   const isStoreStaff=user?.role==="Store Staff";
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
+  const editWindowMinutes=Number(appSettings?.diesel_edit_window_minutes??60);
+  const canEditEntry=(entry)=>{
+    if(isAdmin)return true;
+    if(!entry||!entry.createdAt)return true;
+    const elapsedMin=(Date.now()-new Date(entry.createdAt).getTime())/60000;
+    return elapsedMin<=editWindowMinutes;
+  };
   const userStore=user?.store_location||"";
   const todayStr=new Date().toISOString().split("T")[0];
   const monthStart=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().split("T")[0];
@@ -1101,6 +1158,10 @@ function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations}){
     if(!fromDate||!toDate){setMsg("From and To dates are required.");return;}
     if(fromDate>toDate){setMsg("From date must be before To date.");return;}
     if(!totalHours&&!(meterOpen&&meterClose)){setMsg("Provide total hours OR both meter readings.");return;}
+    if(editId){
+      const existing=nepaPeriodLogs.find(n=>n.id===editId);
+      if(!canEditEntry(existing)){setMsg(`Edit window expired (>${editWindowMinutes} min). Contact a Fleet Manager or Super Admin.`);return;}
+    }
     setSaving(true);setMsg("");
     try{
       let photoUrl=preview&&!photo?preview:"";
@@ -1139,7 +1200,7 @@ function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations}){
       </div>
       {visible.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No NEPA period logs yet</div>
       :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Period","Store","Hours","Meter Reading","Photo","Submitted","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-      <tbody>{visible.map(n=>(<tr key={n.id}><td style={tc}><div>{n.fromDate}</div><div style={{fontSize:10,color:"#8D8D8D"}}>to {n.toDate}</div></td><td style={tc}>{n.storeLoc}</td><td style={{...tc,fontWeight:700,color:"#8B5CF6"}}>{n.totalHours?n.totalHours.toFixed(1)+"h":"-"}</td><td style={tc}>{n.meterOpening!=null&&n.meterClosing!=null?n.meterOpening+" → "+n.meterClosing:"-"}</td><td style={tc}>{n.photoUrl?<a href={n.photoUrl} target="_blank" rel="noreferrer" style={{color:"#8B5CF6",fontSize:11,fontWeight:600}}>View</a>:"-"}</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}}>{n.createdAt?new Date(n.createdAt).toLocaleDateString():"-"}</td><td style={tc}><div style={{display:"flex",gap:6}}><button onClick={()=>startEdit(n)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer",fontSize:11,fontWeight:600,color:"#525252"}}>Edit</button>{isAdmin&&<button onClick={()=>handleDelete(n.id)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #FFD7DA",background:"#FFF1F1",color:"#DA1E28",cursor:"pointer",fontSize:11,fontWeight:600}}>Delete</button>}</div></td></tr>))}</tbody></table>}
+      <tbody>{visible.map(n=>{const editAllowed=canEditEntry(n);return(<tr key={n.id}><td style={tc}><div>{n.fromDate}</div><div style={{fontSize:10,color:"#8D8D8D"}}>to {n.toDate}</div></td><td style={tc}>{n.storeLoc}</td><td style={{...tc,fontWeight:700,color:"#8B5CF6"}}>{n.totalHours?n.totalHours.toFixed(1)+"h":"-"}</td><td style={tc}>{n.meterOpening!=null&&n.meterClosing!=null?n.meterOpening+" → "+n.meterClosing:"-"}</td><td style={tc}>{n.photoUrl?<a href={n.photoUrl} target="_blank" rel="noreferrer" style={{color:"#8B5CF6",fontSize:11,fontWeight:600}}>View</a>:"-"}</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}}>{n.createdAt?new Date(n.createdAt).toLocaleDateString():"-"}</td><td style={tc}><div style={{display:"flex",gap:6}}><button onClick={()=>{if(!editAllowed){alert(`Edit window expired (>${editWindowMinutes} min). Contact a Fleet Manager or Super Admin.`);return;}startEdit(n);}} disabled={!editAllowed} title={editAllowed?"":"Edit window expired"} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #E0E0E0",background:editAllowed?"#fff":"#F4F4F4",cursor:editAllowed?"pointer":"not-allowed",fontSize:11,fontWeight:600,color:editAllowed?"#525252":"#8D8D8D"}}>{editAllowed?"Edit":"Locked"}</button>{isAdmin&&<button onClick={()=>handleDelete(n.id)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #FFD7DA",background:"#FFF1F1",color:"#DA1E28",cursor:"pointer",fontSize:11,fontWeight:600}}>Delete</button>}</div></td></tr>);})}</tbody></table>}
     </div>}
 
     {showForm&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:22}}>
