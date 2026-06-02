@@ -111,15 +111,16 @@ def infer_location(gen_name, locations_set):
     """Try to find a location row matching the generator's name (minus 'generator')."""
     if not gen_name:
         return None
-    base = re.sub(r"\b[Gg]enerator\b", "", gen_name).strip()
-    # Try exact case-insensitive match against locations
-    for loc in locations_set:
-        if loc.lower() == base.lower():
-            return loc
-    # Try with " CR" appended (e.g. "Akungba" -> "Akungba CR")
-    for loc in locations_set:
-        if loc.lower() == (base + " cr").lower():
-            return loc
+    # Strip 'generator'/'gen' case-INsensitively, collapse whitespace
+    base = re.sub(r"\bgenerator\b", "", gen_name, flags=re.IGNORECASE)
+    base = re.sub(r"\bgen\b", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+", " ", base).strip()
+    # Candidate forms to try, in priority order
+    candidates = [base, base + " CR", base + " Bakery"]
+    for cand in candidates:
+        for loc in locations_set:
+            if loc.lower() == cand.lower():
+                return loc
     return None
 
 
@@ -143,7 +144,7 @@ def main(apply_mode):
     print(f"  {len(readings)} diesel_readings (linked to {len(counts)} distinct gens)")
     locations = sb.select("locations", columns="name")
     loc_set = {l["name"] for l in locations}
-    print(f"  {len(loc_set)} locations\n")
+    print(f"  {len(loc_set)} locations: {sorted(loc_set)}\n")
 
     # Group by normalized name
     groups = defaultdict(list)
