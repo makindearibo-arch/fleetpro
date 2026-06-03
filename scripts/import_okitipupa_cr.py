@@ -31,7 +31,7 @@ from pathlib import Path
 
 import openpyxl
 
-FILE = Path(r"C:\Users\MakindeAribo\Downloads\DIESEL TRACKER 2026.xlsx")
+FILE = Path(r"C:\Users\MakindeAribo\Downloads\DIESEL TRACKER 2026 (1).xlsx")
 STORE_NAME = "Okitipupa CR"
 
 # Generator records (both must exist with loc 'Okitipupa CR')
