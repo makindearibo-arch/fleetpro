@@ -142,9 +142,10 @@ def parse():
             gho = n(ws.cell(r, COL["gen_h_open"]).value)
             ghc = n(ws.cell(r, COL["gen_h_close"]).value)
             cs = n(ws.cell(r, COL["closing_main"]).value)
-            # Skip empty template rows BEFORE date handling (JUNE tab has blank
-            # May 3-31 rows that would otherwise break the force-to-June re-date).
-            if gho is None and ghc is None and cs is None:
+            # Skip empty template rows BEFORE date handling (blank month-end rows
+            # would otherwise break the force re-date). A real completed day must
+            # have a closing tank level OR closing gen hours (> 0).
+            if not ((cs is not None and cs > 0) or (ghc is not None and ghc > 0)):
                 continue
             if force:
                 try:

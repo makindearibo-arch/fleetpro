@@ -219,7 +219,9 @@ def parse_akure1_readings():
                 "nepa_open": n(ws.cell(r, 17).value),
                 "nepa_close": n(ws.cell(r, 18).value),
             }
-            if rec["gen_h_open"] is None and rec["gen_h_close"] is None and rec["closing_main"] is None:
+            # A real completed day must have a closing tank level OR closing gen hours (> 0).
+            # Blank template rows (gen-open=0, no closing) are skipped.
+            if not ((rec["closing_main"] is not None and rec["closing_main"] > 0) or (rec["gen_h_close"] is not None and rec["gen_h_close"] > 0)):
                 continue
             out.append(rec)
             rows_added += 1
