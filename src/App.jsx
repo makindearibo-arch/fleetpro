@@ -1381,8 +1381,17 @@ const NAV=[{id:"dashboard",path:"/",label:"Dashboard",icon:Home},{id:"staff-dash
 // ============================================
 // DIESEL MANAGEMENT PAGE - Admin Purchase & Distribution (Phase 2)
 // ============================================
-function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,setDieselDistributions,locations,vendors,user,dieselReadings,generators,genBaselines,setGenBaselines}){
-  const [tab,setTab]=useState("overview");
+function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,generators:_gens,genBaselines:_gb,setGenBaselines}){
+  // Store-staff scope: filter everything to their own store. Admin/Fleet Manager see all.
+  const isStaff=user?.role==="Store Staff";
+  const scopeStore=isStaff?(user?.store_location||""):null;
+  const generators=scopeStore?(_gens||[]).filter(g=>g.loc===scopeStore):_gens;
+  const dieselReadings=scopeStore?_dr.filter(r=>r.storeLoc===scopeStore):_dr;
+  const dieselDistributions=scopeStore?(_dd||[]).filter(d=>d.storeLoc===scopeStore):_dd;
+  const genBaselines=scopeStore?(_gb||[]).filter(b=>(generators||[]).some(g=>g.id===b.generator_id)):_gb;
+  const dieselPurchases=scopeStore?[]:_dp;   // staff don't see admin purchases
+  const locations=scopeStore?[scopeStore]:_locs;
+  const [tab,setTab]=useState(scopeStore?"readings":"overview");
   const [showAddPurchase,setShowAddPurchase]=useState(false);
   const [showDistribute,setShowDistribute]=useState(false);
   const [distPurchaseId,setDistPurchaseId]=useState(null);
@@ -1448,20 +1457,31 @@ function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,
     setDieselDistributions(dieselDistributions.map(d=>d.id===editDist.id?toDD(row):d));setEditDist(null);setMsg("Distribution updated!");setTimeout(()=>setMsg(""),3000);
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
-  const tabs=["overview","readings","purchases","distributions","stores","baselines","discrepancies"];
+  const tabs=scopeStore?["readings","distributions","stores","baselines","discrepancies"]:["overview","readings","purchases","distributions","stores","baselines","discrepancies"];
+  // Staff KPI values (their store only)
+  const staffReceived=dieselDistributions.reduce((s,d)=>s+(d.litres||0),0);
+  const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
   return(<div style={{maxWidth:1000}}>
     {msg&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:10,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:13,fontWeight:500}}>{msg}</div>}
+    {scopeStore&&<div style={{marginBottom:14,fontSize:13,color:"#525252"}}><span style={{fontWeight:700}}>{scopeStore}</span> \u2014 diesel supply, generators & readings for your store.</div>}
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:20}}>
-      <Kpi icon={ShoppingCart} label="Total Purchased" value={totalPurchased.toLocaleString()+" L"} sub={"\u20A6"+totalSpent.toLocaleString()}/>
-      <Kpi icon={Send} label="Total Distributed" value={totalDistributed.toLocaleString()+" L"} sub={"to "+new Set(dieselDistributions.map(d=>d.storeLoc)).size+" stores"}/>
-      <Kpi icon={Package} label="Stock in Hand" value={stockInHand.toLocaleString()+" L"} sub={stockInHand<0?"Overspent!":"Available"} accent={stockInHand<0?"#DA1E28":undefined}/>
-      <Kpi icon={DollarSign} label="Avg Price/Litre" value={avgPrice?fmt(Math.round(avgPrice)):"-"} sub={dieselPurchases.length+" purchases"}/>
+      {scopeStore?<>
+        <Kpi icon={Send} label="Diesel Received" value={staffReceived.toLocaleString()+" L"} sub={dieselDistributions.length+" deliveries"}/>
+        <Kpi icon={Fuel} label="Consumed" value={staffConsumed.toLocaleString()+" L"} sub={dieselReadings.length+" readings"}/>
+        <Kpi icon={Package} label="Balance" value={(staffReceived-staffConsumed).toLocaleString()+" L"} sub={(staffReceived-staffConsumed)<0?"Over":"Available"} accent={(staffReceived-staffConsumed)<0?"#DA1E28":undefined}/>
+        <Kpi icon={Zap} label="Generators" value={(generators||[]).length}/>
+      </>:<>
+        <Kpi icon={ShoppingCart} label="Total Purchased" value={totalPurchased.toLocaleString()+" L"} sub={"\u20A6"+totalSpent.toLocaleString()}/>
+        <Kpi icon={Send} label="Total Distributed" value={totalDistributed.toLocaleString()+" L"} sub={"to "+new Set(dieselDistributions.map(d=>d.storeLoc)).size+" stores"}/>
+        <Kpi icon={Package} label="Stock in Hand" value={stockInHand.toLocaleString()+" L"} sub={stockInHand<0?"Overspent!":"Available"} accent={stockInHand<0?"#DA1E28":undefined}/>
+        <Kpi icon={DollarSign} label="Avg Price/Litre" value={avgPrice?fmt(Math.round(avgPrice)):"-"} sub={dieselPurchases.length+" purchases"}/>
+      </>}
     </div>
     <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
       {tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 18px",borderRadius:8,border:tab===t?"1.5px solid "+P:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}
       <div style={{flex:1}}/>
-      <button onClick={()=>setShowAddPurchase(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={14}/>Log Purchase</button>
-      <button onClick={()=>{setDistPurchaseId(null);setShowDistribute(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><Send size={14}/>Distribute</button>
+      {!scopeStore&&<><button onClick={()=>setShowAddPurchase(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={14}/>Log Purchase</button>
+      <button onClick={()=>{setDistPurchaseId(null);setShowDistribute(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><Send size={14}/>Distribute</button></>}
     </div>
     {tab==="overview"&&(<div style={{display:"grid",gridTemplateColumns:isMob()?"1fr":"1fr 1fr",gap:16}}>
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18}}>
@@ -1513,7 +1533,7 @@ function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,
         .filter(r=>!rdGen||r.generatorId===rdGen)
         .filter(r=>!rdFrom||r.date>=rdFrom)
         .filter(r=>!rdTo||r.date<=rdTo)
-        .sort((a,b)=>a.date.localeCompare(b.date)||a.storeLoc.localeCompare(b.storeLoc));
+        .sort((a,b)=>b.date.localeCompare(a.date)||a.storeLoc.localeCompare(b.storeLoc));
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
       const tHours=rows.reduce((s,r)=>s+(r.hoursRun||0),0);
       const tCons=rows.reduce((s,r)=>s+(r.consumptionLitres||0),0);
@@ -1528,7 +1548,7 @@ function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,
       };
       return(<div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:16,marginBottom:14,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
-          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Branch</div><select style={{...inp,width:isMob()?"100%":180}} value={rdStore} onChange={e=>{setRdStore(e.target.value);setRdGen("");}}><option value="">All branches</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></div>
+          {!scopeStore&&<div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Branch</div><select style={{...inp,width:isMob()?"100%":180}} value={rdStore} onChange={e=>{setRdStore(e.target.value);setRdGen("");}}><option value="">All branches</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></div>}
           <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Generator</div><select style={{...inp,width:isMob()?"100%":200}} value={rdGen} onChange={e=>setRdGen(e.target.value)}><option value="">All generators</option>{genOpts.map(g=>(<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
           <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>From</div><input type="date" style={{...inp,width:150}} value={rdFrom} onChange={e=>setRdFrom(e.target.value)}/></div>
           <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>To</div><input type="date" style={{...inp,width:150}} value={rdTo} onChange={e=>setRdTo(e.target.value)}/></div>
@@ -1672,7 +1692,7 @@ function FleetProAppInner(){
     {mob&&showNav&&<div onClick={()=>setShowNav(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:998}}/>}
     <div style={{width:mob?280:(col?64:240),minHeight:"100vh",background:"linear-gradient(180deg,#0F1A2E 0%,#162D50 100%)",position:"fixed",left:mob?(showNav?0:-280):0,top:0,zIndex:999,transition:mob?"left 0.25s ease":"width 0.2s",overflow:"hidden",boxShadow:mob&&showNav?"4px 0 20px rgba(0,0,0,0.3)":"none"}}>
       <div style={{padding:col&&!mob?"18px 12px":"18px 20px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid rgba(255,255,255,0.06)"}}><div style={{width:34,height:34,borderRadius:8,background:`linear-gradient(135deg,${P},#4589FF)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Truck size={18} color="#fff"/></div>{(!col||mob)&&<div><div style={{fontSize:16,fontWeight:700,color:"#fff"}}>FleetPro</div><div style={{fontSize:9,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Fleet Management</div></div>}</div>
-      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{NAV.filter(item=>isStoreStaff?["staff-dashboard","diesel","generators","settings"].includes(item.id):true).map(item=>{const active=page===item.id;const Icon=item.icon;return(<div key={item.id}>{item.id==="settings"&&<div style={{height:1,background:"rgba(255,255,255,0.06)",margin:"8px 6px"}}/>}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}</button></div>);})}</nav>
+      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{NAV.filter(item=>isStoreStaff?["staff-dashboard","diesel","diesel-mgmt","generators","settings"].includes(item.id):true).map(item=>{const active=page===item.id;const Icon=item.icon;return(<div key={item.id}>{item.id==="settings"&&<div style={{height:1,background:"rgba(255,255,255,0.06)",margin:"8px 6px"}}/>}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}</button></div>);})}</nav>
       {!mob&&<div style={{position:"absolute",bottom:0,left:0,right:0,padding:"10px 8px",borderTop:"1px solid rgba(255,255,255,0.06)"}}><button onClick={()=>setCol(!col)} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:8,borderRadius:7,border:"none",cursor:"pointer",width:"100%",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.35)",fontSize:12}}>{col?<ChevronRight size={15}/>:<><ChevronLeft size={15}/> Collapse</>}</button></div>}
     </div>
     <header style={{height:56,background:"#fff",borderBottom:"1px solid #E8ECF1",display:"flex",alignItems:"center",justifyContent:"space-between",padding:mob?"0 12px":"0 24px",position:"sticky",top:0,zIndex:50,marginLeft:sw,transition:"margin-left 0.2s"}}>
@@ -1691,7 +1711,7 @@ function FleetProAppInner(){
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
-        <Route path="/diesel-mgmt" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines}/>}/>
+        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={isStoreStaff?generators.filter(g=>g.loc===user?.store_location):generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
