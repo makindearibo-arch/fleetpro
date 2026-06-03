@@ -139,17 +139,28 @@ def parse():
             d = ws.cell(r, COL["date"]).value
             if not isinstance(d, datetime.datetime):
                 continue
+            gho = n(ws.cell(r, COL["gen_h_open"]).value)
+            ghc = n(ws.cell(r, COL["gen_h_close"]).value)
+            cs = n(ws.cell(r, COL["closing_main"]).value)
+            # Skip empty template rows BEFORE date handling (JUNE tab has blank
+            # May 3-31 rows that would otherwise break the force-to-June re-date).
+            if gho is None and ghc is None and cs is None:
+                continue
             if force:
-                use_date = datetime.date(year, month, d.day)
+                try:
+                    use_date = datetime.date(year, month, d.day)
+                except ValueError:
+                    print(f"  ! {tab} row {r}: day {d.day} invalid for {year}-{month:02d}, skipping")
+                    continue
             else:
                 if d.year != year or d.month != month:
                     continue
                 use_date = d.date()
             rec = {
                 "date": use_date.isoformat(),
-                "gen_h_open": n(ws.cell(r, COL["gen_h_open"]).value),
-                "gen_h_close": n(ws.cell(r, COL["gen_h_close"]).value),
-                "closing_main": n(ws.cell(r, COL["closing_main"]).value),
+                "gen_h_open": gho,
+                "gen_h_close": ghc,
+                "closing_main": cs,
                 "purchases_in": n(ws.cell(r, COL["purchases_in"]).value),
                 "consumption_l": n(ws.cell(r, COL["consumption_l"]).value),
                 "consumption_rate": n(ws.cell(r, COL["consumption_rate"]).value),
@@ -157,8 +168,6 @@ def parse():
                 "nepa_close": n(ws.cell(r, COL["nepa_close"]).value),
                 "supplier": (ws.cell(r, COL["supplier"]).value or "").strip() if isinstance(ws.cell(r, COL["supplier"]).value, str) else None,
             }
-            if rec["gen_h_open"] is None and rec["gen_h_close"] is None and rec["closing_main"] is None:
-                continue
             out[gen_key].append(rec)
             cnt += 1
         print(f"  {tab}: {cnt} rows -> Gen {gen_key}")
