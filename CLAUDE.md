@@ -144,21 +144,26 @@ Created via `setup-stores.js`. Each store has an email like `Akure1.CR@Micmakin.
   - Ado 1: 121 readings (Jan 2026 – Apr 2026), generator_id = `cc9b62f3-eb66-4f08-ac8d-ec51b0c2175e`. Baseline flagged 33.9%
   - **Akure 1**: 457 readings (Mar 2025 – May 2026), generator_id = `G-004`. Baseline 46.53 L/hr; flagged 79.7% (artificially high because transfer-out to vehicles was not yet subtracted from level deltas — re-run after the vehicle-transfer feature lands)
   - **Owo CR**: 181 readings (Jan – Jun 2026), generator_id = `G-012`. Baseline 6.60 L/hr (range 3.33–13.33); flagged only 15.0% — cleanest baseline so far because OWO CR has NO vehicle transfers. Confirms the high flag rates elsewhere are driven by transfer-out, not bad data.
+  - **Okitipupa CR**: 153 readings across TWO generators (the hour meter reset ~25,277→~145 in May = a second unit took over). Jan–Apr (120 readings) → `Okitipupa 2nd Generator` (G-010, old unit, baseline 10.17 L/hr); May–Jun (33 readings) → `Okitipupa CR Generator` (new unit, baseline 10.00 L/hr). NOTE: Okitipupa's baselines are self-referential — the sheet derives closing tank stock from an assumed flat 10 L/hr rather than measured levels, so consumption ≈ hours×10 by construction. Real variance will only appear once staff log actual tank levels in-app. Script: `scripts/import_okitipupa_cr.py`.
 - Admin diesel supply imported (Jan–Apr 2026):
   - 14 `diesel_purchases` (incl. the pre-existing test row)
   - 118 `diesel_distributions` to 19 stores; 2 flagged `is_overage`
 - **IMPORTANT — column layouts differ per store template.** Akure 1 has a `DIESEL RECEIVED BY` column; OWO CR does NOT, so OWO's columns from G(7) rightward shift left by one. Each store may need its own column map. Verify with header rows + arithmetic (opening − closing = consumption; close − open = hours run) before importing.
 - Import scripts (canonical, in repo, stdlib-only REST, dedup by key, `--apply` + `--recalc-baseline`, read creds from `.env`/`SupabaseCreds.env`):
-  - `scripts/import_akure1_and_supply.py` — Akure 1 readings + admin purchases/distributions
-  - `scripts/import_owo_cr.py` — OWO CR readings (different column map)
-  - `scripts/consolidate_generators.py` — one-time dedup of imported generators + location assignment
+  - `scripts/import_akure1_and_supply.py` — Akure 1 readings + admin purchases/distributions (Akure 1 column map, has RECEIVED BY)
+  - `scripts/import_owo_cr.py` — OWO CR readings (OWO column map, no RECEIVED BY)
+  - `scripts/import_okitipupa_cr.py` — Okitipupa CR readings, splits across 2 generators by month, re-dates a mislabeled tab
+  - `scripts/consolidate_generators.py` — one-time dedup of imported duplicate generators + location inference
+  - `scripts/setup_store_generators.py` — assign/rename generators + create one per location that lacks one
+  - `scripts/audit_generators.py` — read-only: lists generators vs locations, flags stores with no generator
+- Generators table now has ~26 rows (one+ per store). `generators.id` is TEXT (mix of `G-NNN`, UUIDs); new ones created via `crypto.randomUUID()` (app) or `uuid4` (scripts).
 - Historical baselines were NOT back-filled into `diesel_readings.discrepancy_flag` — only the per-generator baseline row was upserted. Forward readings get flagged correctly; old rows stay `false`.
 
 ### Pending Diesel Tasks
 1. **Fix Staff Dashboard data display** — user said "There is lot to discuss on that"
 2. **Vehicle diesel transfer feature** — the Akure 1 sheet's `DIESEL TRANSFER OUT` + `DIESEL RECEIVED BY` columns capture diesel given to vehicles (e.g., "LSD 80XA (45), Water Tanter (40)"). Need a new flow / table to track store → vehicle transfers so baselines stop counting them as gen consumption. User said they'd share a distribution-mapping doc.
 3. **Import Ado 1/2/3 supply data** — user collecting; ado stores buy locally but admin supplies them too
-4. **Roll out import to remaining stores** (Akure 2/3/4/5, Akungba, Idanre, Igbokoda, Ikare Bakery/CR, Okitipupa Bakery/CR, Ondo Bakery/CR/Ondo 2 CR, Owo Bakery, Oye Bakery, Pie Express/Warehouse). Done so far: Akure 1, Akure 6, Ado 1, Owo CR.
+4. **Roll out import to remaining stores** (Akure 2/3/4/5, Akungba, Idanre, Igbokoda, Ikare Bakery/CR, Okitipupa Bakery, Ondo Bakery/CR/Ondo 2 CR, Owo Bakery, Oye Bakery, Pie Express/Warehouse). Done so far: Akure 1, Akure 6, Ado 1, Owo CR, Okitipupa CR.
 5. **Build admin Import page in FleetPro UI** (replace the standalone Python script with an in-app upload+preview flow)
 6. **Back-fill historical discrepancy flags** on `diesel_readings` (run the per-record check against the now-set baseline)
 
