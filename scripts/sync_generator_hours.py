@@ -7,11 +7,11 @@ diesel_readings, but did NOT update the generators.hrs field (the
 "Run Hours" number shown on the Generators page). This syncs it.
 
 For each generator it finds the most recent reading (by date) with a
-valid gen_hours_closing, and sets:
-    new_hrs = max(current generators.hrs, latest_reading_closing)
-The max() rule bumps up imported generators without lowering a
-generator that has a higher manually-entered value but only sparse
-imported readings.
+valid gen_hours_closing, and OVERWRITES generators.hrs with it. The
+imported daily readings are the source of truth, so this corrects bad
+manual/test values (e.g. a 111,111 placeholder). Generators with no
+readings are left untouched. Decreases are flagged in the dry run so
+you can veto a specific generator via SKIP_IDS.
 
 Usage:
   py scripts\sync_generator_hours.py            # dry run
@@ -26,6 +26,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+# Generator IDs to leave untouched (e.g. if a decrease would be wrong). Empty by default.
+SKIP_IDS = set()
 
 
 def load_env_file():
@@ -99,17 +102,25 @@ def main(apply_mode):
 
     gens = sb.select("generators", columns="id,name,hrs", filters={"order": "name.asc"})
     print(f"=== SYNC PLAN ({len(gens)} generators) ===")
-    print(f"  {'Generator':<28} {'current':>10} {'reading':>10} {'-> new':>10}  {'date':<12}")
+    print(f"  {'Generator':<28} {'current':>10} {'-> new':>10}  {'date':<12}")
     updates = []
     for g in gens:
         cur = float(g.get("hrs") or 0)
         close, date = latest_closing(sb, g["id"])
         if close is None:
-            print(f"  {g['name']:<28} {cur:>10.1f} {'(none)':>10} {'(skip)':>10}  no readings")
+            print(f"  {g['name']:<28} {cur:>10.1f} {'(skip)':>10}  no readings")
             continue
-        new = max(cur, close)
-        flag = "" if new == cur else "  <-- UPDATE"
-        print(f"  {g['name']:<28} {cur:>10.1f} {close:>10.1f} {new:>10.1f}  {date}{flag}")
+        if g["id"] in SKIP_IDS:
+            print(f"  {g['name']:<28} {cur:>10.1f} {'(SKIP)':>10}  excluded via SKIP_IDS")
+            continue
+        new = close  # readings win — overwrite
+        if new == cur:
+            flag = "  (no change)"
+        elif new < cur:
+            flag = "  <-- DECREASE (verify!)"
+        else:
+            flag = "  <-- update"
+        print(f"  {g['name']:<28} {cur:>10.1f} {new:>10.1f}  {date}{flag}")
         if new != cur:
             updates.append((g["id"], g["name"], new))
 
