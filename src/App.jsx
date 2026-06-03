@@ -1389,6 +1389,11 @@ function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,
   const [pf,setPf]=useState({date:today,supplier:"",litres:"",pricePerL:"",notes:""});
   const [df,setDf]=useState({date:today,storeLoc:"",litres:"",notes:""});
   const [editDist,setEditDist]=useState(null);
+  // Readings tab filters
+  const [rdStore,setRdStore]=useState("");
+  const [rdGen,setRdGen]=useState("");
+  const [rdFrom,setRdFrom]=useState("");
+  const [rdTo,setRdTo]=useState("");
   const totalPurchased=dieselPurchases.reduce((s,p)=>s+p.litres,0);
   const totalSpent=dieselPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
   const totalDistributed=dieselDistributions.reduce((s,d)=>s+d.litres,0);
@@ -1440,7 +1445,7 @@ function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,
     setDieselDistributions(dieselDistributions.map(d=>d.id===editDist.id?toDD(row):d));setEditDist(null);setMsg("Distribution updated!");setTimeout(()=>setMsg(""),3000);
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
-  const tabs=["overview","purchases","distributions","stores","baselines","discrepancies"];
+  const tabs=["overview","readings","purchases","distributions","stores","baselines","discrepancies"];
   return(<div style={{maxWidth:1000}}>
     {msg&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:10,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:13,fontWeight:500}}>{msg}</div>}
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:20}}>
@@ -1493,6 +1498,68 @@ function DieselMgmtPage({dieselPurchases,setDieselPurchases,dieselDistributions,
           {flagged.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No discrepancies detected yet. Flags appear after baselines are learned and discrepancies exceed the threshold.</div>
           :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#FFF1F1"}}>{["Date","Store","Generator","Expected (L)","Actual (L)","Discrepancy","Severity"].map(h=>(<th key={h} style={{...th,color:"#DA1E28"}}>{h}</th>))}</tr></thead>
           <tbody>{flagged.slice(0,50).map(r=>{const g=(generators||[]).find(x=>x.id===r.generatorId);const bl=genBaselines?.find(b=>b.generator_id===r.generatorId);const rate=bl?.avg_litres_per_hour||r.consumptionRate||0;const expected=r.hoursRun?r.hoursRun*rate:null;const pct=expected&&expected>0?Math.abs(r.discrepancyLitres||0)/expected*100:0;return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{r.storeLoc}</td><td style={tc}>{g?.name||r.generatorId}</td><td style={tc}>{expected?expected.toFixed(1)+" L":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+" L":"-"}</td><td style={{...tc,fontWeight:700,color:"#DA1E28"}}>{r.discrepancyLitres!=null?r.discrepancyLitres.toFixed(1)+" L":"-"}</td><td style={tc}><span style={{padding:"3px 10px",borderRadius:10,fontSize:11,fontWeight:600,background:pct>50?"#DA1E28":pct>30?"#FF832B":"#FFD700",color:pct>50?"#fff":"#161616"}}>{pct.toFixed(0)}%</span></td></tr>);})}</tbody></table>}
+        </div>
+      </div>);
+    })()}
+    {tab==="readings"&&(()=>{
+      // Generator options: those at the selected branch (or all gens that have readings)
+      const gensWithReadings=new Set(dieselReadings.map(r=>r.generatorId));
+      const genOpts=(generators||[]).filter(g=>(!rdStore||g.loc===rdStore)&&(rdStore||gensWithReadings.has(g.id)));
+      const rows=dieselReadings
+        .filter(r=>!rdStore||r.storeLoc===rdStore)
+        .filter(r=>!rdGen||r.generatorId===rdGen)
+        .filter(r=>!rdFrom||r.date>=rdFrom)
+        .filter(r=>!rdTo||r.date<=rdTo)
+        .sort((a,b)=>a.date.localeCompare(b.date)||a.storeLoc.localeCompare(b.storeLoc));
+      const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
+      const tHours=rows.reduce((s,r)=>s+(r.hoursRun||0),0);
+      const tCons=rows.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+      const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
+      const cols=["Date","Branch","Generator","Open Hrs","Close Hrs","Hours Run","Diesel Level (L)","Added (L)","Consumption (L)","Rate (L/hr)","NEPA Open","NEPA Close","Notes"];
+      const exportCsv=()=>{
+        const head=cols.join(",");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",r.dieselLevelActual??"",r.dieselAdded??"",r.consumptionLitres??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const blob=new Blob([head+"\n"+body],{type:"text/csv"});
+        const url=URL.createObjectURL(blob);const a=document.createElement("a");
+        a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
+      };
+      return(<div>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:16,marginBottom:14,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Branch</div><select style={{...inp,width:isMob()?"100%":180}} value={rdStore} onChange={e=>{setRdStore(e.target.value);setRdGen("");}}><option value="">All branches</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></div>
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Generator</div><select style={{...inp,width:isMob()?"100%":200}} value={rdGen} onChange={e=>setRdGen(e.target.value)}><option value="">All generators</option>{genOpts.map(g=>(<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>From</div><input type="date" style={{...inp,width:150}} value={rdFrom} onChange={e=>setRdFrom(e.target.value)}/></div>
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>To</div><input type="date" style={{...inp,width:150}} value={rdTo} onChange={e=>setRdTo(e.target.value)}/></div>
+          {(rdStore||rdGen||rdFrom||rdTo)&&<button onClick={()=>{setRdStore("");setRdGen("");setRdFrom("");setRdTo("");}} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>Clear</button>}
+          <div style={{flex:1}}/>
+          <button onClick={exportCsv} disabled={rows.length===0} style={{display:"flex",alignItems:"center",gap:5,padding:"9px 14px",borderRadius:8,border:"1.5px solid "+P,background:rows.length?"#D0E2FF":"#F4F4F4",color:rows.length?P:"#8D8D8D",fontSize:12,fontWeight:600,cursor:rows.length?"pointer":"not-allowed"}}><Download size={14}/>Export CSV</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:14}}>
+          <Kpi icon={FileText} label="Readings" value={rows.length}/>
+          <Kpi icon={Clock} label="Total Hours Run" value={tHours.toFixed(1)}/>
+          <Kpi icon={Droplet} label="Total Consumption" value={tCons.toLocaleString()+" L"}/>
+          <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
+        </div>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}>
+          {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
+          :<table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{cols.map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+          <tbody>{rows.slice(0,500).map(r=>(<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}>
+            <td style={{...tc,whiteSpace:"nowrap"}}>{r.date}</td>
+            <td style={tc}>{r.storeLoc}</td>
+            <td style={{...tc,fontWeight:600}}>{genName(r.generatorId)}</td>
+            <td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td>
+            <td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td>
+            <td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td>
+            <td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
+            <td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td>
+            <td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td>
+            <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
+            <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
+            <td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td>
+            <td style={{...tc,maxWidth:200,fontSize:11,color:"#8D8D8D"}}>{r.notes||""}</td>
+          </tr>))}</tbody>
+          <tfoot><tr style={{background:"#F8FAFF",fontWeight:700}}><td style={tc} colSpan={5}>Totals ({rows.length} readings)</td><td style={tc}>{tHours.toFixed(1)}</td><td style={tc}>-</td><td style={tc}>{tAdded.toLocaleString()}</td><td style={tc}>{tCons.toLocaleString()}</td><td style={tc} colSpan={4}></td></tr></tfoot>
+          </table>}
+          {rows.length>500&&<div style={{padding:"10px 16px",fontSize:11,color:"#8D8D8D",borderTop:"1px solid #F4F4F4"}}>Showing first 500 of {rows.length} readings. Narrow the filters or use Export CSV for the full set.</div>}
         </div>
       </div>);
     })()}
