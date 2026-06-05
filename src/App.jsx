@@ -1406,6 +1406,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdGen,setRdGen]=useState("");
   const [rdFrom,setRdFrom]=useState("");
   const [rdTo,setRdTo]=useState("");
+  const [rdPage,setRdPage]=useState(0);
+  const [rdPageSize,setRdPageSize]=useState(25);
   const totalPurchased=dieselPurchases.reduce((s,p)=>s+p.litres,0);
   const totalSpent=dieselPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
   const totalDistributed=dieselDistributions.reduce((s,d)=>s+d.litres,0);
@@ -1528,6 +1530,10 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       // Generator options: those at the selected branch (or all gens that have readings)
       const gensWithReadings=new Set(dieselReadings.map(r=>r.generatorId));
       const genOpts=(generators||[]).filter(g=>(!rdStore||g.loc===rdStore)&&(rdStore||gensWithReadings.has(g.id)));
+      // Opening diesel level = the prior day's closing for the same generator (full history)
+      const openMap={};const byGen={};
+      dieselReadings.forEach(r=>{(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
+      Object.values(byGen).forEach(arr=>{arr.sort((a,b)=>a.date.localeCompare(b.date));arr.forEach((r,i)=>{openMap[r.id]=i>0?arr[i-1].dieselLevelActual:(r.dieselLevelActual!=null&&r.consumptionLitres!=null?r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres:null);});});
       const rows=dieselReadings
         .filter(r=>!rdStore||r.storeLoc===rdStore)
         .filter(r=>!rdGen||r.generatorId===rdGen)
@@ -1538,21 +1544,27 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const tHours=rows.reduce((s,r)=>s+(r.hoursRun||0),0);
       const tCons=rows.reduce((s,r)=>s+(r.consumptionLitres||0),0);
       const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
-      const cols=["Date","Branch","Generator","Open Hrs","Close Hrs","Hours Run","Diesel Level (L)","Added (L)","Consumption (L)","Rate (L/hr)","NEPA Open","NEPA Close","Notes"];
+      // Pagination
+      const pageCount=Math.max(1,Math.ceil(rows.length/rdPageSize));
+      const curPage=Math.min(rdPage,pageCount-1);
+      const pageRows=rows.slice(curPage*rdPageSize,(curPage+1)*rdPageSize);
+      const cols=["Date","Branch","Generator","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Consumption (L)","Rate (L/hr)","NEPA Open","NEPA Close","Notes"];
+      const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1,background:"#F4F4F4"};
+      const resetPage=()=>setRdPage(0);
       const exportCsv=()=>{
         const head=cols.join(",");
-        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",r.dieselLevelActual??"",r.dieselAdded??"",r.consumptionLitres??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",r.consumptionLitres??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
         const blob=new Blob([head+"\n"+body],{type:"text/csv"});
         const url=URL.createObjectURL(blob);const a=document.createElement("a");
         a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
       };
       return(<div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:16,marginBottom:14,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
-          {!scopeStore&&<div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Branch</div><select style={{...inp,width:isMob()?"100%":180}} value={rdStore} onChange={e=>{setRdStore(e.target.value);setRdGen("");}}><option value="">All branches</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></div>}
-          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Generator</div><select style={{...inp,width:isMob()?"100%":200}} value={rdGen} onChange={e=>setRdGen(e.target.value)}><option value="">All generators</option>{genOpts.map(g=>(<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
-          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>From</div><input type="date" style={{...inp,width:150}} value={rdFrom} onChange={e=>setRdFrom(e.target.value)}/></div>
-          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>To</div><input type="date" style={{...inp,width:150}} value={rdTo} onChange={e=>setRdTo(e.target.value)}/></div>
-          {(rdStore||rdGen||rdFrom||rdTo)&&<button onClick={()=>{setRdStore("");setRdGen("");setRdFrom("");setRdTo("");}} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>Clear</button>}
+          {!scopeStore&&<div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Branch</div><select style={{...inp,width:isMob()?"100%":180}} value={rdStore} onChange={e=>{setRdStore(e.target.value);setRdGen("");resetPage();}}><option value="">All branches</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></div>}
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>Generator</div><select style={{...inp,width:isMob()?"100%":200}} value={rdGen} onChange={e=>{setRdGen(e.target.value);resetPage();}}><option value="">All generators</option>{genOpts.map(g=>(<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>From</div><input type="date" style={{...inp,width:150}} value={rdFrom} onChange={e=>{setRdFrom(e.target.value);resetPage();}}/></div>
+          <div><div style={{fontSize:11,color:"#8D8D8D",marginBottom:4,fontWeight:600}}>To</div><input type="date" style={{...inp,width:150}} value={rdTo} onChange={e=>{setRdTo(e.target.value);resetPage();}}/></div>
+          {(rdStore||rdGen||rdFrom||rdTo)&&<button onClick={()=>{setRdStore("");setRdGen("");setRdFrom("");setRdTo("");resetPage();}} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>Clear</button>}
           <div style={{flex:1}}/>
           <button onClick={exportCsv} disabled={rows.length===0} style={{display:"flex",alignItems:"center",gap:5,padding:"9px 14px",borderRadius:8,border:"1.5px solid "+P,background:rows.length?"#D0E2FF":"#F4F4F4",color:rows.length?P:"#8D8D8D",fontSize:12,fontWeight:600,cursor:rows.length?"pointer":"not-allowed"}}><Download size={14}/>Export CSV</button>
         </div>
@@ -1562,27 +1574,37 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <Kpi icon={Droplet} label="Total Consumption" value={tCons.toLocaleString()+" L"}/>
           <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
         </div>
-        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
           {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
-          :<table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{cols.map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
-          <tbody>{rows.slice(0,500).map(r=>(<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}>
+          :<><div style={{overflow:"auto",maxHeight:"60vh"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:1000}}><thead><tr>{cols.map(h=>(<th key={h} style={sth}>{h}</th>))}</tr></thead>
+          <tbody>{pageRows.map(r=>(<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}>
             <td style={{...tc,whiteSpace:"nowrap"}}>{r.date}</td>
             <td style={tc}>{r.storeLoc}</td>
             <td style={{...tc,fontWeight:600}}>{genName(r.generatorId)}</td>
             <td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td>
             <td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td>
-            <td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
+            <td style={tc}>{openMap[r.id]!=null?openMap[r.id].toLocaleString():"-"}</td>
+            <td style={{...tc,fontWeight:600}}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
             <td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td>
             <td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td>
             <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
             <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
             <td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td>
             <td style={{...tc,maxWidth:200,fontSize:11,color:"#8D8D8D"}}>{r.notes||""}</td>
-          </tr>))}</tbody>
-          <tfoot><tr style={{background:"#F8FAFF",fontWeight:700}}><td style={tc} colSpan={5}>Totals ({rows.length} readings)</td><td style={tc}>{tHours.toFixed(1)}</td><td style={tc}>-</td><td style={tc}>{tAdded.toLocaleString()}</td><td style={tc}>{tCons.toLocaleString()}</td><td style={tc} colSpan={4}></td></tr></tfoot>
-          </table>}
-          {rows.length>500&&<div style={{padding:"10px 16px",fontSize:11,color:"#8D8D8D",borderTop:"1px solid #F4F4F4"}}>Showing first 500 of {rows.length} readings. Narrow the filters or use Export CSV for the full set.</div>}
+          </tr>))}</tbody></table></div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 16px",borderTop:"1px solid #E8ECF1",flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"#525252"}}>
+              <span>Rows per page</span>
+              <select value={rdPageSize} onChange={e=>{setRdPageSize(parseInt(e.target.value));resetPage();}} style={{padding:"5px 8px",borderRadius:6,border:"1px solid #E0E0E0",fontSize:12,fontFamily:"inherit"}}>{[25,50,100].map(n=>(<option key={n} value={n}>{n}</option>))}</select>
+              <span style={{color:"#8D8D8D"}}>{rows.length===0?0:curPage*rdPageSize+1}-{Math.min((curPage+1)*rdPageSize,rows.length)} of {rows.length}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <button onClick={()=>setRdPage(Math.max(0,curPage-1))} disabled={curPage<=0} style={{padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:curPage<=0?"#F4F4F4":"#fff",color:curPage<=0?"#C6C6C6":"#525252",fontSize:12,fontWeight:600,cursor:curPage<=0?"not-allowed":"pointer"}}>Prev</button>
+              <span style={{fontSize:12,color:"#525252"}}>Page {curPage+1} of {pageCount}</span>
+              <button onClick={()=>setRdPage(Math.min(pageCount-1,curPage+1))} disabled={curPage>=pageCount-1} style={{padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:curPage>=pageCount-1?"#F4F4F4":"#fff",color:curPage>=pageCount-1?"#C6C6C6":"#525252",fontSize:12,fontWeight:600,cursor:curPage>=pageCount-1?"not-allowed":"pointer"}}>Next</button>
+            </div>
+          </div></>}
         </div>
       </div>);
     })()}
