@@ -11,8 +11,8 @@ const P="#0F62FE";
 // DB field mappers
 const toV=(r)=>({id:r.id,name:r.name,type:r.type,year:r.year,status:r.status,km:Number(r.km)||0,driver:r.driver,loc:r.loc,nextSvc:r.next_svc,plate:r.plate,img:r.img,vin:r.vin,group:r.grp,fuelType:r.fuel_type,svcCostLife:Number(r.svc_cost_life)||0,fuelCostLife:Number(r.fuel_cost_life)||0,otherCostLife:Number(r.other_cost_life)||0});
 const fromV=(v)=>({id:v.id,name:v.name,type:v.type,year:v.year||0,status:v.status,km:v.km||0,driver:v.driver||"",loc:v.loc||"",next_svc:v.nextSvc||"",plate:v.plate||"",img:v.img||"🚛",vin:v.vin||"",grp:v.group||"",fuel_type:v.fuelType||"",svc_cost_life:v.svcCostLife||0,fuel_cost_life:v.fuelCostLife||0,other_cost_life:v.otherCostLife||0});
-const toG=(r)=>({id:r.id,name:r.name,brand:r.brand,cap:r.cap,status:r.status,hrs:Number(r.hrs)||0,loc:r.loc,nextSvc:r.next_svc,costHr:Number(r.cost_hr)||0,tank:r.tank,assigned:r.assigned,fuelType:r.fuel_type,svcCostLife:Number(r.svc_cost_life)||0,fuelCostLife:Number(r.fuel_cost_life)||0});
-const fromG=(g)=>({id:g.id,name:g.name,brand:g.brand||"",cap:g.cap||"",status:g.status,hrs:g.hrs||0,loc:g.loc||"",next_svc:g.nextSvc||"",cost_hr:g.costHr||0,tank:g.tank||0,assigned:g.assigned||"",fuel_type:g.fuelType||"",svc_cost_life:g.svcCostLife||0,fuel_cost_life:g.fuelCostLife||0});
+const toG=(r)=>({id:r.id,name:r.name,brand:r.brand,cap:r.cap,status:r.status,hrs:Number(r.hrs)||0,loc:r.loc,nextSvc:r.next_svc,costHr:Number(r.cost_hr)||0,tank:r.tank,assigned:r.assigned,fuelType:r.fuel_type,svcCostLife:Number(r.svc_cost_life)||0,fuelCostLife:Number(r.fuel_cost_life)||0,assetType:r.asset_type||"generator"});
+const fromG=(g)=>({id:g.id,name:g.name,brand:g.brand||"",cap:g.cap||"",status:g.status,hrs:g.hrs||0,loc:g.loc||"",next_svc:g.nextSvc||"",cost_hr:g.costHr||0,tank:g.tank||0,assigned:g.assigned||"",fuel_type:g.fuelType||"",svc_cost_life:g.svcCostLife||0,fuel_cost_life:g.fuelCostLife||0,asset_type:g.assetType||"generator"});
 const toFL=(r)=>({id:r.id,asset:r.asset,date:r.date,litres:Number(r.litres)||0,cost:Number(r.cost)||0,reading:Number(r.reading)||0,station:r.station,isGen:r.is_gen,fuelType:r.fuel_type});
 const fromFL=(f)=>({asset:f.asset,date:f.date,litres:f.litres||0,cost:f.cost||0,reading:f.reading||0,station:f.station||"",is_gen:f.isGen||false,fuel_type:f.fuelType||"Diesel"});
 const toWO=(r)=>({id:r.id,asset:r.asset,type:r.type,priority:r.priority,status:r.status,desc:r.descr,assignee:r.assignee,due:r.due,cost:Number(r.cost)||0,isGen:r.is_gen});
@@ -23,8 +23,8 @@ const toSR=(r)=>({id:r.id,vehicle:r.vehicle,type:r.type,intervalKm:r.interval_km
 const fromSR=(s)=>({vehicle:s.vehicle,type:s.type,interval_km:s.intervalKm||0,interval_days:s.intervalDays||0,last_done_km:s.lastDoneKm||0,last_done_date:s.lastDoneDate||"",next_due_km:s.nextDueKm||0,next_due_date:s.nextDueDate||"",status:s.status||"Upcoming"});
 const toOdo=(r)=>({id:r.id,asset:r.asset,reading:Number(r.reading)||0,date:r.date,type:r.type});
 // Diesel module mappers
-const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",dieselLevelPhotoUrl:r.diesel_level_photo_url||"",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:Number(r.discrepancy_litres)||null,discrepancyFlag:r.discrepancy_flag,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
-const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",diesel_level_photo_url:d.dieselLevelPhotoUrl||"",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,submitted_by:d.submittedBy,notes:d.notes||""});
+const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",dieselLevelPhotoUrl:r.diesel_level_photo_url||"",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:Number(r.discrepancy_litres)||null,discrepancyFlag:r.discrepancy_flag,batchesProduced:r.batches_produced!=null?Number(r.batches_produced):null,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
+const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",diesel_level_photo_url:d.dieselLevelPhotoUrl||"",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,batches_produced:d.batchesProduced??null,submitted_by:d.submittedBy,notes:d.notes||""});
 const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate:r.to_date,totalHours:Number(r.total_hours)||0,meterOpening:r.meter_opening!=null?Number(r.meter_opening):null,meterClosing:r.meter_closing!=null?Number(r.meter_closing):null,photoUrl:r.photo_url||"",notes:r.notes||"",submittedBy:r.submitted_by,createdAt:r.created_at});
 const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
 const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
@@ -284,7 +284,7 @@ function GenPage({generators,setGenerators,locations,fuelLogs,canEdit,odoLog,set
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(3,1fr)",gap:14}}><Kpi icon={Zap} label="Active" value={`${assigned.filter(g=>g.status==="Active").length}/${assigned.length}`}/><Kpi icon={Gauge} label="Total Run Hours" value={assigned.reduce((s,g)=>s+(g.hrs||0),0).toLocaleString()}/><Kpi icon={Clock} label="In Maintenance" value={assigned.filter(g=>g.status==="In Maintenance").length} accent="#FF832B"/></div>
     <div style={{display:"flex",justifyContent:"space-between"}}><div style={{display:"flex",gap:6}}>{["All","Active","In Maintenance","Standby"].map(s=>(<button key={s} onClick={()=>setFilt(s)} style={{padding:"6px 14px",borderRadius:7,border:filt===s?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:filt===s?"#D0E2FF":"#fff",color:filt===s?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{s} ({s==="All"?assigned.length:assigned.filter(g=>g.status===s).length})</button>))}</div>{canEdit&&<div style={{display:"flex",gap:6}}><button onClick={()=>setShowSnap(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 14px",borderRadius:9,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><Camera size={14}/>Snap Reading</button><button onClick={()=>{setEditG(null);setForm(defForm);setShowAdd(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add Generator</button></div>}</div>
-    <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Generator","Capacity","Status","Location","Run Hours","Cost/Hr",canEdit?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{list.map(g=>(<tr key={g.id} style={{cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="#F8FAFF"} onMouseLeave={e=>e.currentTarget.style.background=""}><td style={tc} onClick={()=>setSel(g.id)}><div style={{display:"flex",alignItems:"center",gap:8}}><span>⚡</span><div><div style={{fontWeight:600}}>{g.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.id}</div></div></div></td><td style={tc} onClick={()=>setSel(g.id)}>{g.cap||"-"}</td><td style={tc} onClick={()=>setSel(g.id)}><Badge label={g.status}/></td><td style={tc} onClick={()=>setSel(g.id)}>{g.loc?g.loc:<span style={{fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:4,background:"#FFF3E0",color:"#E65100"}}>Unassigned</span>}</td><td style={tc} onClick={()=>setSel(g.id)}>{(g.hrs||0).toLocaleString()} hrs</td><td style={tc} onClick={()=>setSel(g.id)}>{g.costHr?fmt(g.costHr):"-"}</td>{canEdit&&<td style={tc}><div style={{display:"flex",gap:4}}><button onClick={(e)=>{e.stopPropagation();startEdit(g);}} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={(e)=>{e.stopPropagation();handleDelete(g.id);}} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td>}</tr>))}</tbody></table></div>
+    <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Generator","Capacity","Status","Location","Run Hours","Cost/Hr",canEdit?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{list.map(g=>(<tr key={g.id} style={{cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="#F8FAFF"} onMouseLeave={e=>e.currentTarget.style.background=""}><td style={tc} onClick={()=>setSel(g.id)}><div style={{display:"flex",alignItems:"center",gap:8}}><span>{g.assetType==="oven"?"🔥":"⚡"}</span><div><div style={{fontWeight:600,display:"flex",alignItems:"center",gap:6}}>{g.name}{g.assetType==="oven"&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:4,background:"#EDE7F6",color:"#8B5CF6"}}>OVEN</span>}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.id}</div></div></div></td><td style={tc} onClick={()=>setSel(g.id)}>{g.cap||"-"}</td><td style={tc} onClick={()=>setSel(g.id)}><Badge label={g.status}/></td><td style={tc} onClick={()=>setSel(g.id)}>{g.loc?g.loc:<span style={{fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:4,background:"#FFF3E0",color:"#E65100"}}>Unassigned</span>}</td><td style={tc} onClick={()=>setSel(g.id)}>{(g.hrs||0).toLocaleString()} hrs</td><td style={tc} onClick={()=>setSel(g.id)}>{g.costHr?fmt(g.costHr):"-"}</td>{canEdit&&<td style={tc}><div style={{display:"flex",gap:4}}><button onClick={(e)=>{e.stopPropagation();startEdit(g);}} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={(e)=>{e.stopPropagation();handleDelete(g.id);}} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td>}</tr>))}</tbody></table></div>
     {showSnap&&(<div style={{position:"fixed",inset:0,background:"#F7F8FC",zIndex:1000,overflow:"auto",padding:isMob()?"16px":"30px 40px"}}><div style={{maxWidth:600,margin:"0 auto"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h2 style={{fontSize:18,fontWeight:700,margin:0}}>Snap Meter Reading</h2><button onClick={()=>setShowSnap(false)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#525252"}}><X size={14}/>Close</button></div><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog} embedded/></div></div>)}
         {showAdd&&(<Modal title={editG?"Edit Generator":"Add New Generator"} onClose={()=>{setShowAdd(false);setEditG(null);}}><Field label="Name *"><input style={inp} placeholder="e.g. Caterpillar C15 500kVA" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Brand"><input style={inp} placeholder="Caterpillar" value={form.brand} onChange={e=>setForm({...form,brand:e.target.value})}/></Field><Field label="Capacity"><input style={inp} placeholder="500 kVA" value={form.cap} onChange={e=>setForm({...form,cap:e.target.value})}/></Field></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Status"><select style={inp} value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>In Maintenance</option><option>Standby</option></select></Field><Field label="Run Hours"><input style={inp} type="number" value={form.hrs} onChange={e=>setForm({...form,hrs:e.target.value})}/></Field></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Cost/Hour"><input style={inp} type="number" placeholder="3200" value={form.costHr} onChange={e=>setForm({...form,costHr:e.target.value})}/></Field><Field label="Tank (L)"><input style={inp} type="number" placeholder="1000" value={form.tank} onChange={e=>setForm({...form,tank:e.target.value})}/></Field></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Location"><select style={inp} value={form.loc} onChange={e=>setForm({...form,loc:e.target.value})}><option value="">-- Select Location --</option>{locations.map(l=>(<option key={l}>{l}</option>))}</select></Field><Field label="Next Service"><input style={inp} type="date" value={form.nextSvc} onChange={e=>setForm({...form,nextSvc:e.target.value})}/></Field></div><Field label="Assigned To"><input style={inp} placeholder="e.g. Main Office" value={form.assigned} onChange={e=>setForm({...form,assigned:e.target.value})}/></Field><div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}><button onClick={()=>{setShowAdd(false);setEditG(null);}} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleSave} disabled={!form.name} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 20px",borderRadius:8,border:"none",background:form.name?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:form.name?"pointer":"not-allowed"}}><Save size={14}/>{editG?"Update":"Save"}</button></div></Modal>)}
   </div>);
@@ -657,6 +657,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   // Diesel level (tank) photo
   const [tankPhoto,setTankPhoto]=useState(null);
   const [tankPreview,setTankPreview]=useState("");
+  // Bread batches (ovens only)
+  const [batches,setBatches]=useState("");
   // NEPA fields
   const [nepaMode,setNepaMode]=useState("manual"); // photo | manual
   const [nepaHours,setNepaHours]=useState("");
@@ -894,6 +896,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         nepaHours:nHours,nepaMeterOpening:parseFloat(nepaMeterOpen)||null,
         nepaMeterClosing:parseFloat(nepaMeterClose)||null,nepaPhotoUrl:nepaPhotoUrl,nepaSource:nepaMode,
         discrepancyLitres:discrepancy!=null?Math.round(discrepancy):null,discrepancyFlag:discFlag,
+        batchesProduced:batches!==""?parseFloat(batches):null,
         submittedBy:user?.uid||null,notes:notes
       });
       let saved;
@@ -950,7 +953,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     setStep("select");setSelGen("");setEditingId(null);setEntryDate(todayStr);
     setInputMode("photo");setPhoto(null);setPreview("");
     setAnalyzing(false);setMsg("");setAiNotes("");setHoursOpening("");setHoursClosing("");
-    setDieselLevel("");setDieselAdded("");setTankPhoto(null);setTankPreview("");
+    setDieselLevel("");setDieselAdded("");setTankPhoto(null);setTankPreview("");setBatches("");
     setNepaMode("manual");setNepaHours("");
     setNepaPhoto(null);setNepaPreview("");setNepaMeterOpen("");setNepaMeterClose("");setNotes("");
   };
@@ -965,6 +968,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     setNepaHours(r.nepaHours?String(r.nepaHours):"");
     setNepaMeterOpen(r.nepaMeterOpening?String(r.nepaMeterOpening):"");
     setNepaMeterClose(r.nepaMeterClosing?String(r.nepaMeterClosing):"");
+    setBatches(r.batchesProduced!=null?String(r.batchesProduced):"");
     setNotes(r.notes||"");setInputMode(r.genSource||"manual");setNepaMode(r.nepaSource||"manual");
     setPreview(r.genPhotoUrl||"");setNepaPreview(r.nepaPhotoUrl||"");setTankPreview(r.dieselLevelPhotoUrl||"");
     setStep("input");
@@ -1063,7 +1067,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
             style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:10,border:blocked?"1.5px solid #E0E0E0":existing?"1.5px solid #FFE082":"1.5px solid #D0E2FF",background:blocked?"#F4F4F4":existing?"#FFFBEA":"#F8FAFF",cursor:blocked?"not-allowed":"pointer",textAlign:"left",opacity:blocked?0.55:1}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
               <div style={{width:38,height:38,borderRadius:9,background:blocked?"#E0E0E0":existing?"#FFE082":"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center"}}><Zap size={18} color={blocked?"#8D8D8D":existing?"#F57F17":P}/></div>
-              <div><div style={{fontSize:14,fontWeight:600,color:blocked?"#8D8D8D":"#161616"}}>{g.name}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.brand} - {g.cap} - {g.loc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>Current: {g.hrs?.toLocaleString()||0} hrs</div></div>
+              <div><div style={{fontSize:14,fontWeight:600,color:blocked?"#8D8D8D":"#161616",display:"flex",alignItems:"center",gap:6}}>{g.name}{g.assetType==="oven"&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:4,background:"#EDE7F6",color:"#8B5CF6",letterSpacing:"0.04em"}}>OVEN</span>}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.brand} - {g.cap} - {g.loc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{g.assetType==="oven"?"Log batches + diesel level":`Current: ${g.hrs?.toLocaleString()||0} hrs`}</div></div>
             </div>
             {existing&&blocked?<span style={{fontSize:11,fontWeight:600,color:"#8D8D8D",display:"flex",alignItems:"center",gap:4,textAlign:"right"}}><AlertTriangle size={13}/>{blockLabel}</span>
             :existing?(()=>{const ed=checkEditWindow(existing);return(<span style={{fontSize:11,fontWeight:600,color:"#F57F17",display:"flex",alignItems:"center",gap:4}}><CheckCircle size={13}/>Edit{ed.remainingMin!=null?` (${ed.remainingMin}m left)`:""}</span>);})()
@@ -1093,8 +1097,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         {isBackdated&&requirePhotoBackdated&&!editingId&&<div style={{padding:"10px 16px",background:"#FFF8E1",borderBottom:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><Camera size={13}/>Generator photo required for backdated entry.</div>}
 
         <div style={{padding:20}}>
-          {/* Section 1: Generator Meter */}
-          <div style={{marginBottom:20}}>
+          {/* Section 1: Generator Meter (hidden for ovens — they have no hour meter) */}
+          {selectedGen.assetType!=="oven"&&<div style={{marginBottom:20}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
               <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}><div style={{width:22,height:22,borderRadius:"50%",background:P,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>1</div> Generator Meter</div>
               <div style={{display:"flex",gap:4}}>
@@ -1124,7 +1128,19 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                 </div>
               )}
             </div>
-          </div>
+          </div>}
+
+          {/* Section: Bread Batches (ovens only) */}
+          {selectedGen.assetType==="oven"&&<div style={{marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6,marginBottom:10}}><div style={{width:22,height:22,borderRadius:"50%",background:"#8B5CF6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>1</div> Bread Production</div>
+            <Field label="Batches Produced Today *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="1" placeholder="e.g. 32" value={batches} onChange={e=>setBatches(e.target.value)}/></Field>
+            {batches&&dieselLevel&&(()=>{
+              const prev=getPrevReading(selGen);
+              const cons=prev?.dieselLevelActual!=null?prev.dieselLevelActual+(parseFloat(dieselAdded)||0)-parseFloat(dieselLevel):null;
+              const perBatch=cons&&parseFloat(batches)>0?cons/parseFloat(batches):null;
+              return perBatch&&perBatch>0?(<div style={{marginTop:8,padding:8,background:"#EDE7F6",borderRadius:6,display:"flex",justifyContent:"space-between",fontSize:12}}><span style={{color:"#525252"}}>Diesel per batch:</span><span style={{fontWeight:700,color:"#8B5CF6"}}>{perBatch.toFixed(2)} L/batch</span></div>):null;
+            })()}
+          </div>}
 
           {/* Section 2: Diesel Level */}
           <div style={{marginBottom:20}}>
@@ -1158,8 +1174,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
             })()}
           </div>
 
-          {/* Section 3: NEPA */}
-          <div style={{marginBottom:20}}>
+          {/* Section 3: NEPA (hidden for ovens) */}
+          {selectedGen.assetType!=="oven"&&<div style={{marginBottom:20}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
               <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}><div style={{width:22,height:22,borderRadius:"50%",background:"#8B5CF6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>3</div> NEPA / Power</div>
               <div style={{display:"flex",gap:4}}>
@@ -1184,7 +1200,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                 <Field label="Total NEPA Hours"><input style={inp} type="number" step="0.5" placeholder="e.g. 14" value={nepaHours} onChange={e=>setNepaHours(e.target.value)}/></Field>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Notes */}
           <Field label="Notes (optional)"><input style={inp} placeholder="e.g. generator serviced today" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
@@ -1818,16 +1834,17 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const tHours=rows.reduce((s,r)=>s+(r.hoursRun||0),0);
       const tCons=rows.reduce((s,r)=>s+(r.consumptionLitres||0),0);
       const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
+      const tBatches=rows.reduce((s,r)=>s+(r.batchesProduced||0),0);
       // Pagination
       const pageCount=Math.max(1,Math.ceil(rows.length/rdPageSize));
       const curPage=Math.min(rdPage,pageCount-1);
       const pageRows=rows.slice(curPage*rdPageSize,(curPage+1)*rdPageSize);
-      const cols=["Date","Branch","Generator","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Consumption (L)","Rate (L/hr)","NEPA Open","NEPA Close","Notes"];
+      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Consumption (L)","Batches","Rate (L/hr | L/batch)","NEPA Open","NEPA Close","Notes"];
       const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1,background:"#F4F4F4"};
       const resetPage=()=>setRdPage(0);
       const exportCsv=()=>{
         const head=cols.join(",");
-        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",r.consumptionLitres??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",r.consumptionLitres??"",r.batchesProduced??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
         const blob=new Blob([head+"\n"+body],{type:"text/csv"});
         const url=URL.createObjectURL(blob);const a=document.createElement("a");
         a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
@@ -1842,11 +1859,12 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <div style={{flex:1}}/>
           <button onClick={exportCsv} disabled={rows.length===0} style={{display:"flex",alignItems:"center",gap:5,padding:"9px 14px",borderRadius:8,border:"1.5px solid "+P,background:rows.length?"#D0E2FF":"#F4F4F4",color:rows.length?P:"#8D8D8D",fontSize:12,fontWeight:600,cursor:rows.length?"pointer":"not-allowed"}}><Download size={14}/>Export CSV</button>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":`repeat(${tBatches>0?5:4},1fr)`,gap:12,marginBottom:14}}>
           <Kpi icon={FileText} label="Readings" value={rows.length}/>
           <Kpi icon={Clock} label="Total Hours Run" value={tHours.toFixed(1)}/>
           <Kpi icon={Droplet} label="Total Consumption" value={tCons.toLocaleString()+" L"}/>
           <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
+          {tBatches>0&&<Kpi icon={Package} label="Bread Batches" value={tBatches.toLocaleString()} sub={tCons>0?`${(tCons/tBatches).toFixed(2)} L/batch avg`:""}/>}
         </div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
           {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
@@ -1862,6 +1880,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={{...tc,fontWeight:600}}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
             <td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td>
             <td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td>
+            <td style={{...tc,fontWeight:r.batchesProduced!=null?600:400,color:r.batchesProduced!=null?"#8B5CF6":"#161616"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td>
             <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
             <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
             <td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td>
