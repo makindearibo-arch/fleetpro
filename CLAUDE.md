@@ -157,7 +157,7 @@ Created via `setup-stores.js`. Each store has an email like `Akure1.CR@Micmakin.
   - `scripts/setup_store_generators.py` — assign/rename generators + create one per location that lacks one
   - `scripts/audit_generators.py` — read-only: lists generators vs locations, flags stores with no generator
 - Generators table now has ~26 rows (one+ per store). `generators.id` is TEXT (mix of `G-NNN`, UUIDs); new ones created via `crypto.randomUUID()` (app) or `uuid4` (scripts).
-- Historical baselines were NOT back-filled into `diesel_readings.discrepancy_flag` — only the per-generator baseline row was upserted. Forward readings get flagged correctly; old rows stay `false`.
+- Historical discrepancy flags WERE back-filled (2026-06-03) via `scripts/backfill_discrepancy_flags.py`: 1,183 readings evaluated, 629 flagged (53.2%). Per store: Ado 1 92%, Akure 1 91% (both transfer-polluted — recalibrate after the vehicle-transfer feature), Akure 6 47%, Owo CR 16%, Okitipupa ~0–1% (self-referential data). Re-run the script after any new import or re-baseline; it's idempotent.
 
 ### Pending Diesel Tasks
 1. **Fix Staff Dashboard data display** — user said "There is lot to discuss on that"
