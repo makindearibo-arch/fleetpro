@@ -165,7 +165,8 @@ Created via `setup-stores.js`. Each store has an email like `Akure1.CR@Micmakin.
 3. **Import Ado 1/2/3 supply data** — user collecting; ado stores buy locally but admin supplies them too
 4. **Roll out import to remaining stores** (Akure 2/3/4/5, Akungba, Idanre, Igbokoda, Ikare Bakery/CR, Okitipupa Bakery, Ondo Bakery/CR/Ondo 2 CR, Owo Bakery, Oye Bakery, Pie Express/Warehouse). Done so far: Akure 1, Akure 6, Ado 1, Owo CR, Okitipupa CR.
 5. **Build admin Import page in FleetPro UI** (replace the standalone Python script with an in-app upload+preview flow)
-6. **Back-fill historical discrepancy flags** on `diesel_readings` (run the per-record check against the now-set baseline)
+6. **Back-fill historical discrepancy flags** — script ready: `scripts/backfill_discrepancy_flags.py` (dry-run default, `--apply` to write). Replays the app's save-time check against current baselines, paginated fetch (avoids the 1000-row REST cap). Run it after any new store import or re-baseline. NOTE: Akure 1 flags heavily until the vehicle-transfer feature lands.
+7. **Watchtower tab** (admin-only, in Diesel Management) — per-store theft-risk scoring added: flag rate (30), supply-sent-vs-tanked gap (25), pencil-whipping (round numbers + rate CV < 0.05, 20), overnight losses (15), low photo rate last 30d (10). Click a store row for its event log (discrepancies + overnight losses). Overnight loss = prev day's closing level minus today's implied opening (close − added + consumption). Sheet-imported data shows ~0 overnight gaps by construction (sheets carry closing→opening forward); the signal matters for app-entered readings going forward.
 
 ### Deferred Features
 - Full activity/audit trail (log every action, who/what/when)

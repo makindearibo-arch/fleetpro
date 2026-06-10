@@ -6,7 +6,6 @@ import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
 import LiveMapPage from "./LiveMapPage.jsx";
 
-const CD=[{m:"Sep",fuel:4.2,maint:2.8},{m:"Oct",fuel:4.5,maint:2.3},{m:"Nov",fuel:4.0,maint:3.2},{m:"Dec",fuel:3.5,maint:2.4},{m:"Jan",fuel:3.9,maint:3.8},{m:"Feb",fuel:4.4,maint:1.9}];
 const isMob=()=>typeof window!=="undefined"&&window.innerWidth<768;
 const P="#0F62FE";
 // DB field mappers
@@ -53,14 +52,28 @@ function SearchSelect({options,value,onChange,placeholder}){
   return(<div style={{position:"relative"}}><div onClick={()=>setOpen(!open)} style={{...inp,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff"}}><span style={{color:selected?"#161616":"#8D8D8D",fontSize:13}}>{selected?selected.label:(placeholder||"-- Select --")}</span><ChevronRight size={13} color="#8D8D8D" style={{transform:open?"rotate(90deg)":"rotate(0)",transition:"transform 0.15s"}}/></div>{open&&(<div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1.5px solid #E0E0E0",borderRadius:8,marginTop:4,zIndex:999,maxHeight:220,overflow:"auto",boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}><div style={{padding:"8px 10px",borderBottom:"1px solid #F4F4F4",position:"sticky",top:0,background:"#fff"}}><div style={{display:"flex",alignItems:"center",gap:6,background:"#F4F4F4",borderRadius:6,padding:"6px 10px"}}><Search size={13} color="#8D8D8D"/><input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Type to search..." style={{border:"none",outline:"none",background:"transparent",fontSize:12,width:"100%",fontFamily:"inherit"}}/></div></div>{filtered.length===0?(<div style={{padding:14,textAlign:"center",color:"#8D8D8D",fontSize:12}}>No results</div>):filtered.map(o=>(<div key={o.value} onClick={()=>{onChange(o.value);setOpen(false);setQ("");}} style={{padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:value===o.value?600:400,color:value===o.value?P:"#161616",background:value===o.value?"#D0E2FF":"transparent"}} onMouseEnter={e=>{if(value!==o.value)e.currentTarget.style.background="#F8FAFF"}} onMouseLeave={e=>{if(value!==o.value)e.currentTarget.style.background="transparent"}}>{o.label}</div>))}</div>)}</div>);
 }
 
-function DashPage({vehicles,generators,workOrders,go}){
+function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,dieselPurchases}){
   const av=vehicles.filter(v=>v.status==="Active").length;const ag=generators.filter(g=>g.status==="Active").length;const ow=workOrders.filter(w=>w.status!=="Completed").length;
   const pd=[{name:"Active",value:av,color:"#24A148"},{name:"In Shop",value:vehicles.filter(v=>v.status==="In Shop").length,color:"#F1C21B"},{name:"Out of Svc",value:vehicles.filter(v=>v.status==="Out of Service").length,color:"#DA1E28"}].filter(d=>d.value>0);
+  // Real operating costs: fuel logs (naira) + diesel consumption x weighted avg purchase price + WO costs, last 6 months
+  const now=new Date();
+  const avgDieselPrice=(()=>{const tl=(dieselPurchases||[]).reduce((s,p)=>s+(p.litres||0),0);const tcst=(dieselPurchases||[]).reduce((s,p)=>s+(p.litres||0)*(p.pricePerL||0),0);return tl>0?tcst/tl:0;})();
+  const costSeries=[...Array(6)].map((_,i)=>{
+    const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
+    const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const fuel=(fuelLogs||[]).filter(f=>f.date&&f.date.startsWith(ym)).reduce((s,f)=>s+(f.cost||0),0);
+    const dieselL=(dieselReadings||[]).filter(r=>r.date&&r.date.startsWith(ym)).reduce((s,r)=>s+(r.consumptionLitres||0),0);
+    const maint=(workOrders||[]).filter(w=>w.due&&w.due.startsWith(ym)).reduce((s,w)=>s+(w.cost||0),0);
+    return{m:d.toLocaleDateString("en",{month:"short"}),fuel,diesel:Math.round(dieselL*avgDieselPrice),maint};
+  });
+  const cur=costSeries[5]||{fuel:0,diesel:0,maint:0};
+  const monthlyCost=cur.fuel+cur.diesel+cur.maint;
+  const nairaTick=(v)=>v>=1e6?(v/1e6).toFixed(1)+"M":v>=1e3?(v/1e3).toFixed(0)+"k":v;
   return(<div style={{display:"flex",flexDirection:"column",gap:18}}>
     <div style={{background:"linear-gradient(135deg,#0F1A2E,#1A3A6B,#0F62FE)",borderRadius:16,padding:"24px 28px",color:"#fff"}}><div style={{fontSize:11,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:"0.08em"}}>Good morning</div><h2 style={{fontSize:20,fontWeight:700,margin:"4px 0 0"}}>Fleet Overview</h2><p style={{fontSize:13,color:"rgba(255,255,255,0.6)",marginTop:4}}>{av} vehicles + {ag} generators active</p></div>
-    <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}><Kpi icon={Truck} label="Vehicles" value={`${av}/${vehicles.length}`} onClick={()=>go("vehicles")}/><Kpi icon={Zap} label="Generators" value={`${ag}/${generators.length}`} onClick={()=>go("generators")}/><Kpi icon={Wrench} label="Open WOs" value={ow} accent="#FF832B" onClick={()=>go("workorders")}/><Kpi icon={DollarSign} label="Monthly Cost" value={fmt(8440000)}/></div>
+    <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}><Kpi icon={Truck} label="Vehicles" value={`${av}/${vehicles.length}`} onClick={()=>go("vehicles")}/><Kpi icon={Zap} label="Generators" value={`${ag}/${generators.length}`} onClick={()=>go("generators")}/><Kpi icon={Wrench} label="Open WOs" value={ow} accent="#FF832B" onClick={()=>go("workorders")}/><Kpi icon={DollarSign} label="Cost This Month" value={fmt(monthlyCost)} sub="Fuel + diesel + maintenance"/></div>
     <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr",gap:14}}>
-      <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1"}}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 12px"}}>Operating Costs</h3><ResponsiveContainer width="100%" height={180}><AreaChart data={CD}><CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0"/><XAxis dataKey="m" tick={{fontSize:11,fill:"#8D8D8D"}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:11,fill:"#8D8D8D"}} axisLine={false} tickLine={false}/><Tooltip/><Area dataKey="fuel" stroke={P} fill={P+"20"} strokeWidth={2}/><Area dataKey="maint" stroke="#FF832B" fill="#FF832B20" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
+      <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1"}}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 12px"}}>Operating Costs (last 6 months)</h3><ResponsiveContainer width="100%" height={180}><AreaChart data={costSeries}><CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0"/><XAxis dataKey="m" tick={{fontSize:11,fill:"#8D8D8D"}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:11,fill:"#8D8D8D"}} axisLine={false} tickLine={false} tickFormatter={nairaTick}/><Tooltip formatter={(v,n)=>[fmt(v),n==="fuel"?"Vehicle Fuel":n==="diesel"?"Gen Diesel":"Maintenance"]}/><Area dataKey="fuel" stroke={P} fill={P+"20"} strokeWidth={2}/><Area dataKey="diesel" stroke="#8A3FFC" fill="#8A3FFC20" strokeWidth={2}/><Area dataKey="maint" stroke="#FF832B" fill="#FF832B20" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
       <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1"}}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Fleet Status</h3><ResponsiveContainer width="100%" height={130}><PieChart><Pie data={pd} cx="50%" cy="50%" innerRadius={38} outerRadius={55} dataKey="value" strokeWidth={0}>{pd.map((e,i)=>(<Cell key={i} fill={e.color}/>))}</Pie></PieChart></ResponsiveContainer><div style={{display:"flex",gap:10,justifyContent:"center"}}>{pd.map(d=>(<span key={d.name} style={{fontSize:11,color:"#525252",display:"flex",alignItems:"center",gap:4}}><span style={{width:7,height:7,borderRadius:"50%",background:d.color}}/>{d.value} {d.name}</span>))}</div></div>
     </div>
     <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><h3 style={{fontSize:14,fontWeight:700,margin:0}}>Recent Work Orders</h3><button onClick={()=>go("workorders")} style={{fontSize:12,color:P,fontWeight:600,background:"none",border:"none",cursor:"pointer"}}>View All</button></div>{workOrders.filter(w=>w.status!=="Completed").slice(0,4).map(wo=>(<div key={wo.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #F4F4F4"}}><div><div style={{fontSize:13,fontWeight:600}}>{wo.id} - {wo.asset}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{wo.type} - Due {wo.due}</div></div><Badge label={wo.status}/></div>))}</div>
@@ -1408,6 +1421,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdTo,setRdTo]=useState("");
   const [rdPage,setRdPage]=useState(0);
   const [rdPageSize,setRdPageSize]=useState(25);
+  const [wtStore,setWtStore]=useState(null); // Watchtower drill-down store
   const totalPurchased=dieselPurchases.reduce((s,p)=>s+p.litres,0);
   const totalSpent=dieselPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
   const totalDistributed=dieselDistributions.reduce((s,d)=>s+d.litres,0);
@@ -1459,7 +1473,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     setDieselDistributions(dieselDistributions.map(d=>d.id===editDist.id?toDD(row):d));setEditDist(null);setMsg("Distribution updated!");setTimeout(()=>setMsg(""),3000);
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
-  const tabs=scopeStore?["readings","distributions","stores","baselines","discrepancies"]:["overview","readings","purchases","distributions","stores","baselines","discrepancies"];
+  const tabs=scopeStore?["readings","distributions","stores","baselines","discrepancies"]:["overview","watchtower","readings","purchases","distributions","stores","baselines","discrepancies"];
   // Staff KPI values (their store only)
   const staffReceived=dieselDistributions.reduce((s,d)=>s+(d.litres||0),0);
   const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
@@ -1497,6 +1511,97 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         :dieselDistributions.slice(0,8).map(d=>(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #F4F4F4"}}><div><div style={{fontSize:13,fontWeight:600}}>{d.storeLoc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{d.date}{d.notes?" - "+d.notes:""}</div></div><div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</div></div>))}
       </div>
     </div>)}
+    {tab==="watchtower"&&!scopeStore&&(()=>{
+      const today30=new Date(Date.now()-30*864e5).toISOString().split("T")[0];
+      const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
+      // Per-generator chronological walk: overnight gaps (level lost between yesterday's close and today's implied opening)
+      const byGen={};dieselReadings.forEach(r=>{(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
+      const gapsByStore={};const gapEvents=[];
+      Object.values(byGen).forEach(arr=>{
+        arr.sort((a,b)=>a.date.localeCompare(b.date));
+        let prev=null;
+        arr.forEach(r=>{
+          if(prev&&prev.dieselLevelActual!=null&&r.dieselLevelActual!=null&&r.consumptionLitres!=null){
+            const impliedOpen=r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres;
+            const gap=prev.dieselLevelActual-impliedOpen;
+            if(gap>5){const s=gapsByStore[r.storeLoc]=gapsByStore[r.storeLoc]||{count:0,litres:0};s.count++;s.litres+=gap;gapEvents.push({store:r.storeLoc,gen:r.generatorId,date:r.date,litres:gap});}
+          }
+          if(r.dieselLevelActual!=null)prev=r;
+        });
+      });
+      // Per-store aggregation
+      const stores={};
+      dieselReadings.forEach(r=>{
+        const s=stores[r.storeLoc]=stores[r.storeLoc]||{readings:0,flags:0,evaluated:0,round:0,consumed:0,added:0,rates:[],recent:0,recentPhoto:0};
+        s.readings++;
+        if(r.discrepancyLitres!=null)s.evaluated++;
+        if(r.discrepancyFlag)s.flags++;
+        if(r.consumptionLitres!=null&&r.consumptionLitres>0){s.consumed+=r.consumptionLitres;if(r.consumptionLitres%10===0)s.round++;}
+        s.added+=(r.dieselAdded||0);
+        if(r.hoursRun>0&&r.consumptionLitres>0)s.rates.push(r.consumptionLitres/r.hoursRun);
+        if(r.date>=today30){s.recent++;if(r.genSource==="photo")s.recentPhoto++;}
+      });
+      (dieselDistributions||[]).forEach(d=>{const s=stores[d.storeLoc];if(s)s.sent=(s.sent||0)+(d.litres||0);});
+      const scored=Object.entries(stores).map(([loc,s])=>{
+        const flagRate=s.evaluated>0?s.flags/s.evaluated:0;
+        const roundPct=s.consumed>0?s.round/Math.max(1,s.rates.length):0;
+        const mean=s.rates.length?s.rates.reduce((a,b)=>a+b,0)/s.rates.length:0;
+        const cv=s.rates.length>5&&mean>0?Math.sqrt(s.rates.reduce((a,b)=>a+(b-mean)**2,0)/s.rates.length)/mean:null;
+        const sent=s.sent||0;const supplyGap=sent-s.added;const supplyGapPct=sent>0?supplyGap/sent:0;
+        const gaps=gapsByStore[loc]||{count:0,litres:0};
+        const photoRate=s.recent>0?s.recentPhoto/s.recent:null;
+        // Risk components (transparent weights, cap 100)
+        const cFlag=Math.min(30,Math.round(flagRate*60));
+        const cSupply=sent>0?Math.min(25,Math.round(Math.max(0,supplyGapPct)*50)):0;
+        const cPencil=Math.min(20,(cv!=null&&cv<0.05?12:0)+(roundPct>=0.7?8:roundPct>=0.5?4:0));
+        const cGap=Math.min(15,gaps.count*3);
+        const cPhoto=photoRate!=null?Math.round((1-photoRate)*10):0;
+        const risk=Math.min(100,cFlag+cSupply+cPencil+cGap+cPhoto);
+        return{loc,...s,flagRate,roundPct,cv,sent,supplyGap,gaps,photoRate,risk,parts:{cFlag,cSupply,cPencil,cGap,cPhoto}};
+      }).sort((a,b)=>b.risk-a.risk);
+      const riskColor=(r)=>r>=60?"#DA1E28":r>=30?"#FF832B":"#24A148";
+      const riskLabel=(r)=>r>=60?"High":r>=30?"Medium":"Low";
+      const sel=wtStore?scored.find(s=>s.loc===wtStore):null;
+      const selEvents=sel?[
+        ...dieselReadings.filter(r=>r.storeLoc===sel.loc&&r.discrepancyFlag).map(r=>({date:r.date,gen:genName(r.generatorId),type:"Discrepancy",detail:(r.discrepancyLitres>0?"+":"")+r.discrepancyLitres+" L vs expected"})),
+        ...gapEvents.filter(g=>g.store===sel.loc).map(g=>({date:g.date,gen:genName(g.gen),type:"Overnight loss",detail:g.litres.toFixed(0)+" L missing before opening"})),
+      ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,15):[];
+      const anyEvaluated=scored.some(s=>s.evaluated>0);
+      return(<div>
+        {!anyEvaluated&&<div style={{padding:"12px 16px",borderRadius:10,background:"#FFF8E1",border:"1px solid #FFE082",color:"#F57F17",fontSize:12,fontWeight:500,marginBottom:14,display:"flex",alignItems:"center",gap:8}}><AlertTriangle size={15}/>No readings have been evaluated against baselines yet. Run <code style={{background:"#fff",padding:"1px 6px",borderRadius:4}}>py scripts\backfill_discrepancy_flags.py --apply</code> to score the imported history.</div>}
+        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:14}}>
+          <Kpi icon={Shield} label="Stores Monitored" value={scored.length}/>
+          <Kpi icon={AlertTriangle} label="High Risk" value={scored.filter(s=>s.risk>=60).length} accent="#DA1E28"/>
+          <Kpi icon={TrendingDown} label="Supply Gap" value={scored.reduce((a,s)=>a+Math.max(0,s.supplyGap),0).toLocaleString()+" L"} sub="Sent but never tanked"/>
+          <Kpi icon={Droplet} label="Overnight Losses" value={gapEvents.reduce((a,g)=>a+g.litres,0).toFixed(0)+" L"} sub={gapEvents.length+" events"}/>
+        </div>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden",marginBottom:14}}>
+          <div style={{padding:"14px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}><h4 style={{fontSize:14,fontWeight:700,margin:0,display:"flex",alignItems:"center",gap:6}}><Shield size={16} color={P}/>Store Risk Ranking</h4><div style={{fontSize:11,color:"#8D8D8D"}}>Click a row for details</div></div>
+          <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:860}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Risk","Flagged","Supply Sent","Tanked","Gap (L)","Overnight","Round #s","Rate CV","Photo %"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+          <tbody>{scored.map(s=>(<tr key={s.loc} onClick={()=>setWtStore(wtStore===s.loc?null:s.loc)} style={{cursor:"pointer",background:wtStore===s.loc?"#F8FAFF":s.risk>=60?"#FFF8F8":"",borderBottom:"1px solid #F4F4F4"}}>
+            <td style={{...tc,fontWeight:600}}>{s.loc}</td>
+            <td style={tc}><span style={{padding:"3px 12px",borderRadius:10,fontSize:11,fontWeight:700,background:riskColor(s.risk)+"22",color:riskColor(s.risk)}}>{s.risk} {riskLabel(s.risk)}</span></td>
+            <td style={tc}>{s.evaluated>0?s.flags+"/"+s.evaluated+" ("+Math.round(s.flagRate*100)+"%)":<span style={{color:"#8D8D8D"}}>not evaluated</span>}</td>
+            <td style={tc}>{s.sent?s.sent.toLocaleString()+" L":"-"}</td>
+            <td style={tc}>{s.added?s.added.toLocaleString()+" L":"-"}</td>
+            <td style={{...tc,fontWeight:600,color:s.sent&&s.supplyGap>s.sent*0.1?"#DA1E28":"#161616"}}>{s.sent?(s.supplyGap>0?s.supplyGap.toLocaleString():"0"):"-"}</td>
+            <td style={tc}>{s.gaps.count>0?<span style={{color:"#DA1E28",fontWeight:600}}>{s.gaps.count}x ({s.gaps.litres.toFixed(0)} L)</span>:"-"}</td>
+            <td style={tc}>{s.rates.length?Math.round(s.roundPct*100)+"%":"-"}</td>
+            <td style={tc}>{s.cv!=null?<span style={{color:s.cv<0.05?"#DA1E28":"#161616",fontWeight:s.cv<0.05?700:400}}>{s.cv.toFixed(2)}{s.cv<0.05?" too perfect":""}</span>:"-"}</td>
+            <td style={tc}>{s.photoRate!=null?Math.round(s.photoRate*100)+"%":<span style={{color:"#8D8D8D"}}>no recent</span>}</td>
+          </tr>))}</tbody></table></div>
+        </div>
+        {sel&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+          <div style={{padding:"14px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <h4 style={{fontSize:14,fontWeight:700,margin:0}}>{sel.loc} — risk breakdown</h4>
+            <div style={{fontSize:11,color:"#8D8D8D"}}>Flags {sel.parts.cFlag}/30 · Supply {sel.parts.cSupply}/25 · Pencil-whip {sel.parts.cPencil}/20 · Overnight {sel.parts.cGap}/15 · No-photo {sel.parts.cPhoto}/10</div>
+          </div>
+          {selEvents.length===0?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No individual suspicious events recorded for this store yet.</div>
+          :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#FFF1F1"}}>{["Date","Generator","Type","Detail"].map(h=>(<th key={h} style={{...th,color:"#DA1E28"}}>{h}</th>))}</tr></thead>
+          <tbody>{selEvents.map((e,i)=>(<tr key={i} style={{borderBottom:"1px solid #F4F4F4"}}><td style={tc}>{e.date}</td><td style={tc}>{e.gen}</td><td style={{...tc,fontWeight:600,color:e.type==="Overnight loss"?"#DA1E28":"#FF832B"}}>{e.type}</td><td style={tc}>{e.detail}</td></tr>))}</tbody></table>}
+        </div>}
+      </div>);
+    })()}
     {tab==="purchases"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Litres","Price/L","Total Cost","Distributed","Remaining",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselPurchases.length===0?<tr><td colSpan={8} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No purchases recorded yet</td></tr>:dieselPurchases.map(p=>{const dist=purchaseDistributed(p.id);const rem=p.litres-dist;return(<tr key={p.id}><td style={tc}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}</td><td style={tc}>{p.litres.toLocaleString()} L</td><td style={tc}>{fmt(p.pricePerL)}</td><td style={{...tc,fontWeight:600}}>{fmt(p.litres*p.pricePerL)}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span></td><td style={tc}><div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistPurchaseId(p.id);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
     {tab==="distributions"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","Litres","Source Purchase","Notes","Status","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselDistributions.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No distributions recorded yet</td></tr>:dieselDistributions.map(d=>{const p=dieselPurchases.find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:600}}>{d.storeLoc}</td><td style={{...tc,fontWeight:600,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier+" ("+p.date+")":"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}><div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
     {tab==="stores"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Received (L)","Consumed (L)","Balance (L)","Distributions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{storeStats.length===0?<tr><td colSpan={5} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No store data yet</td></tr>:storeStats.map(s=>(<tr key={s.loc}><td style={{...tc,fontWeight:600}}>{s.loc}</td><td style={{...tc,color:P,fontWeight:600}}>{s.received.toLocaleString()} L</td><td style={tc}>{s.consumed.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:s.balance>=0?"#24A148":"#DA1E28"}}>{s.balance.toLocaleString()} L</span></td><td style={tc}>{s.distCount}</td></tr>))}</tbody></table></div>)}
@@ -1730,7 +1835,7 @@ function FleetProAppInner(){
     </header>
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
-        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage}/>}/>
+        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
         <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines}/>}/>
