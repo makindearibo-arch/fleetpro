@@ -33,7 +33,14 @@ from pathlib import Path
 
 import openpyxl
 
-FILE = Path(r"C:\Users\MakindeAribo\Downloads\DIESEL REPORT TEMPLATE (3).xlsx")
+FILE = Path(r"C:\Users\MakindeAribo\Downloads\DIESEL REPORT TEMPLATE (4).xlsx")
+
+# One-off corrections to purchases already in the DB: (old_date, litres) -> new_date.
+# SHARFA 2,000 L was bought 29 Apr (per STORES SUPPLY col C); the purchase tab had a 29/05 typo.
+DATE_CORRECTIONS = {("2026-05-29", 2000.0): "2026-04-29"}
+
+# Tanker-size litres accepted for UNNAMED col-C purchase rows (only with --include-unnamed)
+TANKER_SIZES = {33000.0, 33980.0, 35000.0}
 
 STORE_MAP = {
     "ADO 1": "Ado 1", "ADO 2": "Ado 2", "ADO 3": "Ado 3", "ADO BAKERY": "Ado Bakery",
@@ -110,6 +117,10 @@ class Supabase:
     def insert(self, table, rows):
         return self._req("POST", table, body=rows, extra_headers={"Prefer": "return=representation"})
 
+    def patch(self, table, id_val, body):
+        return self._req("PATCH", table, params={"id": f"eq.{id_val}"}, body=body,
+                         extra_headers={"Prefer": "return=representation"})
+
 
 def num(v):
     if isinstance(v, (int, float)):
@@ -175,8 +186,18 @@ def parse_purchases_bulk(wb):
 
 
 def parse_stores_supply(wb):
+    """Returns (distributions, unmapped, colc_named, colc_unnamed).
+
+    Col C of STORES SUPPLY is the warehouse's real purchase log, but it is
+    polluted with running totals and block echoes. Rows with a textual
+    supplier in col D are trusted purchases; unnamed rows are returned
+    separately and only imported when they look like standard tanker loads
+    AND the user passes --include-unnamed."""
     ws = wb["STORES SUPPLY"]
+    today = datetime.date.today().isoformat()
     out = []
+    colc_named = []
+    colc_unnamed = []
     last_date = None
     last_supplier = None
     unmapped = {}
@@ -184,9 +205,19 @@ def parse_stores_supply(wb):
         d = parse_date_cell(ws.cell(r, 1).value, last_date)
         if d:
             last_date = d
-        sup = ws.cell(r, 4).value
-        if sup and isinstance(sup, str) and sup.strip():
-            last_supplier = sup.strip()
+        sup_raw = ws.cell(r, 4).value
+        sup_is_name = isinstance(sup_raw, str) and any(ch.isalpha() for ch in sup_raw)
+        if sup_is_name:
+            last_supplier = sup_raw.strip()
+        # Col C: purchases into the warehouse
+        bought = num(ws.cell(r, 3).value)
+        if bought and bought > 0 and last_date:
+            if sup_is_name:
+                colc_named.append({"date": last_date.isoformat(), "supplier": sup_raw.strip(),
+                                   "litres": bought, "price_per_litre": None})
+            elif bought in TANKER_SIZES and last_date.isoformat() <= today:
+                colc_unnamed.append({"date": last_date.isoformat(), "supplier": "UNKNOWN (tanker)",
+                                     "litres": bought, "price_per_litre": None})
         qty = num(ws.cell(r, 5).value)
         store_raw = ws.cell(r, 6).value
         if not qty or qty <= 0 or not store_raw or not last_date:
@@ -200,7 +231,7 @@ def parse_stores_supply(wb):
             continue
         out.append({"date": last_date.isoformat(), "store": mapped, "litres": qty,
                     "supplier": last_supplier, "is_overage": key in OVERAGE_SOURCES, "src": "supply"})
-    return out, unmapped
+    return out, unmapped, colc_named, colc_unnamed
 
 
 def parse_outsourced(wb):
@@ -236,7 +267,7 @@ def parse_outsourced(wb):
     return purchases, dists, unmapped
 
 
-def main(apply_mode):
+def main(apply_mode, include_unnamed):
     load_env_file()
     url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
@@ -248,21 +279,46 @@ def main(apply_mode):
     print("=== PARSING ===")
     bulk = parse_purchases_bulk(wb)
     print(f"  DIESEL PURCHASE: {len(bulk)} rows")
-    supply, un1 = parse_stores_supply(wb)
-    print(f"  STORES SUPPLY:   {len(supply)} distributions")
+    supply, un1, colc_named, colc_unnamed = parse_stores_supply(wb)
+    print(f"  STORES SUPPLY:   {len(supply)} distributions, col-C purchases: {len(colc_named)} named, {len(colc_unnamed)} unnamed tanker-size")
     out_p, out_d, un2 = parse_outsourced(wb)
     print(f"  OUTSOURCED:      {len(out_p)} purchases, {len(out_d)} distributions")
     for label, un in (("STORES SUPPLY", un1), ("OUTSOURCED", un2)):
         for name, cnt in sorted(un.items()):
             print(f"  ! unmapped store in {label}: {name!r} x{cnt} (skipped)")
 
-    # ---- Dedup against DB ----
+    # ---- Date corrections to rows already in the DB ----
     db_purch = sb.select_all("diesel_purchases", "id,date,supplier,litres,price_per_litre")
+    for (old_date, litres), new_date in DATE_CORRECTIONS.items():
+        hit = next((p for p in db_purch if p["date"] == old_date and float(p["litres"]) == litres), None)
+        if hit:
+            print(f"  CORRECTION: {hit['supplier']} {litres:.0f} L  {old_date} -> {new_date}" + ("" if apply_mode else "  (dry run)"))
+            if apply_mode:
+                sb.patch("diesel_purchases", hit["id"], {"date": new_date})
+            hit["date"] = new_date  # in-memory too, so the dedup plan reflects the correction
+
+    # ---- Merge purchase sources ----
+    # Conflict guard: a named col-C row matching an existing purchase on
+    # (date, supplier-prefix) but with DIFFERENT litres is probably the same
+    # event recorded inconsistently between tabs — skip it and warn.
+    existing_ds = {(p["date"], (p.get("supplier") or "").upper()[:5]) for p in db_purch}
+    colc_ok = []
+    for p in colc_named:
+        k = (p["date"], p["supplier"].upper()[:5])
+        if k in existing_ds and (p["date"], float(p["litres"])) not in {(x["date"], float(x["litres"])) for x in db_purch}:
+            print(f"  ! CONFLICT (skipped): col-C {p['date']} {p['supplier']} {p['litres']:.0f} L disagrees with an existing purchase same day/supplier — reconcile manually")
+            continue
+        colc_ok.append(p)
+    if colc_unnamed and not include_unnamed:
+        print(f"\n  UNNAMED tanker-size col-C rows (NOT imported — re-run with --include-unnamed to import as 'UNKNOWN (tanker)'):")
+        for p in sorted(colc_unnamed, key=lambda x: x["date"]):
+            print(f"    {p['date']}  {p['litres']:>7.0f} L")
+
     pkeys = {(p["date"], float(p["litres"])) for p in db_purch}
     db_dist = sb.select_all("diesel_distributions", "date,store_location,litres")
     dkeys = {(x["date"], x["store_location"], float(x["litres"])) for x in db_dist}
 
-    all_purch = bulk + out_p
+    all_purch = bulk + out_p + colc_ok + (colc_unnamed if include_unnamed else [])
     new_purch = []
     seen_p = set(pkeys)
     for p in all_purch:
@@ -338,4 +394,4 @@ def main(apply_mode):
 
 
 if __name__ == "__main__":
-    main("--apply" in sys.argv)
+    main("--apply" in sys.argv, "--include-unnamed" in sys.argv)
