@@ -307,8 +307,10 @@ def main(apply_mode):
 
     print("\n=== WRITING ===")
     if new_purch:
+        # price_per_litre is NOT NULL in the schema — unpriced (outsourced) buys
+        # are stored as 0; app-side averages exclude zero-priced litres.
         payload = [{"date": p["date"], "supplier": p["supplier"], "litres": p["litres"],
-                    "price_per_litre": p["price_per_litre"]} for p in new_purch]
+                    "price_per_litre": p["price_per_litre"] or 0} for p in new_purch]
         ins = sb.insert("diesel_purchases", payload)
         print(f"  + {len(ins)} purchases")
 
