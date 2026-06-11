@@ -287,7 +287,14 @@ def main(apply_mode, include_unnamed):
         for name, cnt in sorted(un.items()):
             print(f"  ! unmapped store in {label}: {name!r} x{cnt} (skipped)")
 
-    # ---- Date corrections to rows already in the DB ----
+    # ---- Date corrections ----
+    # Apply to the PARSED sheet rows too, otherwise the purchase tab's typo'd
+    # row re-imports as a fresh purchase right after we correct the DB one.
+    for plist in (bulk, out_p, colc_named, colc_unnamed):
+        for p in plist:
+            k = (p["date"], float(p["litres"]))
+            if k in DATE_CORRECTIONS:
+                p["date"] = DATE_CORRECTIONS[k]
     db_purch = sb.select_all("diesel_purchases", "id,date,supplier,litres,price_per_litre")
     for (old_date, litres), new_date in DATE_CORRECTIONS.items():
         hit = next((p for p in db_purch if p["date"] == old_date and float(p["litres"]) == litres), None)
