@@ -4,3 +4,4 @@ node_modules
 .env.*.local
 SupabaseCreds.env
 *.env
+__pycache__/
