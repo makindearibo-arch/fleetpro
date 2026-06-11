@@ -143,7 +143,9 @@ def main(apply_mode):
                 total = None
             if total and total > 0:
                 oven = ovens_by_loc.get((store or "").strip().lower())
-                if oven:
+                # gen -> oven only when the source ISN'T the oven itself
+                # (oven-only stores transferring out go somewhere unknown)
+                if oven and oven["id"] != r["generator_id"]:
                     items.append({"dest_type": "oven", "dest_id": oven["id"], "dest_label": oven["name"], "litres": total})
                 else:
                     items.append({"dest_type": "other", "dest_id": None, "dest_label": "Unspecified (from sheet)", "litres": total})
