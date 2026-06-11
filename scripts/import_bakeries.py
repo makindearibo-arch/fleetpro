@@ -62,7 +62,9 @@ FILES = [
     {"file": f"{DL}\\ONDO BAKERY OVEN DIESEL 2026.xlsx", "store": "Ondo Bakery", "asset": "oven",
      "tabs": {"JANUARY  2026": (2026, 1), "feb 2026": (2026, 2), "march 2026": (2026, 3), "APRIL 2026": (2026, 4), "MAY 2026": (2026, 5), "JUNE 2026": (2026, 6)}},
     {"file": f"{DL}\\Generator Daily Diesel Tracker ondo bakery  (1).xlsx", "store": "Ondo Bakery", "asset": "generator",
-     "tabs": {"JAN 2026 DAILY DIESEL TRACKER": (2026, 1), "feb 2026": (2026, 2), "march 2026": (2026, 3), "APRIL 2026": (2026, 4), "MAY 2026": (2026, 5), "JUNE 2026": (2026, 6)}},
+     "tabs": {"JAN 2026 DAILY DIESEL TRACKER": (2026, 1), "feb 2026": (2026, 2), "march 2026": (2026, 3), "APRIL 2026": (2026, 4), "MAY 2026": (2026, 5), "JUNE 2026": (2026, 6)},
+     # JUNE 2026 tab: manager forgot to change the month — dates read 1-May-26... but it IS June data
+     "force_tabs": {"JUNE 2026"}},
 ]
 
 # Column maps RELATIVE to the detected date column (date = 1)
@@ -150,7 +152,11 @@ def find_date_col(ws):
     return None
 
 
-def parse_tab(ws, year, month, asset):
+def parse_tab(ws, year, month, asset, force=False):
+    """force=True: trust the tab's configured month/year over the cell dates
+    (handles tabs where staff forgot to change the month — only the DAY is
+    taken from the cell). Empty rows are dropped before re-dating so a
+    31-day template doesn't break a 30-day month."""
     date_col = find_date_col(ws)
     if date_col is None:
         return [], "no date column found"
@@ -159,12 +165,21 @@ def parse_tab(ws, year, month, asset):
     raw = []
     for r in range(1, ws.max_row + 1):
         d = ws.cell(r, date_col).value
-        if not isinstance(d, datetime.datetime) or d.year != year or d.month != month:
+        if not isinstance(d, datetime.datetime):
             continue
-        rec = {"date": d.date().isoformat()}
+        if not force and (d.year != year or d.month != month):
+            continue
+        rec = {}
         for key, rel in colmap.items():
             v = ws.cell(r, rel + off).value
             rec[key] = (v.strip() if isinstance(v, str) else v) if key == "supplier" else n(v)
+        if force:
+            try:
+                rec["date"] = datetime.date(year, month, d.day).isoformat()
+            except ValueError:
+                continue  # e.g. day 31 in a 30-day month on an empty template row
+        else:
+            rec["date"] = d.date().isoformat()
         raw.append(rec)
     # Keep only real, completed days
     if asset == "oven":
@@ -223,8 +238,10 @@ def main(apply_mode, recalc_mode):
             if tab not in wb.sheetnames:
                 print(f"  ! tab missing: {tab!r}")
                 continue
-            rows, note = parse_tab(wb[tab], yy, mm, cfg["asset"])
-            print(f"  {tab}: {len(rows)} rows{('  [' + note + ']') if note else ''}")
+            forced = tab in cfg.get("force_tabs", set())
+            rows, note = parse_tab(wb[tab], yy, mm, cfg["asset"], force=forced)
+            notes_str = " | ".join(x for x in [note, "re-dated to tab month" if forced else None] if x)
+            print(f"  {tab}: {len(rows)} rows{('  [' + notes_str + ']') if notes_str else ''}")
             all_rows.extend(rows)
         existing = {r["date"] for r in sb.select_all("diesel_readings", "date", filters={"generator_id": f"eq.{asset_row['id']}"})}
         new_rows = [r for r in all_rows if r["date"] not in existing]
