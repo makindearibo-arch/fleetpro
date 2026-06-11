@@ -104,8 +104,15 @@ def main(apply_mode):
     gens = {g["id"]: g for g in sb.select_all("generators", "id,name,loc")}
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
     with_baseline = [gid for gid in gens if baselines.get(gid, {}).get("avg_litres_per_hour")]
+    # Transfers out per (generator, date) — moved diesel is not generator consumption
+    transfers = sb.select_all("diesel_transfers", "date,source_generator_id,litres")
+    tr_map = {}
+    for t in transfers:
+        if t.get("source_generator_id"):
+            k = (t["source_generator_id"], t["date"])
+            tr_map[k] = tr_map.get(k, 0) + (t.get("litres") or 0)
     print(f"=== SETUP ===")
-    print(f"  Generators: {len(gens)}, with learned baseline: {len(with_baseline)}")
+    print(f"  Generators: {len(gens)}, with learned baseline: {len(with_baseline)}, transfers loaded: {len(transfers)}")
 
     total_eval = total_flag = total_change = 0
     updates = []  # (id, litres, flag)
@@ -131,7 +138,8 @@ def main(apply_mode):
             if hrs and hrs > 0 and actual is not None and prev_level is not None:
                 theoretical = hrs * rate
                 if theoretical > 0:
-                    expected = prev_level + added - theoretical
+                    tr = tr_map.get((gid, r["date"]), 0)
+                    expected = prev_level + added - tr - theoretical
                     disc = actual - expected
                     pct = abs(disc) / theoretical * 100
                     flag = pct > threshold

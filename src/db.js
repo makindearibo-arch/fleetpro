@@ -228,6 +228,12 @@ export const db = {
   async addDieselLock(l) { return insertRow('diesel_locks', l); },
   async deleteDieselLock(id) { return deleteRow('diesel_locks', id); },
 
+  // Diesel Transfers (store tank/generator -> vehicle or oven)
+  async getDieselTransfers() { return fetchAll('diesel_transfers', 'date', false); },
+  async addDieselTransfer(t) { return insertRow('diesel_transfers', t); },
+  async updateDieselTransfer(id, t) { return updateRow('diesel_transfers', id, t); },
+  async deleteDieselTransfer(id) { return deleteRow('diesel_transfers', id); },
+
   // NEPA Period Logs (custom date-range NEPA tracking)
   async getNepaPeriodLogs() { return fetchAll('nepa_period_logs', 'from_date', false); },
   async addNepaPeriodLog(n) { return insertRow('nepa_period_logs', n); },
