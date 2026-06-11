@@ -42,6 +42,24 @@ DATE_CORRECTIONS = {("2026-05-29", 2000.0): "2026-04-29"}
 # Tanker-size litres accepted for UNNAMED col-C purchase rows (only with --include-unnamed)
 TANKER_SIZES = {33000.0, 33980.0, 35000.0}
 
+# ============================================================
+# VERIFIED_TANKERS — fill this in as you confirm real purchases.
+#
+# The sheet has unnamed tanker-size rows; some are real purchases, some are
+# echoes of purchases already imported. When you confirm one is REAL (see the
+# balance-jump check in the dry-run instructions), add its date here with the
+# supplier name (use "UNKNOWN" if you don't know who supplied it):
+#
+#   VERIFIED_TANKERS = {
+#       "2025-03-03": "BOVAS",
+#       "2025-05-05": "UNKNOWN",
+#   }
+#
+# Then re-run:  py scripts\import_admin_supply.py --apply
+#               py scripts\relink_purchase_ids.py --apply
+# ============================================================
+VERIFIED_TANKERS = {}
+
 STORE_MAP = {
     "ADO 1": "Ado 1", "ADO 2": "Ado 2", "ADO 3": "Ado 3", "ADO BAKERY": "Ado Bakery",
     "AKUNGBA": "Akungba CR", "AKUNGBA C.R.": "Akungba CR", "AKUNGBA C.R": "Akungba CR", "AKUNGBA CR": "Akungba CR",
@@ -316,8 +334,25 @@ def main(apply_mode, include_unnamed):
             print(f"  ! CONFLICT (skipped): col-C {p['date']} {p['supplier']} {p['litres']:.0f} L disagrees with an existing purchase same day/supplier — reconcile manually")
             continue
         colc_ok.append(p)
+    # Verified unnamed tankers (dates listed in VERIFIED_TANKERS) are imported
+    # with their confirmed supplier; the rest stay out unless --include-unnamed.
+    verified = []
+    still_unnamed = []
+    for p in colc_unnamed:
+        if p["date"] in VERIFIED_TANKERS:
+            p["supplier"] = VERIFIED_TANKERS[p["date"]]
+            verified.append(p)
+        else:
+            still_unnamed.append(p)
+    if verified:
+        print(f"\n  VERIFIED tankers to import ({len(verified)}):")
+        for p in sorted(verified, key=lambda x: x["date"]):
+            print(f"    {p['date']}  {p['litres']:>7.0f} L  {p['supplier']}")
+    colc_ok = colc_ok + verified
+    colc_unnamed = still_unnamed
     if colc_unnamed and not include_unnamed:
-        print(f"\n  UNNAMED tanker-size col-C rows (NOT imported — re-run with --include-unnamed to import as 'UNKNOWN (tanker)'):")
+        print(f"\n  UNNAMED tanker-size rows NOT imported ({len(colc_unnamed)}) — verify each (does the sheet's warehouse balance jump that day?),")
+        print(f"  then add real ones to VERIFIED_TANKERS at the top of this script:")
         for p in sorted(colc_unnamed, key=lambda x: x["date"]):
             print(f"    {p['date']}  {p['litres']:>7.0f} L")
 
