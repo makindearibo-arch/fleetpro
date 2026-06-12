@@ -58,7 +58,24 @@ TANKER_SIZES = {33000.0, 33980.0, 35000.0}
 # Then re-run:  py scripts\import_admin_supply.py --apply
 #               py scripts\relink_purchase_ids.py --apply
 # ============================================================
-VERIFIED_TANKERS = {}
+VERIFIED_TANKERS = {
+    # Verified 2026-06-11 with owner: balance-jump confirmed, suppliers per owner.
+    # (Jun 26 was reported as "June 24 - Registrar"; Jun 26 is the sheet's tanker date.)
+    "2025-03-03": "BOVAS",
+    "2025-03-21": "BOVAS",
+    "2025-04-17": "BOVAS",
+    "2025-05-05": "BOVAS",
+    "2025-06-02": "BOVAS",
+    "2025-06-26": "REGISTRAR",
+    "2025-07-28": "BOVAS",
+    "2025-09-01": "BOVAS",
+    # NOT included (recaps of purchases already imported): Jul 31 + Sep 24 +
+    # Oct 9 + Dec 2 + Dec 19 2025; Jan 8 + Jan 20 + Jan 27 + Feb 11 + Feb 20 +
+    # Apr 1 (the Mar 16 CONOIL) + Apr 28 2026.
+}
+
+# Purchases to DELETE from the DB (confirmed test/junk rows): (date, litres)
+DELETE_PURCHASES = [("2026-04-23", 33000.0)]
 
 STORE_MAP = {
     "ADO 1": "Ado 1", "ADO 2": "Ado 2", "ADO 3": "Ado 3", "ADO BAKERY": "Ado Bakery",
@@ -304,6 +321,17 @@ def main(apply_mode, include_unnamed):
     for label, un in (("STORES SUPPLY", un1), ("OUTSOURCED", un2)):
         for name, cnt in sorted(un.items()):
             print(f"  ! unmapped store in {label}: {name!r} x{cnt} (skipped)")
+
+    # ---- Confirmed junk purchases: unlink their distributions, then delete ----
+    db_purch_pre = sb.select_all("diesel_purchases", "id,date,supplier,litres")
+    for (del_date, del_litres) in DELETE_PURCHASES:
+        hit = next((p for p in db_purch_pre if p["date"] == del_date and float(p["litres"]) == del_litres), None)
+        if hit:
+            print(f"  DELETE: {hit['date']} {hit['supplier']} {del_litres:.0f} L (test row)" + ("" if apply_mode else "  (dry run)"))
+            if apply_mode:
+                sb._req("PATCH", "diesel_distributions", params={"purchase_id": f"eq.{hit['id']}"},
+                        body={"purchase_id": None}, extra_headers={"Prefer": "return=minimal"})
+                sb._req("DELETE", "diesel_purchases", params={"id": f"eq.{hit['id']}"})
 
     # ---- Date corrections ----
     # Apply to the PARSED sheet rows too, otherwise the purchase tab's typo'd
