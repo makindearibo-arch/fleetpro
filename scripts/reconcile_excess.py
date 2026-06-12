@@ -36,7 +36,8 @@ from pathlib import Path
 import openpyxl
 
 FILE = Path(r"C:\Users\MakindeAribo\Downloads\DIESEL REPORT TEMPLATE (4).xlsx")
-BIG = 30000  # litres at/above which a purchase counts as a bulk tanker
+BIG = 30000   # litres at/above which a purchase counts as a bulk tanker
+SIZE_TOL = 1500  # a "bulk of 33,000" note may match a 33,980 tanker, but not the 35,356 STEM one
 
 
 def load_env_file():
@@ -183,7 +184,7 @@ def main(apply_mode):
             continue
         nd = datetime.date.fromisoformat(pr["bulk_date"])
         for p in purchases:
-            if abs(float(p["litres"]) - pr["bulk_size"]) < 1:
+            if abs(float(p["litres"]) - pr["bulk_size"]) < SIZE_TOL:
                 dist = abs((datetime.date.fromisoformat(p["date"]) - nd).days)
                 pairs.append((dist, i, p["id"]))
     pairs.sort(key=lambda x: x[0])
@@ -211,8 +212,8 @@ def main(apply_mode):
             for b in range(a + 1, len(idxs)):
                 ia, ib = idxs[a], idxs[b]
                 pa, pb = pid_by_idx[ia], pid_by_idx[ib]
-                size_ok = (abs(float(pmap[pb]["litres"]) - pairings[ia]["bulk_size"]) < 1
-                           and abs(float(pmap[pa]["litres"]) - pairings[ib]["bulk_size"]) < 1)
+                size_ok = (abs(float(pmap[pb]["litres"]) - pairings[ia]["bulk_size"]) < SIZE_TOL
+                           and abs(float(pmap[pa]["litres"]) - pairings[ib]["bulk_size"]) < SIZE_TOL)
                 if size_ok and ddist(ia, pa) + ddist(ib, pb) > ddist(ia, pb) + ddist(ib, pa):
                     pid_by_idx[ia], pid_by_idx[ib] = pb, pa
                     improved = True
