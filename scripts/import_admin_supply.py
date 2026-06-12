@@ -75,7 +75,20 @@ VERIFIED_TANKERS = {
 }
 
 # Purchases to DELETE from the DB (confirmed test/junk rows): (date, litres)
-DELETE_PURCHASES = [("2026-04-23", 33000.0)]
+DELETE_PURCHASES = [
+    ("2026-04-23", 33000.0),   # owner-confirmed test entry
+    # OUTSOURCED tab recap rows imported as purchases (verified: each equals
+    # the sum of that period's individual buys — phantom inflow, 87,000 L):
+    ("2025-02-28", 36000.0),   # Jan-Feb grand total
+    ("2025-02-28", 16000.0),   # AKINOLA Jan-Feb total
+    ("2025-02-28", 4000.0),    # KENNY BETTY Jan-Feb total
+    ("2025-03-31", 2500.0),    # AKINOLA March total
+    ("2025-04-02", 10000.0),   # AKINOLA late-Mar/Apr total
+    ("2025-04-20", 2500.0),    # AKINOLA mid-Apr total
+    ("2025-05-18", 2500.0),    # AKINOLA mid-May total
+    ("2025-05-30", 10000.0),   # May total
+    ("2025-06-15", 3500.0),    # June total
+]
 
 STORE_MAP = {
     "ADO 1": "Ado 1", "ADO 2": "Ado 2", "ADO 3": "Ado 3", "ADO BAKERY": "Ado Bakery",
@@ -286,7 +299,10 @@ def parse_outsourced(wb):
         bought = num(ws.cell(r, 3).value)
         qty = num(ws.cell(r, 4).value)
         store_raw = ws.cell(r, 5).value
-        if bought and bought > 0 and last_date and last_supplier:
+        # A real outsourced purchase is delivered direct: its row carries the
+        # store too. Block-recap rows (per-supplier/period totals) have no
+        # store on the row — skip them or they import as phantom inflow.
+        if bought and bought > 0 and last_date and last_supplier and store_raw:
             purchases.append({"date": last_date.isoformat(), "supplier": last_supplier,
                               "litres": bought, "price_per_litre": None})
         if qty and qty > 0 and store_raw and last_date:
