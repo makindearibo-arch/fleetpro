@@ -172,30 +172,40 @@ def main(apply_mode):
     print(f"Excess notes found (with amount): {len(pairings)}\n")
 
     purchases = sb.select_all("diesel_purchases", "id,date,supplier,litres,litres_received")
-    used = set()  # purchase ids already matched, so two notes don't grab the same tanker
 
+    # Global nearest matching: build every valid (note, tanker) pair with its
+    # date distance, then assign greedily smallest-distance first so each note
+    # and each tanker is used once. Minimises total drift and avoids a
+    # date-ordered pass parking excess on note-less tankers.
+    pairs = []
+    for i, pr in enumerate(pairings):
+        if not pr["bulk_date"]:
+            continue
+        nd = datetime.date.fromisoformat(pr["bulk_date"])
+        for p in purchases:
+            if abs(float(p["litres"]) - pr["bulk_size"]) < 1:
+                dist = abs((datetime.date.fromisoformat(p["date"]) - nd).days)
+                pairs.append((dist, i, p["id"]))
+    pairs.sort(key=lambda x: x[0])
+    pid_by_idx = {}
+    used = set()
+    for dist, i, pid in pairs:
+        if i in pid_by_idx or pid in used:
+            continue
+        pid_by_idx[i] = pid
+        used.add(pid)
+
+    pmap = {p["id"]: p for p in purchases}
     print(f"{'note@row':<9} {'bulk date':<12} {'bulk':>7} {'excess':>7}  -> matched purchase")
     updates = []
     unmatched = []
-    for pr in sorted(pairings, key=lambda x: x["bulk_date"] or ""):
-        # candidates: same litres as the bulk, not already used
-        cands = [p for p in purchases if abs(float(p["litres"]) - pr["bulk_size"]) < 1 and p["id"] not in used]
-        if not cands:
+    for i, pr in enumerate(pairings):
+        pid = pid_by_idx.get(i)
+        if not pid:
             unmatched.append(pr)
             print(f"R{pr['row']:<7} {pr['bulk_date'] or '?':<12} {pr['bulk_size']:>7.0f} {pr['excess']:>7.0f}  -> (no unused {pr['bulk_size']:.0f} L purchase)")
             continue
-        # A note describes the bulk that was just distributed, so it was bought
-        # on/before the note. Prefer the LATEST unused tanker on-or-before the
-        # note date; only if none exists fall back to the earliest one after.
-        if pr["bulk_date"]:
-            nd = datetime.date.fromisoformat(pr["bulk_date"])
-            before = sorted([p for p in cands if datetime.date.fromisoformat(p["date"]) <= nd],
-                            key=lambda p: p["date"], reverse=True)
-            after = sorted([p for p in cands if datetime.date.fromisoformat(p["date"]) > nd],
-                           key=lambda p: p["date"])
-            cands = before + after
-        chosen = cands[0]
-        used.add(chosen["id"])
+        chosen = pmap[pid]
         new_recv = float(chosen["litres"]) + pr["excess"]
         updates.append((chosen["id"], new_recv, chosen))
         print(f"R{pr['row']:<7} {pr['bulk_date'] or '?':<12} {pr['bulk_size']:>7.0f} {pr['excess']:>7.0f}  -> {chosen['date']} {chosen['supplier']} (recv {new_recv:.0f})")
