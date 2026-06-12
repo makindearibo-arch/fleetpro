@@ -174,7 +174,8 @@ def main(apply_mode):
         rec = num(ws.cell(r, 3).value)
         sup = ws.cell(r, 4).value
         price = num(ws.cell(r, 6).value)
-        if rec and rec > 0 and isinstance(sup, str) and any(c.isalpha() for c in sup):
+        if rec and rec > 0 and isinstance(sup, str) and any(c.isalpha() for c in sup) \
+                and sup.strip().upper() not in {"NIL", "N/A", "-"}:
             purchases.append({"date": last.isoformat(), "supplier": sup.strip(),
                               "litres": rec, "price_per_litre": price})
         # Distribution columns: DISTRIBUTION(8) STORE SUPPLIED(9)
@@ -201,13 +202,23 @@ def main(apply_mode):
     dkeys = {(x["date"], x["store_location"], float(x["litres"])) for x in db_d}
     d_dstore = {(x["date"], x["store_location"]) for x in db_d}
 
+    # Fuzzy supplier match: "MRS AKINOLA" and "AKINOLA" are the same vendor
+    def norm_sup(s):
+        return "".join(c for c in (s or "").upper() if c.isalnum())
+
+    db_day_sups = {}
+    for p in db_p:
+        db_day_sups.setdefault(p["date"], []).append(norm_sup(p.get("supplier")))
+
     new_p = []
     seen = set(pkeys)
     for p in purchases:
         k = (p["date"], float(p["litres"]))
         if k in seen:
             continue
-        if (p["date"], p["supplier"].upper()[:5]) in p_ds:
+        ns = norm_sup(p["supplier"])
+        clash = any(ns and e and (ns in e or e in ns) for e in db_day_sups.get(p["date"], []))
+        if clash:
             print(f"  ! purchase conflict (skipped): {p['date']} {p['supplier']} {p['litres']:.0f} L — same day/supplier exists with different litres")
             continue
         seen.add(k)
