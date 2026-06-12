@@ -184,8 +184,16 @@ def main(apply_mode):
             unmatched.append(pr)
             print(f"R{pr['row']:<7} {pr['bulk_date'] or '?':<12} {pr['bulk_size']:>7.0f} {pr['excess']:>7.0f}  -> (no unused {pr['bulk_size']:.0f} L purchase)")
             continue
+        # A note describes the bulk that was just distributed, so it was bought
+        # on/before the note. Prefer the LATEST unused tanker on-or-before the
+        # note date; only if none exists fall back to the earliest one after.
         if pr["bulk_date"]:
-            cands.sort(key=lambda p: abs((datetime.date.fromisoformat(p["date"]) - datetime.date.fromisoformat(pr["bulk_date"])).days))
+            nd = datetime.date.fromisoformat(pr["bulk_date"])
+            before = sorted([p for p in cands if datetime.date.fromisoformat(p["date"]) <= nd],
+                            key=lambda p: p["date"], reverse=True)
+            after = sorted([p for p in cands if datetime.date.fromisoformat(p["date"]) > nd],
+                           key=lambda p: p["date"])
+            cands = before + after
         chosen = cands[0]
         used.add(chosen["id"])
         new_recv = float(chosen["litres"]) + pr["excess"]
