@@ -93,7 +93,8 @@ def main(apply_mode):
         sys.exit(1)
     sb = Supabase(url, key)
 
-    purchases = sorted(sb.select_all("diesel_purchases", "id,date,supplier,litres,litres_received"),
+    purchases = sorted([p for p in sb.select_all("diesel_purchases", "id,date,supplier,litres,litres_received")
+                        if (p.get("supplier") or "") != "STOCK RECONCILIATION"],  # adjustments aren't diesel sources
                        key=lambda p: p["date"])
     dists = sorted(sb.select_all("diesel_distributions", "id,date,store_location,litres,notes,purchase_id"),
                    key=lambda d: d["date"])

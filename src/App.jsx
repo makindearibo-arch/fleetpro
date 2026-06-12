@@ -1705,6 +1705,23 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [df,setDf]=useState({date:today,storeLoc:"",litres:"",notes:""});
   const [editDist,setEditDist]=useState(null);
   const [editPurchase,setEditPurchase]=useState(null);
+  const [showReconcile,setShowReconcile]=useState(false);
+  const [reconcileForm,setReconcileForm]=useState({date:today,count:""});
+  const handleReconcile=async()=>{
+    const count=parseFloat(reconcileForm.count);
+    if(isNaN(count)||count<0){setMsg("Error: enter the physical count in litres.");return;}
+    setSaving(true);setMsg("");
+    try{
+      // adjustment so that (existing stock) + adj = physical count
+      const curStock=stockInHand;
+      const adj=count-curStock;
+      const row=await db.addDieselPurchase({date:reconcileForm.date,supplier:"STOCK RECONCILIATION",litres:adj,litres_received:adj,price_per_litre:0,notes:`Physical stock take: ${count.toLocaleString()} L on ${reconcileForm.date} (adjustment ${adj>=0?"+":""}${adj.toLocaleString()} L)`,purchased_by:user.uid});
+      setDieselPurchases([toDP(row),...dieselPurchases]);
+      setShowReconcile(false);setReconcileForm({date:today,count:""});
+      setMsg(`Stock reconciled to ${count.toLocaleString()} L.`);setTimeout(()=>setMsg(""),4000);
+    }catch(e){setMsg("Error: "+e.message);}
+    setSaving(false);
+  };
   const handleEditPurchase=async()=>{
     if(!editPurchase)return;setSaving(true);setMsg("");
     try{
@@ -1725,15 +1742,21 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [cmpMonth,setCmpMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}); // Compliance calendar month
   // Paid = invoice quantity (drives cost). Received = actual litres that came
   // out of the tanker (drives physical stock). Excess = received - paid (free).
+  // Reconciliation rows (supplier marker) are opening-balance adjustments from
+  // a physical stock take — they move stock but are NOT real purchases.
+  const ADJ_SUPPLIER="STOCK RECONCILIATION";
+  const isAdj=(p)=>(p.supplier||"")===ADJ_SUPPLIER;
   const receivedOf=(p)=>p.litresReceived!=null?p.litresReceived:p.litres;
-  const totalPurchased=dieselPurchases.reduce((s,p)=>s+p.litres,0);   // paid
-  const totalReceived=dieselPurchases.reduce((s,p)=>s+receivedOf(p),0);
-  const totalSpent=dieselPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
+  const realPurchases=dieselPurchases.filter(p=>!isAdj(p));
+  const totalPurchased=realPurchases.reduce((s,p)=>s+p.litres,0);   // paid (real tankers only)
+  const totalReceivedReal=realPurchases.reduce((s,p)=>s+receivedOf(p),0);
+  const adjTotal=dieselPurchases.filter(isAdj).reduce((s,p)=>s+receivedOf(p),0);
+  const totalSpent=realPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
   const totalDistributed=dieselDistributions.reduce((s,d)=>s+d.litres,0);
-  const totalExcess=totalReceived-totalPurchased;              // free diesel gained
-  const stockInHand=totalReceived-totalDistributed;            // physical balance
+  const totalExcess=totalReceivedReal-totalPurchased;          // free diesel gained (real tankers)
+  const stockInHand=totalReceivedReal+adjTotal-totalDistributed;  // physical balance incl. reconciliation
   const excessPct=totalPurchased>0&&stockInHand<0?Math.abs(stockInHand)/totalPurchased*100:0;
-  const pricedLitres=dieselPurchases.filter(p=>(p.pricePerL||0)>0).reduce((s,p)=>s+p.litres,0);
+  const pricedLitres=realPurchases.filter(p=>(p.pricePerL||0)>0).reduce((s,p)=>s+p.litres,0);
   const avgPrice=pricedLitres>0?(totalSpent/pricedLitres):0;
   const purchaseDistributed=(pid)=>dieselDistributions.filter(d=>d.purchaseId===pid).reduce((s,d)=>s+d.litres,0);
   const purchaseRemaining=(p)=>receivedOf(p)-purchaseDistributed(p.id);  // physical capacity = received
@@ -1805,7 +1828,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       {tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 18px",borderRadius:8,border:tab===t?"1.5px solid "+P:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}
       <div style={{flex:1}}/>
       {!scopeStore&&<><button onClick={()=>setShowAddPurchase(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={14}/>Log Purchase</button>
-      <button onClick={()=>{setDistPurchaseId(null);setShowDistribute(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><Send size={14}/>Distribute</button></>}
+      <button onClick={()=>{setDistPurchaseId(null);setShowDistribute(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><Send size={14}/>Distribute</button>
+      {user?.role==="Super Admin"&&<button onClick={()=>{setReconcileForm({date:today,count:""});setShowReconcile(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,border:"1.5px solid #FF832B",background:"#FFF4EC",color:"#FF832B",fontSize:12,fontWeight:600,cursor:"pointer"}}><Package size={14}/>Reconcile Stock</button>}</>}
     </div>
     {tab==="overview"&&(<div style={{display:"grid",gridTemplateColumns:isMob()?"1fr":"1fr 1fr",gap:16}}>
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18}}>
@@ -1985,7 +2009,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         </div>
       </div>);
     })()}
-    {tab==="purchases"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:880}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Paid (L)","Received (L)","Excess","Price/L","Total Cost","Distributed","Remaining",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>{dieselPurchases.length===0?<tr><td colSpan={10} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No purchases recorded yet</td></tr>:dieselPurchases.map(p=>{const dist=purchaseDistributed(p.id);const recv=receivedOf(p);const rem=recv-dist;const exc=recv-p.litres;return(<tr key={p.id}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}</td><td style={tc}>{p.litres.toLocaleString()}</td><td style={tc}>{p.litresReceived!=null?recv.toLocaleString():<span style={{color:"#8D8D8D"}}>{recv.toLocaleString()}</span>}</td><td style={tc}>{exc>0?<span style={{color:"#24A148",fontWeight:600}}>+{exc.toLocaleString()}</span>:exc<0?<span style={{color:"#DA1E28",fontWeight:600}}>{exc.toLocaleString()}</span>:"—"}</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span></td><td style={tc}><div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistPurchaseId(p.id);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),litresReceived:p.litresReceived!=null?String(p.litresReceived):"",pricePerL:p.pricePerL?String(p.pricePerL):""})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
+    {tab==="purchases"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:880}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Paid (L)","Received (L)","Excess","Price/L","Total Cost","Distributed","Remaining",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>{dieselPurchases.length===0?<tr><td colSpan={10} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No purchases recorded yet</td></tr>:dieselPurchases.map(p=>{const adj=isAdj(p);const dist=purchaseDistributed(p.id);const recv=receivedOf(p);const rem=recv-dist;const exc=recv-p.litres;
+      if(adj)return(<tr key={p.id} style={{background:"#FFF8F0"}}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}><span style={{display:"inline-flex",alignItems:"center",gap:6}}>Stock reconciliation<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:"#FFE8D6",color:"#FF832B"}}>ADJUSTMENT</span></span></td><td style={{...tc,color:"#8D8D8D"}} colSpan={4}>{p.notes||"Physical stock take baseline"}</td><td style={tc}>—</td><td style={{...tc,fontWeight:600,color:p.litres>=0?"#24A148":"#DA1E28"}}>{p.litres>=0?"+":""}{p.litres.toLocaleString()} L</td><td style={tc}>—</td><td style={tc}><button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></td></tr>);
+      return(<tr key={p.id}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}</td><td style={tc}>{p.litres.toLocaleString()}</td><td style={tc}>{p.litresReceived!=null?recv.toLocaleString():<span style={{color:"#8D8D8D"}}>{recv.toLocaleString()}</span>}</td><td style={tc}>{exc>0?<span style={{color:"#24A148",fontWeight:600}}>+{exc.toLocaleString()}</span>:exc<0?<span style={{color:"#DA1E28",fontWeight:600}}>{exc.toLocaleString()}</span>:"—"}</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span></td><td style={tc}><div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistPurchaseId(p.id);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),litresReceived:p.litresReceived!=null?String(p.litresReceived):"",pricePerL:p.pricePerL?String(p.pricePerL):""})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
     {tab==="distributions"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","Litres","Source Purchase","Notes","Status","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselDistributions.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No distributions recorded yet</td></tr>:dieselDistributions.map(d=>{const p=dieselPurchases.find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:600}}>{d.storeLoc}</td><td style={{...tc,fontWeight:600,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier+" ("+p.date+")":"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}><div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
     {tab==="stores"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Received (L)","Consumed (L)","Balance (L)","Distributions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{storeStats.length===0?<tr><td colSpan={5} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No store data yet</td></tr>:storeStats.map(s=>(<tr key={s.loc}><td style={{...tc,fontWeight:600}}>{s.loc}</td><td style={{...tc,color:P,fontWeight:600}}>{s.received.toLocaleString()} L</td><td style={tc}>{s.consumed.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:s.balance>=0?"#24A148":"#DA1E28"}}>{s.balance.toLocaleString()} L</span></td><td style={tc}>{s.distCount}</td></tr>))}</tbody></table></div>)}
     {tab==="baselines"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
@@ -2099,6 +2125,18 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         </div>
       </div>);
     })()}
+        {showReconcile&&(<Modal title="Reconcile Stock" onClose={()=>{setShowReconcile(false);setMsg("");}}>
+      <div style={{padding:"12px 14px",borderRadius:8,background:"#F4F4F4",marginBottom:14,fontSize:12,color:"#525252"}}>Do a physical count of diesel actually in the warehouse, enter it below, and the app books a one-time adjustment so Stock in Hand matches reality. All history stays — you just set a clean baseline.</div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",marginBottom:6,borderBottom:"1px solid #F4F4F4"}}><span style={{fontSize:12,color:"#8D8D8D"}}>App currently shows</span><span style={{fontSize:13,fontWeight:700,color:stockInHand<0?"#DA1E28":"#161616"}}>{stockInHand.toLocaleString()} L</span></div>
+      <Field label="Physical count today (L) *"><input style={{...inp,fontSize:18,fontWeight:700}} type="number" placeholder="e.g. 18615" value={reconcileForm.count} onChange={e=>setReconcileForm({...reconcileForm,count:e.target.value})}/></Field>
+      <Field label="Date *"><input style={inp} type="date" value={reconcileForm.date} onChange={e=>setReconcileForm({...reconcileForm,date:e.target.value})}/></Field>
+      {reconcileForm.count!==""&&!isNaN(parseFloat(reconcileForm.count))&&(()=>{const adj=parseFloat(reconcileForm.count)-stockInHand;return(<div style={{padding:"10px 14px",borderRadius:8,background:adj>=0?"#E8F5E9":"#FFF1F1",marginBottom:12}}><div style={{fontSize:11,fontWeight:600,color:adj>=0?"#24A148":"#DA1E28"}}>Adjustment booked</div><div style={{fontSize:18,fontWeight:700,color:adj>=0?"#24A148":"#DA1E28"}}>{adj>=0?"+":""}{adj.toLocaleString()} L</div><div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Stock in Hand will read {parseFloat(reconcileForm.count).toLocaleString()} L</div></div>);})()}
+      {msg&&<div style={{padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12,marginBottom:10}}>{msg}</div>}
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button onClick={()=>{setShowReconcile(false);setMsg("");}} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+        <button onClick={handleReconcile} disabled={saving||reconcileForm.count===""} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 20px",borderRadius:8,border:"none",background:(reconcileForm.count!==""&&!saving)?"#FF832B":"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(reconcileForm.count!==""&&!saving)?"pointer":"not-allowed"}}><Save size={14}/>{saving?"Saving...":"Reconcile"}</button>
+      </div>
+    </Modal>)}
         {editPurchase&&(<Modal title="Edit Purchase" onClose={()=>{setEditPurchase(null);setMsg("");}}>
       <Field label="Date *"><input style={inp} type="date" value={editPurchase.date} onChange={e=>setEditPurchase({...editPurchase,date:e.target.value})}/></Field>
       <Field label="Supplier *"><input style={inp} value={editPurchase.supplier} onChange={e=>setEditPurchase({...editPurchase,supplier:e.target.value})}/></Field>
