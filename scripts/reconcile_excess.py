@@ -196,6 +196,26 @@ def main(apply_mode):
         used.add(pid)
 
     pmap = {p["id"]: p for p in purchases}
+
+    # 2-opt: greedy can strand a note on a far tanker (a closer note grabbed its
+    # match first). Swap any two assignments when it shortens total date
+    # distance and both tanker sizes still fit both notes.
+    def ddist(i, pid):
+        nd = datetime.date.fromisoformat(pairings[i]["bulk_date"])
+        return abs((datetime.date.fromisoformat(pmap[pid]["date"]) - nd).days)
+    idxs = list(pid_by_idx.keys())
+    improved = True
+    while improved:
+        improved = False
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                ia, ib = idxs[a], idxs[b]
+                pa, pb = pid_by_idx[ia], pid_by_idx[ib]
+                size_ok = (abs(float(pmap[pb]["litres"]) - pairings[ia]["bulk_size"]) < 1
+                           and abs(float(pmap[pa]["litres"]) - pairings[ib]["bulk_size"]) < 1)
+                if size_ok and ddist(ia, pa) + ddist(ib, pb) > ddist(ia, pb) + ddist(ib, pa):
+                    pid_by_idx[ia], pid_by_idx[ib] = pb, pa
+                    improved = True
     print(f"{'note@row':<9} {'bulk date':<12} {'bulk':>7} {'excess':>7}  -> matched purchase")
     updates = []
     unmatched = []
