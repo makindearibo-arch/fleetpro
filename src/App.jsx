@@ -1727,6 +1727,11 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const totalSpent=dieselPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
   const totalDistributed=dieselDistributions.reduce((s,d)=>s+d.litres,0);
   const stockInHand=totalPurchased-totalDistributed;
+  // Diesel routinely measures out slightly MORE than the paid bulk quantity
+  // ("excess gain"), so distributed > purchased is expected & favorable up to
+  // a few %. Only a large gap suggests missing purchase records.
+  const excessReceived=totalDistributed>totalPurchased?totalDistributed-totalPurchased:0;
+  const excessPct=totalPurchased>0?excessReceived/totalPurchased*100:0;
   const pricedLitres=dieselPurchases.filter(p=>(p.pricePerL||0)>0).reduce((s,p)=>s+p.litres,0);
   const avgPrice=pricedLitres>0?(totalSpent/pricedLitres):0;
   const purchaseDistributed=(pid)=>dieselDistributions.filter(d=>d.purchaseId===pid).reduce((s,d)=>s+d.litres,0);
@@ -1791,7 +1796,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       </>:<>
         <Kpi icon={ShoppingCart} label="Total Purchased" value={totalPurchased.toLocaleString()+" L"} sub={"\u20A6"+totalSpent.toLocaleString()}/>
         <Kpi icon={Send} label="Total Distributed" value={totalDistributed.toLocaleString()+" L"} sub={"to "+new Set(dieselDistributions.map(d=>d.storeLoc)).size+" stores"}/>
-        <Kpi icon={Package} label="Stock in Hand" value={stockInHand.toLocaleString()+" L"} sub={stockInHand<0?"Overspent!":"Available"} accent={stockInHand<0?"#DA1E28":undefined}/>
+        <Kpi icon={Package} label={stockInHand<0?"Excess Received":"Stock in Hand"} value={(stockInHand<0?"+"+excessReceived.toLocaleString():stockInHand.toLocaleString())+" L"} sub={stockInHand>=0?"Available":excessPct<=5?`~${excessPct.toFixed(1)}% measurement gain (normal)`:`Review: ${excessPct.toFixed(1)}% over purchased — check records`} accent={stockInHand>=0?undefined:excessPct<=5?"#24A148":"#FF832B"}/>
         <Kpi icon={DollarSign} label="Avg Price/Litre" value={avgPrice?fmt(Math.round(avgPrice)):"-"} sub={dieselPurchases.length+" purchases"}/>
       </>}
     </div>
