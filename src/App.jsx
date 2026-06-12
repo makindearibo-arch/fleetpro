@@ -30,8 +30,8 @@ const fromDT=(d)=>({date:d.date,store_location:d.storeLoc,source_generator_id:d.
 const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate:r.to_date,totalHours:Number(r.total_hours)||0,meterOpening:r.meter_opening!=null?Number(r.meter_opening):null,meterClosing:r.meter_closing!=null?Number(r.meter_closing):null,photoUrl:r.photo_url||"",notes:r.notes||"",submittedBy:r.submitted_by,createdAt:r.created_at});
 const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
 const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
-const toDP=(r)=>({id:r.id,date:r.date,supplier:r.supplier,litres:Number(r.litres)||0,pricePerL:Number(r.price_per_litre)||0,totalCost:Number(r.total_cost)||0,notes:r.notes,purchasedBy:r.purchased_by,createdAt:r.created_at});
-const fromDP=(p)=>({date:p.date,supplier:p.supplier,litres:p.litres,price_per_litre:p.pricePerL,notes:p.notes||"",purchased_by:p.purchasedBy});
+const toDP=(r)=>({id:r.id,date:r.date,supplier:r.supplier,litres:Number(r.litres)||0,litresReceived:r.litres_received!=null?Number(r.litres_received):null,pricePerL:Number(r.price_per_litre)||0,totalCost:Number(r.total_cost)||0,notes:r.notes,purchasedBy:r.purchased_by,createdAt:r.created_at});
+const fromDP=(p)=>({date:p.date,supplier:p.supplier,litres:p.litres,litres_received:p.litresReceived??null,price_per_litre:p.pricePerL,notes:p.notes||"",purchased_by:p.purchasedBy});
 const toDD=(r)=>({id:r.id,purchaseId:r.purchase_id,date:r.date,storeLoc:r.store_location,litres:Number(r.litres)||0,confirmed:r.received_confirmed,receivedDate:r.received_date,receivedBy:r.received_by,notes:r.notes,distributedBy:r.distributed_by,createdAt:r.created_at});
 const fromDD2=(d)=>({purchase_id:d.purchaseId||null,date:d.date,store_location:d.storeLoc,litres:d.litres,received_confirmed:d.confirmed||false,notes:d.notes||"",distributed_by:d.distributedBy});
 const fmt=v=>"\u20A6"+Number(v).toLocaleString();
@@ -1701,14 +1701,14 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState("");
   const today=new Date().toISOString().split("T")[0];
-  const [pf,setPf]=useState({date:today,supplier:"",litres:"",pricePerL:"",notes:""});
+  const [pf,setPf]=useState({date:today,supplier:"",litres:"",litresReceived:"",pricePerL:"",notes:""});
   const [df,setDf]=useState({date:today,storeLoc:"",litres:"",notes:""});
   const [editDist,setEditDist]=useState(null);
   const [editPurchase,setEditPurchase]=useState(null);
   const handleEditPurchase=async()=>{
     if(!editPurchase)return;setSaving(true);setMsg("");
     try{
-      const row=await db.updateDieselPurchase(editPurchase.id,{date:editPurchase.date,supplier:editPurchase.supplier,litres:parseFloat(editPurchase.litres)||0,price_per_litre:parseFloat(editPurchase.pricePerL)||0});
+      const row=await db.updateDieselPurchase(editPurchase.id,{date:editPurchase.date,supplier:editPurchase.supplier,litres:parseFloat(editPurchase.litres)||0,litres_received:editPurchase.litresReceived!==""&&editPurchase.litresReceived!=null?parseFloat(editPurchase.litresReceived):null,price_per_litre:parseFloat(editPurchase.pricePerL)||0});
       setDieselPurchases(dieselPurchases.map(p=>p.id===editPurchase.id?toDP(row):p));
       setEditPurchase(null);setMsg("Purchase updated!");setTimeout(()=>setMsg(""),3000);
     }catch(e){setMsg("Error: "+e.message);}
@@ -1723,19 +1723,20 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdPageSize,setRdPageSize]=useState(25);
   const [wtStore,setWtStore]=useState(null); // Watchtower drill-down store
   const [cmpMonth,setCmpMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}); // Compliance calendar month
-  const totalPurchased=dieselPurchases.reduce((s,p)=>s+p.litres,0);
+  // Paid = invoice quantity (drives cost). Received = actual litres that came
+  // out of the tanker (drives physical stock). Excess = received - paid (free).
+  const receivedOf=(p)=>p.litresReceived!=null?p.litresReceived:p.litres;
+  const totalPurchased=dieselPurchases.reduce((s,p)=>s+p.litres,0);   // paid
+  const totalReceived=dieselPurchases.reduce((s,p)=>s+receivedOf(p),0);
   const totalSpent=dieselPurchases.reduce((s,p)=>s+(p.litres*(p.pricePerL||0)),0);
   const totalDistributed=dieselDistributions.reduce((s,d)=>s+d.litres,0);
-  const stockInHand=totalPurchased-totalDistributed;
-  // Diesel routinely measures out slightly MORE than the paid bulk quantity
-  // ("excess gain"), so distributed > purchased is expected & favorable up to
-  // a few %. Only a large gap suggests missing purchase records.
-  const excessReceived=totalDistributed>totalPurchased?totalDistributed-totalPurchased:0;
-  const excessPct=totalPurchased>0?excessReceived/totalPurchased*100:0;
+  const totalExcess=totalReceived-totalPurchased;              // free diesel gained
+  const stockInHand=totalReceived-totalDistributed;            // physical balance
+  const excessPct=totalPurchased>0&&stockInHand<0?Math.abs(stockInHand)/totalPurchased*100:0;
   const pricedLitres=dieselPurchases.filter(p=>(p.pricePerL||0)>0).reduce((s,p)=>s+p.litres,0);
   const avgPrice=pricedLitres>0?(totalSpent/pricedLitres):0;
   const purchaseDistributed=(pid)=>dieselDistributions.filter(d=>d.purchaseId===pid).reduce((s,d)=>s+d.litres,0);
-  const purchaseRemaining=(p)=>p.litres-purchaseDistributed(p.id);
+  const purchaseRemaining=(p)=>receivedOf(p)-purchaseDistributed(p.id);  // physical capacity = received
   const storeStats=locations.map(loc=>{
     const dist=dieselDistributions.filter(d=>d.storeLoc===loc);
     const readings=dieselReadings.filter(r=>r.storeLoc===loc);
@@ -1747,9 +1748,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     if(!pf.supplier||!pf.litres||!pf.pricePerL){setMsg("Error: Fill in supplier, litres, and price per litre.");return;}
     setSaving(true);setMsg("");
     try{
-      const row=await db.addDieselPurchase(fromDP({date:pf.date,supplier:pf.supplier,litres:parseFloat(pf.litres),pricePerL:parseFloat(pf.pricePerL),notes:pf.notes,purchasedBy:user.uid}));
+      const row=await db.addDieselPurchase(fromDP({date:pf.date,supplier:pf.supplier,litres:parseFloat(pf.litres),litresReceived:pf.litresReceived!==""&&pf.litresReceived!=null?parseFloat(pf.litresReceived):null,pricePerL:parseFloat(pf.pricePerL),notes:pf.notes,purchasedBy:user.uid}));
       setDieselPurchases([toDP(row),...dieselPurchases]);
-      setShowAddPurchase(false);setPf({date:today,supplier:"",litres:"",pricePerL:"",notes:""});
+      setShowAddPurchase(false);setPf({date:today,supplier:"",litres:"",litresReceived:"",pricePerL:"",notes:""});
       setMsg("Purchase recorded!");setTimeout(()=>setMsg(""),3000);
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
@@ -1794,9 +1795,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         <Kpi icon={Package} label="Balance" value={(staffReceived-staffConsumed).toLocaleString()+" L"} sub={(staffReceived-staffConsumed)<0?"Over":"Available"} accent={(staffReceived-staffConsumed)<0?"#DA1E28":undefined}/>
         <Kpi icon={Zap} label="Generators" value={(generators||[]).length}/>
       </>:<>
-        <Kpi icon={ShoppingCart} label="Total Purchased" value={totalPurchased.toLocaleString()+" L"} sub={"\u20A6"+totalSpent.toLocaleString()}/>
+        <Kpi icon={ShoppingCart} label="Total Purchased" value={totalPurchased.toLocaleString()+" L"} sub={"\u20A6"+totalSpent.toLocaleString()+(totalExcess>0?`  \u00B7  +${totalExcess.toLocaleString()} L excess`:"")}/>
         <Kpi icon={Send} label="Total Distributed" value={totalDistributed.toLocaleString()+" L"} sub={"to "+new Set(dieselDistributions.map(d=>d.storeLoc)).size+" stores"}/>
-        <Kpi icon={Package} label={stockInHand<0?"Excess Received":"Stock in Hand"} value={(stockInHand<0?"+"+excessReceived.toLocaleString():stockInHand.toLocaleString())+" L"} sub={stockInHand>=0?"Available":excessPct<=5?`~${excessPct.toFixed(1)}% measurement gain (normal)`:`Review: ${excessPct.toFixed(1)}% over purchased — check records`} accent={stockInHand>=0?undefined:excessPct<=5?"#24A148":"#FF832B"}/>
+        <Kpi icon={Package} label="Stock in Hand" value={stockInHand.toLocaleString()+" L"} sub={stockInHand>=0?(totalExcess>0?`+${totalExcess.toLocaleString()} L excess gained`:"Received − distributed"):excessPct<=3?"Within normal variance":`Review: ${excessPct.toFixed(1)}% short — check records`} accent={stockInHand>=0?undefined:excessPct<=3?undefined:"#FF832B"}/>
         <Kpi icon={DollarSign} label="Avg Price/Litre" value={avgPrice?fmt(Math.round(avgPrice)):"-"} sub={dieselPurchases.length+" purchases"}/>
       </>}
     </div>
@@ -1984,7 +1985,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         </div>
       </div>);
     })()}
-    {tab==="purchases"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Litres","Price/L","Total Cost","Distributed","Remaining",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselPurchases.length===0?<tr><td colSpan={8} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No purchases recorded yet</td></tr>:dieselPurchases.map(p=>{const dist=purchaseDistributed(p.id);const rem=p.litres-dist;return(<tr key={p.id}><td style={tc}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}</td><td style={tc}>{p.litres.toLocaleString()} L</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span></td><td style={tc}><div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistPurchaseId(p.id);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),pricePerL:p.pricePerL?String(p.pricePerL):""})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
+    {tab==="purchases"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:880}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Paid (L)","Received (L)","Excess","Price/L","Total Cost","Distributed","Remaining",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>{dieselPurchases.length===0?<tr><td colSpan={10} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No purchases recorded yet</td></tr>:dieselPurchases.map(p=>{const dist=purchaseDistributed(p.id);const recv=receivedOf(p);const rem=recv-dist;const exc=recv-p.litres;return(<tr key={p.id}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}</td><td style={tc}>{p.litres.toLocaleString()}</td><td style={tc}>{p.litresReceived!=null?recv.toLocaleString():<span style={{color:"#8D8D8D"}}>{recv.toLocaleString()}</span>}</td><td style={tc}>{exc>0?<span style={{color:"#24A148",fontWeight:600}}>+{exc.toLocaleString()}</span>:exc<0?<span style={{color:"#DA1E28",fontWeight:600}}>{exc.toLocaleString()}</span>:"—"}</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span></td><td style={tc}><div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistPurchaseId(p.id);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),litresReceived:p.litresReceived!=null?String(p.litresReceived):"",pricePerL:p.pricePerL?String(p.pricePerL):""})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
     {tab==="distributions"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","Litres","Source Purchase","Notes","Status","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselDistributions.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No distributions recorded yet</td></tr>:dieselDistributions.map(d=>{const p=dieselPurchases.find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:600}}>{d.storeLoc}</td><td style={{...tc,fontWeight:600,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier+" ("+p.date+")":"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}><div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div></td></tr>);})}</tbody></table></div>)}
     {tab==="stores"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Received (L)","Consumed (L)","Balance (L)","Distributions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{storeStats.length===0?<tr><td colSpan={5} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No store data yet</td></tr>:storeStats.map(s=>(<tr key={s.loc}><td style={{...tc,fontWeight:600}}>{s.loc}</td><td style={{...tc,color:P,fontWeight:600}}>{s.received.toLocaleString()} L</td><td style={tc}>{s.consumed.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:s.balance>=0?"#24A148":"#DA1E28"}}>{s.balance.toLocaleString()} L</span></td><td style={tc}>{s.distCount}</td></tr>))}</tbody></table></div>)}
     {tab==="baselines"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
@@ -2102,9 +2103,11 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       <Field label="Date *"><input style={inp} type="date" value={editPurchase.date} onChange={e=>setEditPurchase({...editPurchase,date:e.target.value})}/></Field>
       <Field label="Supplier *"><input style={inp} value={editPurchase.supplier} onChange={e=>setEditPurchase({...editPurchase,supplier:e.target.value})}/></Field>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <Field label="Litres *"><input style={inp} type="number" value={editPurchase.litres} onChange={e=>setEditPurchase({...editPurchase,litres:e.target.value})}/></Field>
-        <Field label="Price per Litre"><input style={inp} type="number" placeholder="0 = unknown" value={editPurchase.pricePerL} onChange={e=>setEditPurchase({...editPurchase,pricePerL:e.target.value})}/></Field>
+        <Field label="Paid Litres * (invoice)"><input style={inp} type="number" value={editPurchase.litres} onChange={e=>setEditPurchase({...editPurchase,litres:e.target.value})}/></Field>
+        <Field label="Received Litres (actual)"><input style={inp} type="number" placeholder={editPurchase.litres||"= paid"} value={editPurchase.litresReceived} onChange={e=>setEditPurchase({...editPurchase,litresReceived:e.target.value})}/></Field>
       </div>
+      {editPurchase.litresReceived&&parseFloat(editPurchase.litresReceived)!==parseFloat(editPurchase.litres)&&<div style={{padding:"6px 12px",borderRadius:6,background:"#E8F5E9",marginBottom:10,fontSize:12,color:"#24A148",fontWeight:600}}>Excess: {(parseFloat(editPurchase.litresReceived||0)-parseFloat(editPurchase.litres||0)).toLocaleString()} L free diesel</div>}
+      <Field label="Price per Litre"><input style={inp} type="number" placeholder="0 = unknown" value={editPurchase.pricePerL} onChange={e=>setEditPurchase({...editPurchase,pricePerL:e.target.value})}/></Field>
       {editPurchase.litres&&editPurchase.pricePerL&&<div style={{padding:"10px 14px",borderRadius:8,background:"#D0E2FF",marginBottom:12}}><div style={{fontSize:11,color:P,fontWeight:600}}>Total Cost</div><div style={{fontSize:20,fontWeight:700,color:P}}>{fmt(parseFloat(editPurchase.litres||0)*parseFloat(editPurchase.pricePerL||0))}</div></div>}
       {msg&&<div style={{padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12,marginBottom:10}}>{msg}</div>}
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
@@ -2115,8 +2118,10 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         {showAddPurchase&&(<Modal title="Log Diesel Purchase" onClose={()=>{setShowAddPurchase(false);setMsg("");}}>
       <Field label="Date *"><input style={inp} type="date" value={pf.date} onChange={e=>setPf({...pf,date:e.target.value})}/></Field>
       <Field label="Supplier *"><select style={inp} value={pf.supplier} onChange={e=>setPf({...pf,supplier:e.target.value})}><option value="">-- Select Supplier --</option>{(vendors||[]).filter(v=>v.type==="Diesel Supplier"||v.type==="Fuel"||v.type==="Fuel Station").map(v=>(<option key={v.id} value={v.name}>{v.name}</option>))}</select></Field>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Litres *"><input style={inp} type="number" placeholder="e.g. 5000" value={pf.litres} onChange={e=>setPf({...pf,litres:e.target.value})}/></Field><Field label="Price per Litre" style={inp}><input style={inp} type="number" placeholder="e.g. 1200" value={pf.pricePerL} onChange={e=>setPf({...pf,pricePerL:e.target.value})}/></Field></div>
-      {pf.litres&&pf.pricePerL&&<div style={{padding:"10px 14px",borderRadius:8,background:"#D0E2FF",marginBottom:12}}><div style={{fontSize:11,color:P,fontWeight:600}}>Total Cost</div><div style={{fontSize:20,fontWeight:700,color:P}}>{fmt(parseFloat(pf.litres||0)*parseFloat(pf.pricePerL||0))}</div></div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Paid Litres * (invoice)"><input style={inp} type="number" placeholder="e.g. 5000" value={pf.litres} onChange={e=>setPf({...pf,litres:e.target.value})}/></Field><Field label="Received Litres (actual)"><input style={inp} type="number" placeholder={pf.litres||"= paid"} value={pf.litresReceived} onChange={e=>setPf({...pf,litresReceived:e.target.value})}/></Field></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="Price per Litre"><input style={inp} type="number" placeholder="e.g. 1200" value={pf.pricePerL} onChange={e=>setPf({...pf,pricePerL:e.target.value})}/></Field><div/></div>
+      {pf.litresReceived&&parseFloat(pf.litresReceived)!==parseFloat(pf.litres||0)&&<div style={{padding:"6px 12px",borderRadius:6,background:"#E8F5E9",marginBottom:10,fontSize:12,color:"#24A148",fontWeight:600}}>Excess: {(parseFloat(pf.litresReceived||0)-parseFloat(pf.litres||0)).toLocaleString()} L free diesel</div>}
+      {pf.litres&&pf.pricePerL&&<div style={{padding:"10px 14px",borderRadius:8,background:"#D0E2FF",marginBottom:12}}><div style={{fontSize:11,color:P,fontWeight:600}}>Total Cost (paid litres × price)</div><div style={{fontSize:20,fontWeight:700,color:P}}>{fmt(parseFloat(pf.litres||0)*parseFloat(pf.pricePerL||0))}</div></div>}
       <Field label="Notes"><input style={inp} placeholder="Optional notes" value={pf.notes} onChange={e=>setPf({...pf,notes:e.target.value})}/></Field>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}><button onClick={()=>{setShowAddPurchase(false);setMsg("");}} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddPurchase} disabled={saving||!pf.supplier||!pf.litres||!pf.pricePerL} style={{display:"flex",alignItems:"center",gap:6,padding:"9px 20px",borderRadius:8,border:"none",background:(pf.supplier&&pf.litres&&pf.pricePerL&&!saving)?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(pf.supplier&&pf.litres&&pf.pricePerL&&!saving)?"pointer":"not-allowed"}}><Save size={14}/>{saving?"Saving...":"Save Purchase"}</button></div>
     </Modal>)}

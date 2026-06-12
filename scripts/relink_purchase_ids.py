@@ -93,13 +93,14 @@ def main(apply_mode):
         sys.exit(1)
     sb = Supabase(url, key)
 
-    purchases = sorted(sb.select_all("diesel_purchases", "id,date,supplier,litres"),
+    purchases = sorted(sb.select_all("diesel_purchases", "id,date,supplier,litres,litres_received"),
                        key=lambda p: p["date"])
     dists = sorted(sb.select_all("diesel_distributions", "id,date,store_location,litres,notes,purchase_id"),
                    key=lambda d: d["date"])
     print(f"Purchases: {len(purchases)} | Distributions: {len(dists)}")
 
-    cap = {p["id"]: float(p["litres"]) for p in purchases}
+    # Physical capacity available to distribute = RECEIVED litres (paid + excess)
+    cap = {p["id"]: float(p["litres_received"]) if p.get("litres_received") is not None else float(p["litres"]) for p in purchases}
     used = {p["id"]: 0.0 for p in purchases}
 
     def alloc(d, pool):
