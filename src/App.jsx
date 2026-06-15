@@ -444,7 +444,8 @@ function VendorsPage({vendors,setVendors,vendorTypes,canEdit}){
 
 function ReportsPage({vehicles,generators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions}){
   const [report,setReport]=useState("fleet");
-  const [dateFrom,setDateFrom]=useState("2025-01-01");const [dateTo,setDateTo]=useState(new Date().toISOString().split("T")[0]);const [fuelTypeFilter,setFuelTypeFilter]=useState("All");
+  const _rpNow=new Date();const _rpMonthStart=new Date(_rpNow.getFullYear(),_rpNow.getMonth(),1).toISOString().split("T")[0];
+  const [dateFrom,setDateFrom]=useState(_rpMonthStart);const [dateTo,setDateTo]=useState(_rpNow.toISOString().split("T")[0]);const [fuelTypeFilter,setFuelTypeFilter]=useState("All");
   const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
   const inRange=(d)=>{if(!d)return true;return d>=dateFrom&&d<=dateTo;};
   const fFL=fuelLogs.filter(f=>inRange(f.date));
