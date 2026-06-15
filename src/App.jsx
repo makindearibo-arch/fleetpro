@@ -874,7 +874,10 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const hClose=parseFloat(hoursClosing)||null;
       const hrsRun=(hOpen!=null&&hClose!=null)?hClose-hOpen:null;
       const actualLevel=parseFloat(dieselLevel)||null;
-      const added=parseFloat(dieselAdded)||0;
+      // Diesel added = what admin DISTRIBUTED to this store on this date
+      // (auto from diesel_distributions), not a manually-typed figure.
+      const storeForAdd=g?.loc||userStore||"";
+      const added=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate).reduce((s,d)=>s+(d.litres||0),0);
       const nHours=parseFloat(nepaHours)||0;
       const bl=genBaselines?.find(b=>b.generator_id===selGen);
       const baselineRate=bl?.avg_litres_per_hour||null;
@@ -1022,6 +1025,9 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const prevReading=selGen?getPrevReading(selGen):null;
   // Effective opening hours: previous day's closing if it exists (locked, live), else manual.
   const effOpen=prevReading?.genHoursClosing!=null?prevReading.genHoursClosing:(parseFloat(hoursOpening)||null);
+  // Diesel added = sum of admin distributions to this store on the entry date (auto, not typed).
+  const storeForEntry=isStoreStaff?userStore:(selectedGen?.loc||"");
+  const autoAdded=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForEntry&&d.date===entryDate).reduce((s,d)=>s+(d.litres||0),0);
 
 
   // Simple reading history
@@ -1171,7 +1177,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
             <Field label="Batches Produced Today *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="1" placeholder="e.g. 32" value={batches} onChange={e=>setBatches(e.target.value)}/></Field>
             {batches&&dieselLevel&&(()=>{
               const prev=getPrevReading(selGen);
-              const cons=prev?.dieselLevelActual!=null?prev.dieselLevelActual+(parseFloat(dieselAdded)||0)-parseFloat(dieselLevel):null;
+              const cons=prev?.dieselLevelActual!=null?prev.dieselLevelActual+autoAdded-parseFloat(dieselLevel):null;
               const perBatch=cons&&parseFloat(batches)>0?cons/parseFloat(batches):null;
               return perBatch&&perBatch>0?(<div style={{marginTop:8,padding:8,background:"#EDE7F6",borderRadius:6,display:"flex",justifyContent:"space-between",fontSize:12}}><span style={{color:"#525252"}}>Diesel per batch:</span><span style={{fontWeight:700,color:"#8B5CF6"}}>{perBatch.toFixed(2)} L/batch</span></div>):null;
             })()}
@@ -1189,7 +1195,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <Field label="Current Level (Litres) *"><input style={inp} type="number" placeholder="e.g. 150" value={dieselLevel} onChange={e=>setDieselLevel(e.target.value)}/></Field>
-              {user?.role!=="Store Staff"&&<Field label="Diesel Added Today (L)"><input style={inp} type="number" placeholder="0 if none" value={dieselAdded} onChange={e=>setDieselAdded(e.target.value)}/></Field>}
+              <Field label="Diesel Received Today (L)"><div style={{...inp,background:"#F4F4F4",color:autoAdded>0?"#24A148":"#8D8D8D",fontWeight:700,display:"flex",alignItems:"center"}}>{autoAdded>0?autoAdded.toLocaleString()+" L":"0 — none distributed"}</div><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>{autoAdded>0?"Auto from admin distribution on this date":"From admin distributions (auto) — not entered manually"}</div></Field>
             </div>
             {dieselLevel&&selectedGen.tank>0&&(()=>{
               const pct=Math.min(100,Math.round(parseFloat(dieselLevel)/selectedGen.tank*100));
