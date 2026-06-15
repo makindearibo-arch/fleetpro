@@ -867,7 +867,10 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     setSaving(true);setMsg("");
     try{
       const g=generators.find(x=>x.id===selGen);
-      const hOpen=parseFloat(hoursOpening)||null;
+      // Opening ALWAYS comes from the previous day's closing (live), never a
+      // stale stored value; manual entry only for the first-ever reading.
+      const prevForOpen=getPrevReading(selGen);
+      const hOpen=(prevForOpen?.genHoursClosing!=null)?prevForOpen.genHoursClosing:(parseFloat(hoursOpening)||null);
       const hClose=parseFloat(hoursClosing)||null;
       const hrsRun=(hOpen!=null&&hClose!=null)?hClose-hOpen:null;
       const actualLevel=parseFloat(dieselLevel)||null;
@@ -1017,6 +1020,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const rank=isStoreStaff?getStoreRank():null;
   const selectedGen=generators.find(g=>g.id===selGen);
   const prevReading=selGen?getPrevReading(selGen):null;
+  // Effective opening hours: previous day's closing if it exists (locked, live), else manual.
+  const effOpen=prevReading?.genHoursClosing!=null?prevReading.genHoursClosing:(parseFloat(hoursOpening)||null);
 
 
   // Simple reading history
@@ -1146,13 +1151,15 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 
             <div style={{background:"#F8FAFF",borderRadius:10,padding:14,border:"1px solid #D0E2FF"}}>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <Field label="Opening Hours">{(()=>{const lockedOpen=prevReading?.genHoursClosing!=null&&!isAdmin;return(<><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center",background:lockedOpen?"#F4F4F4":hoursOpening?"#E8F5E9":"#fff",color:lockedOpen?"#525252":"#161616"}} type="number" step="0.1" placeholder="0" value={hoursOpening} disabled={lockedOpen} onChange={e=>setHoursOpening(e.target.value)}/>{prevReading?.genHoursClosing!=null&&<div style={{fontSize:10,color:lockedOpen?"#8D8D8D":"#24A148",marginTop:2}}>{lockedOpen?`Locked to ${prevReading.date} closing (${prevReading.genHoursClosing.toLocaleString()})`:`From ${prevReading.date} closing — editable as ${user?.role}`}</div>}</>);})()}</Field>
+                <Field label="Opening Hours">{prevReading?.genHoursClosing!=null
+                  ?(<><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center",background:"#F4F4F4",color:"#525252"}} type="number" value={prevReading.genHoursClosing} disabled readOnly/><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>From {prevReading.date} closing ({prevReading.genHoursClosing.toLocaleString()}) — not editable</div></>)
+                  :(<><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center",background:hoursOpening?"#E8F5E9":"#fff"}} type="number" step="0.1" placeholder="0" value={hoursOpening} onChange={e=>setHoursOpening(e.target.value)}/><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>First reading — enter starting hours</div></>)}</Field>
                 <Field label="Closing Hours *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="0.1" placeholder="0" value={hoursClosing} onChange={e=>setHoursClosing(e.target.value)}/></Field>
               </div>
-              {hoursOpening&&hoursClosing&&parseFloat(hoursClosing)>parseFloat(hoursOpening)&&(
+              {effOpen!=null&&hoursClosing&&parseFloat(hoursClosing)>effOpen&&(
                 <div style={{marginTop:10,padding:8,background:"#E8F5E9",borderRadius:6,display:"flex",justifyContent:"space-between",fontSize:12}}>
                   <span style={{color:"#525252"}}>Hours Run Today:</span>
-                  <span style={{fontWeight:700,color:"#24A148"}}>{(parseFloat(hoursClosing)-parseFloat(hoursOpening)).toFixed(1)} hours</span>
+                  <span style={{fontWeight:700,color:"#24A148"}}>{(parseFloat(hoursClosing)-effOpen).toFixed(1)} hours</span>
                 </div>
               )}
             </div>
