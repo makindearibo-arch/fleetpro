@@ -232,6 +232,7 @@ There is also a second tracker that has never been online — it needs SIM card 
 
 ## Known Issues & Gotchas
 
+0. **1000-row fetch cap (FIXED 2026-06-24)**: `db.js fetchAll()` now PAGES through results in 1000-row chunks (`.range()` loop). PostgREST caps a single `select` at 1000 rows; `diesel_readings` passed 3,841, so the old single-select silently loaded only the 1000 most-recent-by-date — whole stores' older history vanished and store-staff saw "0 readings" for their store. Any table can grow past 1000 (fuel_logs, odo_log) — keep using `fetchAll` (it paginates), never a bare `.select()` for a growing table. Note: the app loads data ONCE on mount, so users with a stale tab must refresh to see newly imported rows.
 1. **git index.lock**: The file `.git/index.lock` keeps appearing. Delete it before git operations: `del .git\index.lock` (Windows)
 2. **App.jsx edits**: MUST use bash/python — the Edit tool truncates this large file
 3. **Leaflet still in package.json**: `leaflet` and `react-leaflet` are still listed as dependencies but no longer used (switched to Google Maps). Can be removed.
