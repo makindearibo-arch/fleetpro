@@ -52,9 +52,27 @@ export async function inviteUser(email, name, role, password) {
 // GENERIC CRUD
 // ============================================
 async function fetchAll(table, orderBy = 'created_at', ascending = true) {
-  const { data, error } = await supabase.from(table).select('*').order(orderBy, { ascending });
-  if (error) { console.error(`Error fetching ${table}:`, error); return []; }
-  return data || [];
+  // Supabase/PostgREST caps a single select at 1000 rows. Tables like
+  // diesel_readings have grown past that (thousands of rows), so a plain
+  // select silently drops the rest — which made whole stores' history vanish
+  // and store-staff see "0 readings". Page through in 1000-row chunks until
+  // a short page signals the end.
+  const PAGE = 1000;
+  let from = 0;
+  const all = [];
+  for (;;) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .order(orderBy, { ascending })
+      .range(from, from + PAGE - 1);
+    if (error) { console.error(`Error fetching ${table}:`, error); break; }
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
 }
 
 async function insertRow(table, row) {
