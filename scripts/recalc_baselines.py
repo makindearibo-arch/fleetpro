@@ -109,12 +109,20 @@ def main(apply_mode):
                              filters={"generator_id": f"eq.{g['id']}"}, order="date.asc")
         rates = []
         prev = None
+        prev_date = None
         for r in rows:
             ho, hc, lvl = r.get("gen_hours_opening"), r.get("gen_hours_closing"), r.get("diesel_level_actual")
             added = r.get("diesel_added") or 0
             tr = tr_map.get((g["id"], r["date"]), 0)
             hrs = (hc - ho) if (ho is not None and hc is not None) else None
-            if hrs and hrs > 0 and lvl is not None and prev is not None:
+            cur_date = datetime.date.fromisoformat(r["date"]) if r.get("date") else None
+            # Only trust a level-delta rate when the previous reading is the day
+            # before: a multi-day gap (e.g. staff stopped logging) lumps several
+            # days' consumption against one day's hours and yields a 50 L/hr
+            # phantom that poisons the mean. Skip non-consecutive pairs.
+            consecutive = (prev_date is not None and cur_date is not None
+                           and (cur_date - prev_date).days == 1)
+            if hrs and hrs > 0 and lvl is not None and prev is not None and consecutive:
                 actual = prev + added - tr - lvl
                 if actual > 0:
                     rate = actual / hrs
@@ -122,6 +130,7 @@ def main(apply_mode):
                         rates.append(rate)
             if lvl is not None:
                 prev = lvl
+                prev_date = cur_date
         if not rates:
             continue
         avg = sum(rates) / len(rates)
