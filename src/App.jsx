@@ -2229,6 +2229,12 @@ function FleetProAppInner(){
 
   const loadAllData=useCallback(async()=>{
     try{
+      // Warm up the auth token ONCE before firing the ~23 concurrent table
+      // fetches below. If the access token is expired, this triggers a single
+      // coordinated refresh while nothing else is contending for the auth lock
+      // — so the bulk fetches run with a fresh, cached token and never trigger
+      // a mid-load refresh that would hold the lock and get stolen/aborted.
+      await supabase.auth.getSession();
       const [v,g,d,wo,fl,ol,vn,p,ins,sr,loc,dt,vt,ii,pr,dr,dp,dd,gb,npl,dlk,as,dtr]=await Promise.all([
         db.getVehicles(),db.getGenerators(),db.getDrivers(),db.getWorkOrders(),
         db.getFuelLogs(),db.getOdoLog(),db.getVendors(),db.getPapers(),
