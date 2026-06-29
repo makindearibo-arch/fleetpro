@@ -864,6 +864,17 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     }
     // Require photo for backdated entries (if toggle on)
     if(isBackdated&&requirePhotoBackdated&&!photo&&!editingId){setMsg("A generator photo is required for backdated entries.");return;}
+    // Acceptance-gated diesel received: a delivery on this date the store hasn't
+    // ACCEPTED yet is NOT counted in this reading. Warn so staff don't silently
+    // omit received diesel (which would skew consumption / flag a discrepancy).
+    {
+      const sForAdd=(generators.find(x=>x.id===selGen)?.loc)||userStore||"";
+      const pend=(dieselDistributions||[]).filter(d=>d.storeLoc===sForAdd&&d.date===entryDate&&!d.confirmed);
+      if(pend.length){
+        const pl=pend.reduce((s,d)=>s+(d.litres||0),0);
+        if(!confirm(`${pl.toLocaleString()} L was delivered to your store on ${entryDate} but has not been accepted yet, so it will NOT be added to this reading. Tap the green Accept button to include it.\n\nSave the reading without it anyway?`))return;
+      }
+    }
     setSaving(true);setMsg("");
     try{
       const g=generators.find(x=>x.id===selGen);
@@ -874,10 +885,11 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const hClose=parseFloat(hoursClosing)||null;
       const hrsRun=(hOpen!=null&&hClose!=null)?hClose-hOpen:null;
       const actualLevel=parseFloat(dieselLevel)||null;
-      // Diesel added = what admin DISTRIBUTED to this store on this date
-      // (auto from diesel_distributions), not a manually-typed figure.
+      // Diesel added = admin distributions to this store on this date that the
+      // store has ACCEPTED (received_confirmed). Acceptance is the trigger; an
+      // unaccepted delivery is not counted (not a manually-typed figure either).
       const storeForAdd=g?.loc||userStore||"";
-      const added=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate).reduce((s,d)=>s+(d.litres||0),0);
+      const added=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
       const nHours=parseFloat(nepaHours)||0;
       const bl=genBaselines?.find(b=>b.generator_id===selGen);
       const baselineRate=bl?.avg_litres_per_hour||null;
@@ -1025,9 +1037,13 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const prevReading=selGen?getPrevReading(selGen):null;
   // Effective opening hours: previous day's closing if it exists (locked, live), else manual.
   const effOpen=prevReading?.genHoursClosing!=null?prevReading.genHoursClosing:(parseFloat(hoursOpening)||null);
-  // Diesel added = sum of admin distributions to this store on the entry date (auto, not typed).
+  // Diesel added = admin distributions to this store on the entry date that the
+  // store has ACCEPTED. Acceptance is the trigger — a delivery only counts toward
+  // the day's reading once accepted (received_confirmed).
   const storeForEntry=isStoreStaff?userStore:(selectedGen?.loc||"");
-  const autoAdded=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForEntry&&d.date===entryDate).reduce((s,d)=>s+(d.litres||0),0);
+  const dayDists=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForEntry&&d.date===entryDate);
+  const autoAdded=dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
+  const pendingDists=dayDists.filter(d=>!d.confirmed);
 
 
   // Simple reading history
@@ -1193,9 +1209,27 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
               :(<div style={{position:"relative"}}><img src={tankPreview} style={{width:"100%",borderRadius:12,maxHeight:180,objectFit:"cover"}}/><button onClick={()=>{setTankPreview("");setTankPhoto(null);}} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={12} color="#fff"/></button></div>)}
               <input id="diesel-tank-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleTankPhoto}/>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <Field label="Current Level (Litres) *"><input style={inp} type="number" placeholder="e.g. 150" value={dieselLevel} onChange={e=>setDieselLevel(e.target.value)}/></Field>
-              <Field label="Diesel Received Today (L)"><div style={{...inp,background:"#F4F4F4",color:autoAdded>0?"#24A148":"#8D8D8D",fontWeight:700,display:"flex",alignItems:"center"}}>{autoAdded>0?autoAdded.toLocaleString()+" L":"0 — none distributed"}</div><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>{autoAdded>0?"Auto from admin distribution on this date":"From admin distributions (auto) — not entered manually"}</div></Field>
+            <Field label="Current Level (Litres) *"><input style={inp} type="number" placeholder="e.g. 150" value={dieselLevel} onChange={e=>setDieselLevel(e.target.value)}/></Field>
+            {/* Diesel Received — admin deliveries for this date. Accept a delivery
+                to confirm receipt and add it to today's reading (acceptance-gated). */}
+            <div style={{marginTop:12,border:"1px solid #E8ECF1",borderRadius:10,overflow:"hidden"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:"#F7F8FC"}}>
+                <div style={{fontSize:12,fontWeight:700}}>Diesel Received Today</div>
+                <div style={{fontSize:14,fontWeight:700,color:autoAdded>0?"#24A148":"#8D8D8D"}}>{autoAdded>0?autoAdded.toLocaleString()+" L":"0 L"}</div>
+              </div>
+              {dayDists.length===0
+                ?<div style={{padding:"10px 12px",fontSize:11,color:"#8D8D8D",borderTop:"1px solid #E8ECF1"}}>No admin delivery recorded for this date. Diesel you receive from admin is added here automatically once you accept it.</div>
+                :dayDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(
+                  <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 12px",borderTop:"1px solid #F0F2F5"}}>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</div>
+                      <div style={{fontSize:10,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p?p.supplier:"Admin delivery"}{d.notes?" — "+d.notes:""}</div>
+                    </div>
+                    {d.confirmed
+                      ?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted</span>
+                      :<button type="button" onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));}catch(e){alert("Error: "+e.message);}}} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
+                  </div>);})}
+              {pendingDists.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingDists.reduce((s,d)=>s+(d.litres||0),0).toLocaleString()} L delivered but not yet accepted — tap <b>Accept</b> to include it in today's reading.</div>}
             </div>
             {dieselLevel&&selectedGen.tank>0&&(()=>{
               const pct=Math.min(100,Math.round(parseFloat(dieselLevel)/selectedGen.tank*100));
