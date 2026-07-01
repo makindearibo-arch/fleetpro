@@ -1661,7 +1661,44 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
     </div>
   </div>);}
 
+  // Recent deliveries the store hasn't accepted yet \u2014 surfaced as a top-of-page
+  // alert so staff know diesel arrived (independent of the tab/date filter).
+  // Scoped to the last 30 days so old un-accepted imports don't spam the banner.
+  const acceptDelivery=async(d)=>{
+    try{
+      const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});
+      setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));
+    }catch(e){alert("Error: "+e.message);}
+  };
+  const acceptAll=async(list)=>{for(const d of list){await acceptDelivery(d);}};
+  const _pendCut=new Date(Date.now()-30*864e5).toISOString().split("T")[0];
+  const pendingRecent=(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&!d.confirmed&&d.date>=_pendCut).sort((a,b)=>b.date.localeCompare(a.date));
+
   return(<div>
+    {pendingRecent.length>0&&(
+      <div style={{marginBottom:16,border:"1px solid #A6C8FF",borderRadius:12,background:"#EDF5FF",overflow:"hidden"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"12px 16px",flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <Send size={18} color={P}/>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:"#0043CE"}}>{pendingRecent.length} diesel deliver{pendingRecent.length>1?"ies":"y"} to confirm</div>
+              <div style={{fontSize:11,color:"#525252"}}>{pendingRecent.reduce((s,d)=>s+(d.litres||0),0).toLocaleString()} L delivered to your store \u2014 tap Accept to add it to that day's reading.</div>
+            </div>
+          </div>
+          {pendingRecent.length>1&&<button onClick={()=>acceptAll(pendingRecent)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
+        </div>
+        <div>{pendingRecent.slice(0,6).map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(
+          <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 16px",borderTop:"1px solid #D0E2FF"}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L <span style={{fontWeight:500,color:"#8D8D8D",fontSize:11}}>\u00b7 {d.date}</span></div>
+              <div style={{fontSize:10,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p?p.supplier:"Admin delivery"}{d.notes?" \u2014 "+d.notes:""}</div>
+            </div>
+            <button onClick={()=>acceptDelivery(d)} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>
+          </div>);})}
+          {pendingRecent.length>6&&<div style={{padding:"8px 16px",borderTop:"1px solid #D0E2FF",fontSize:11,color:"#525252"}}>+{pendingRecent.length-6} more in the Supply tab below</div>}
+        </div>
+      </div>
+    )}
     <div style={{marginBottom:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div><h3 style={{fontSize:18,fontWeight:700,margin:"0 0 4px"}}>{myStore?myStore+" \u2014 ":""}Dashboard</h3><div style={{fontSize:12,color:"#8D8D8D"}}>Supply, consumption & history</div></div>
