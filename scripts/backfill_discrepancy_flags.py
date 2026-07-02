@@ -35,6 +35,10 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_THRESHOLD_PCT = 20.0
+# Don't flag days whose expected burn is below dipstick resolution (~25 L):
+# a tank stick can't show a 12 L change, so tiny-run days always look "off".
+# Must match the same floor in App.jsx handleSave.
+MIN_THEORETICAL_L = 25.0
 
 
 def load_env_file():
@@ -142,7 +146,12 @@ def main(apply_mode):
                     expected = prev_level + added - tr - theoretical
                     disc = actual - expected
                     pct = abs(disc) / theoretical * 100
-                    flag = pct > threshold
+                    # Min-burn floor: when the expected burn is below what a
+                    # dipstick can resolve (~a few cm), a "discrepancy" is
+                    # measurement noise, not signal — e.g. Ado 1 runs <1.5 h/day
+                    # (expected ~12 L) on a stick that reads in ~40 L steps, so
+                    # every short-run day flagged. Only flag meaningful burns.
+                    flag = pct > threshold and theoretical >= MIN_THEORETICAL_L
                     g_eval += 1
                     if flag:
                         g_flag += 1

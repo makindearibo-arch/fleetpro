@@ -909,7 +909,10 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           const expectedLevel=prevLevel+added-transfersOut-theoretical;
           discrepancy=actualLevel-expectedLevel;
           const pctDiff=theoretical>0?Math.abs(discrepancy)/theoretical*100:0;
-          discFlag=pctDiff>thresholdPct;
+          // Min-burn floor (must match backfill_discrepancy_flags.py): when the
+          // expected burn is below dipstick resolution (~25 L), a "discrepancy"
+          // is measurement noise — short-run days would otherwise always flag.
+          discFlag=pctDiff>thresholdPct&&theoretical>=25;
         }
       }
       // Helper for photo upload
@@ -1589,7 +1592,12 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
   const totalReceived=myDists.reduce((s,d)=>s+d.litres,0);
   const totalConsumed=myReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
   const totalHoursRun=myReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
-  const overallBalance=allDists.reduce((s,d)=>s+d.litres,0)-allReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  // Balance = diesel ADDED into the tank (per readings) - consumed. Using
+  // distributions here undercounts stores that buy locally (Ado 1/2/3: their
+  // sheet purchases live in diesel_added but are not admin distributions) and
+  // made their balance read falsely negative. For distribution-fed stores,
+  // added == accepted deliveries, so this is identical there.
+  const overallBalance=allReadings.reduce((s,r)=>s+(r.dieselAdded||0),0)-allReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
   // Per-generator breakdown
   const genMap={};myReadings.forEach(r=>{if(!genMap[r.generatorId])genMap[r.generatorId]={hrs:0,consumed:0,readings:0};genMap[r.generatorId].hrs+=(r.hoursRun||0);genMap[r.generatorId].consumed+=(r.consumptionLitres||0);genMap[r.generatorId].readings++;});
   const genBreakdown=Object.entries(genMap).map(([gid,d])=>{const g=generators.find(x=>x.id===gid);return{id:gid,name:g?.name||gid,...d,rate:d.hrs>0?(d.consumed/d.hrs):0};}).sort((a,b)=>b.consumed-a.consumed);
@@ -1717,7 +1725,7 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
       <Kpi icon={Send} label="Received" value={totalReceived.toLocaleString()+" L"} sub={myDists.length+" deliveries"}/>
       <Kpi icon={Fuel} label="Consumed" value={totalConsumed.toLocaleString()+" L"} sub={myReadings.length+" readings"}/>
       <Kpi icon={Clock} label="Hours Run" value={totalHoursRun.toFixed(1)+" h"} sub={genBreakdown.length+" generators"}/>
-      <Kpi icon={Package} label="Overall Balance" value={overallBalance.toLocaleString()+" L"} sub="All time" accent={overallBalance<0?"#DA1E28":undefined}/>
+      <Kpi icon={Package} label="Overall Balance" value={overallBalance.toLocaleString()+" L"} sub="Added − consumed, all time" accent={overallBalance<0?"#DA1E28":undefined}/>
     </div>
     {/* Daily consumption chart */}
     {chartData.length>1&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18,marginBottom:16}}>
