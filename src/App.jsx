@@ -1592,12 +1592,13 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
   const totalReceived=myDists.reduce((s,d)=>s+d.litres,0);
   const totalConsumed=myReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
   const totalHoursRun=myReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
-  // Balance = diesel ADDED into the tank (per readings) - consumed. Using
-  // distributions here undercounts stores that buy locally (Ado 1/2/3: their
-  // sheet purchases live in diesel_added but are not admin distributions) and
-  // made their balance read falsely negative. For distribution-fed stores,
-  // added == accepted deliveries, so this is identical there.
-  const overallBalance=allReadings.reduce((s,r)=>s+(r.dieselAdded||0),0)-allReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  // Diesel in Tank = the latest recorded level per asset, summed. This is the
+  // store's real balance (what's physically there). Ledger-style balances
+  // (received − consumed, added − consumed) drift from the tank and mislead —
+  // especially for locally-buying stores whose purchases aren't distributions.
+  const tankRows=(()=>{const byGen={};allReadings.forEach(r=>{if(r.dieselLevelActual!=null&&(!byGen[r.generatorId]||r.date>byGen[r.generatorId].date))byGen[r.generatorId]=r;});return Object.values(byGen);})();
+  const tankTotal=tankRows.reduce((s,r)=>s+r.dieselLevelActual,0);
+  const tankAsOf=tankRows.length?tankRows.map(r=>r.date).sort().slice(-1)[0]:null;
   // Per-generator breakdown
   const genMap={};myReadings.forEach(r=>{if(!genMap[r.generatorId])genMap[r.generatorId]={hrs:0,consumed:0,readings:0};genMap[r.generatorId].hrs+=(r.hoursRun||0);genMap[r.generatorId].consumed+=(r.consumptionLitres||0);genMap[r.generatorId].readings++;});
   const genBreakdown=Object.entries(genMap).map(([gid,d])=>{const g=generators.find(x=>x.id===gid);return{id:gid,name:g?.name||gid,...d,rate:d.hrs>0?(d.consumed/d.hrs):0};}).sort((a,b)=>b.consumed-a.consumed);
@@ -1650,7 +1651,7 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
     <div style={{display:"flex",gap:6,marginBottom:14}}>{[{k:"readings",l:"Diesel Readings"},{k:"supply",l:"Diesel Supply"}].map(t=>(<button key={t.k} onClick={()=>setRTab(t.k)} style={{padding:"7px 18px",borderRadius:8,border:rTab===t.k?"1.5px solid "+P:"1.5px solid #E0E0E0",background:rTab===t.k?"#D0E2FF":"#fff",color:rTab===t.k?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.l}</button>))}</div>
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(3,1fr)",gap:12,marginBottom:16}}>
       {rTab==="readings"?<><Kpi icon={Fuel} label="Consumed" value={rTotalConsumed.toFixed(1)+" L"} sub={rReadings.length+" readings"}/><Kpi icon={Clock} label="Hours Run" value={rTotalHrs.toFixed(1)+" h"} sub="Total"/><Kpi icon={Gauge} label="Avg L/hr" value={rTotalHrs>0?(rTotalConsumed/rTotalHrs).toFixed(2):"-"} sub="Efficiency"/></>
-      :<><Kpi icon={Send} label="Received" value={rTotalReceived.toFixed(1)+" L"} sub={rDists.length+" deliveries"}/><Kpi icon={Package} label="Balance" value={(rTotalReceived-rTotalConsumed).toFixed(1)+" L"} sub="Period balance"/></>}
+      :<><Kpi icon={Send} label="Received" value={rTotalReceived.toFixed(1)+" L"} sub={rDists.length+" deliveries"}/><Kpi icon={Package} label="Net Stock Change" value={(rReadings.reduce((s,r)=>s+(r.dieselAdded||0),0)-rTotalConsumed).toFixed(1)+" L"} sub="Added − consumed in period"/></>}
     </div>
     <div style={{display:"flex",gap:8,marginBottom:16}}>
       <button onClick={()=>exportCSV(rTab)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:8,border:"1.5px solid #24A148",background:"#E8F5E9",color:"#24A148",fontSize:12,fontWeight:600,cursor:"pointer"}}><FileDown size={14}/>Export CSV</button>
@@ -1725,7 +1726,7 @@ function StaffDashboardPage({generators,dieselReadings,dieselDistributions,setDi
       <Kpi icon={Send} label="Received" value={totalReceived.toLocaleString()+" L"} sub={myDists.length+" deliveries"}/>
       <Kpi icon={Fuel} label="Consumed" value={totalConsumed.toLocaleString()+" L"} sub={myReadings.length+" readings"}/>
       <Kpi icon={Clock} label="Hours Run" value={totalHoursRun.toFixed(1)+" h"} sub={genBreakdown.length+" generators"}/>
-      <Kpi icon={Package} label="Overall Balance" value={overallBalance.toLocaleString()+" L"} sub="Added − consumed, all time" accent={overallBalance<0?"#DA1E28":undefined}/>
+      <Kpi icon={Package} label="Diesel in Tank" value={tankTotal.toLocaleString()+" L"} sub={tankAsOf?"Latest reading "+tankAsOf:"No level recorded yet"}/>
     </div>
     {/* Daily consumption chart */}
     {chartData.length>1&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18,marginBottom:16}}>
@@ -1901,6 +1902,12 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   // Staff KPI values (their store only)
   const staffReceived=dieselDistributions.reduce((s,d)=>s+(d.litres||0),0);
   const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  // Diesel in Tank = latest recorded level per asset, summed. This is the
+  // store's real balance — a received-minus-consumed ledger misleads for
+  // locally-buying stores (their purchases aren't admin distributions).
+  const staffTankRows=(()=>{const byGen={};dieselReadings.forEach(r=>{if(r.dieselLevelActual!=null&&(!byGen[r.generatorId]||r.date>byGen[r.generatorId].date))byGen[r.generatorId]=r;});return Object.values(byGen);})();
+  const staffTank=staffTankRows.reduce((s,r)=>s+r.dieselLevelActual,0);
+  const staffTankAsOf=staffTankRows.length?staffTankRows.map(r=>r.date).sort().slice(-1)[0]:null;
   return(<div style={{maxWidth:1000}}>
     {msg&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:10,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:13,fontWeight:500}}>{msg}</div>}
     {scopeStore&&<div style={{marginBottom:14,fontSize:13,color:"#525252"}}><span style={{fontWeight:700}}>{scopeStore}</span> \u2014 diesel supply, generators & readings for your store.</div>}
@@ -1908,7 +1915,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       {scopeStore?<>
         <Kpi icon={Send} label="Diesel Received" value={staffReceived.toLocaleString()+" L"} sub={dieselDistributions.length+" deliveries"}/>
         <Kpi icon={Fuel} label="Consumed" value={staffConsumed.toLocaleString()+" L"} sub={dieselReadings.length+" readings"}/>
-        <Kpi icon={Package} label="Balance" value={(staffReceived-staffConsumed).toLocaleString()+" L"} sub={(staffReceived-staffConsumed)<0?"Over":"Available"} accent={(staffReceived-staffConsumed)<0?"#DA1E28":undefined}/>
+        <Kpi icon={Package} label="Diesel in Tank" value={staffTank.toLocaleString()+" L"} sub={staffTankAsOf?"Latest reading "+staffTankAsOf:"No level recorded yet"}/>
         <Kpi icon={Zap} label="Generators" value={(generators||[]).length}/>
       </>:<>
         <Kpi icon={ShoppingCart} label="Total Purchased" value={totalPurchased.toLocaleString()+" L"} sub={"\u20A6"+totalSpent.toLocaleString()+(totalExcess>0?`  \u00B7  +${totalExcess.toLocaleString()} L excess`:"")}/>
