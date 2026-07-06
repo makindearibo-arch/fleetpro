@@ -61,10 +61,15 @@ async function fetchAll(table, orderBy = 'created_at', ascending = true) {
   let from = 0;
   const all = [];
   for (;;) {
+    // Secondary order on id: paging on a non-unique column (e.g. date, with
+    // thousands of ties) is non-deterministic at page boundaries — the same
+    // row can appear on two pages (phantom duplicates in the UI) or be
+    // skipped. A unique tiebreaker makes the page windows stable.
     const { data, error } = await supabase
       .from(table)
       .select('*')
       .order(orderBy, { ascending })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) { console.error(`Error fetching ${table}:`, error); break; }
     if (!data || data.length === 0) break;
