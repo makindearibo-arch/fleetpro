@@ -896,6 +896,25 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         const pl=pend.reduce((s,d)=>s+(d.litres||0),0);
         if(!confirm(`${pl.toLocaleString()} L was delivered to your store on ${entryDate} but has not been accepted yet, so it will NOT be added to this reading. Tap the green Accept button to include it.\n\nSave the reading without it anyway?`))return;
       }
+      // Missed-day guard: saving a reading whose PREVIOUS reading is more than
+      // one day back lumps several days of usage into one row, and any diesel
+      // delivered on the skipped day(s) is never counted by any reading (no
+      // reading exists on the delivery's date) — it then shows up as a phantom
+      // discrepancy. Two stores hit exactly this on 2026-07-06.
+      if(!editingId){
+        const gPrev=getPrevReading(selGen);
+        if(gPrev){
+          const gapDays=Math.round((new Date(entryDate)-new Date(gPrev.date))/86400000);
+          if(gapDays>1){
+            const gapDists=(dieselDistributions||[]).filter(d=>d.storeLoc===sForAdd&&d.date>gPrev.date&&d.date<entryDate);
+            const gapL=gapDists.reduce((s,d)=>s+(d.litres||0),0);
+            let m=`The last reading for this asset was ${gPrev.date} — you are skipping ${gapDays-1} day(s). This entry will lump ${gapDays} days of usage into one reading.`;
+            if(gapL>0)m+=`\n\nIMPORTANT: ${gapL.toLocaleString()} L was delivered on the skipped day(s) and will NOT be counted anywhere. Log the missed day(s) first (change the Reading Date at the top) and accept the delivery there.`;
+            else m+=`\n\nBetter: log the missed day(s) first using the Reading Date picker.`;
+            if(!confirm(m+`\n\nSave this reading anyway?`))return;
+          }
+        }
+      }
     }
     setSaving(true);setMsg("");
     try{
@@ -905,13 +924,24 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const prevForOpen=getPrevReading(selGen);
       const hOpen=(prevForOpen?.genHoursClosing!=null)?prevForOpen.genHoursClosing:(parseFloat(hoursOpening)||null);
       const hClose=parseFloat(hoursClosing)||null;
+      // A meter can't run backwards: closing below opening is a typo (Akure 4
+      // typed 500 after a 520 opening → -300 L "consumption" in the data).
+      if(hOpen!=null&&hClose!=null&&hClose<hOpen){
+        setMsg(`Error: Closing hours (${hClose.toLocaleString()}) cannot be below opening hours (${hOpen.toLocaleString()}) — the meter can't run backwards. Check the reading.`);
+        setSaving(false);return;
+      }
       const hrsRun=(hOpen!=null&&hClose!=null)?hClose-hOpen:null;
       const actualLevel=parseFloat(dieselLevel)||null;
       // Diesel added = admin distributions to this store on this date that the
       // store has ACCEPTED (received_confirmed). Acceptance is the trigger; an
       // unaccepted delivery is not counted (not a manually-typed figure either).
+      // At an oven+generator store, deliveries go into the MAIN (generator)
+      // tank — counting them on the oven reading too double-counts (Ondo
+      // Bakery Jul 4: 2,000 L landed on both). Ovens only count deliveries at
+      // oven-only stores (no generator asset).
       const storeForAdd=g?.loc||userStore||"";
-      const added=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
+      const storeHasGenAsset=(generators||[]).some(x=>x.loc===storeForAdd&&x.assetType!=="oven");
+      const added=(g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
       const nHours=parseFloat(nepaHours)||0;
       const bl=genBaselines?.find(b=>b.generator_id===selGen);
       const baselineRate=bl?.avg_litres_per_hour||null;
@@ -1067,7 +1097,11 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   // the day's reading once accepted (received_confirmed).
   const storeForEntry=isStoreStaff?userStore:(selectedGen?.loc||"");
   const dayDists=(dieselDistributions||[]).filter(d=>d.storeLoc===storeForEntry&&d.date===entryDate);
-  const autoAdded=dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
+  // Deliveries count on the generator's reading; an oven at an oven+generator
+  // store shows/stores 0 added (must mirror the same rule in handleSave).
+  const entryStoreHasGen=(generators||[]).some(x=>x.loc===storeForEntry&&x.assetType!=="oven");
+  const distsCountHere=!(selectedGen?.assetType==="oven"&&entryStoreHasGen);
+  const autoAdded=distsCountHere?dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0):0;
   const pendingDists=dayDists.filter(d=>!d.confirmed);
 
 
@@ -1254,7 +1288,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                       ?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted</span>
                       :<button type="button" onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));await applyAcceptToReading(d,dieselReadings,setDieselReadings,generators);}catch(e){alert("Error: "+e.message);}}} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
                   </div>);})}
-              {pendingDists.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingDists.reduce((s,d)=>s+(d.litres||0),0).toLocaleString()} L delivered but not yet accepted — tap <b>Accept</b> to include it in today's reading.</div>}
+              {!distsCountHere&&dayDists.length>0&&<div style={{padding:"8px 12px",background:"#F4F4F4",borderTop:"1px solid #E8ECF1",fontSize:11,color:"#525252"}}>Deliveries go into the main tank and are counted on the <b>generator's</b> reading — this oven records 0 added.</div>}
+              {distsCountHere&&pendingDists.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingDists.reduce((s,d)=>s+(d.litres||0),0).toLocaleString()} L delivered but not yet accepted — tap <b>Accept</b> to include it in today's reading.</div>}
             </div>
             {dieselLevel&&selectedGen.tank>0&&(()=>{
               const pct=Math.min(100,Math.round(parseFloat(dieselLevel)/selectedGen.tank*100));
