@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
-import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin } from "lucide-react";
+import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin } from "lucide-react";
 import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
 import LiveMapPage from "./LiveMapPage.jsx";
