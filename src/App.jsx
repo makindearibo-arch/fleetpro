@@ -942,6 +942,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const storeForAdd=g?.loc||userStore||"";
       const storeHasGenAsset=(generators||[]).some(x=>x.loc===storeForAdd&&x.assetType!=="oven");
       const added=(g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
+      const isOven=g?.assetType==="oven";
       const nHours=parseFloat(nepaHours)||0;
       const bl=genBaselines?.find(b=>b.generator_id===selGen);
       const baselineRate=bl?.avg_litres_per_hour||null;
@@ -949,23 +950,36 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const fallbackRate=g?.tank?g.tank/10:15;
       const rate=baselineRate||fallbackRate;
       const theoretical=hrsRun?hrsRun*rate:null;
-      const consumptionRate=rate;
-      // Same-day transfers OUT of this tank (to vehicles/oven) are not generator consumption
+      // Same-day transfers OUT of this tank (to vehicles/oven) are not consumption
       const transfersOut=(dieselTransfers||[]).filter(t=>t.sourceGenId===selGen&&t.date===entryDate).reduce((s,t)=>s+(t.litres||0),0);
-      // Discrepancy calculation
+      const prevRd=getPrevReading(selGen);
+      const prevLevel=prevRd?.dieselLevelActual!=null?prevRd.dieselLevelActual:null;
+      // Consumption & rate:
+      //  - OVEN (no hour meter): consumption = the measured tank drop
+      //    (prev level + added - transfers - current level); its rate is
+      //    L/BATCH, not L/hr. Computing hours×rate here (as for a generator)
+      //    left oven consumption NULL and stored a bogus 15 L/hr rate.
+      //  - GENERATOR: modelled as hours × baseline rate (theoretical).
+      const batchesNum=(batches!==""&&batches!=null)?parseFloat(batches):null;
+      let consumptionLitres,consumptionRate;
+      if(isOven){
+        consumptionLitres=(actualLevel!=null&&prevLevel!=null)?Math.max(0,Math.round(prevLevel+added-transfersOut-actualLevel)):null;
+        consumptionRate=(consumptionLitres!=null&&batchesNum>0)?Math.round(consumptionLitres/batchesNum*100)/100:null;
+      }else{
+        consumptionLitres=theoretical!=null?Math.round(theoretical):null;
+        consumptionRate=rate;
+      }
+      // Discrepancy flag — generators only (ovens track L/batch, not a
+      // level-vs-hours model, so they are not flagged here).
       let discrepancy=null;let discFlag=false;
-      if(actualLevel!=null&&theoretical!=null){
-        const prev=getPrevReading(selGen);
-        const prevLevel=prev?.dieselLevelActual||null;
-        if(prevLevel!=null){
-          const expectedLevel=prevLevel+added-transfersOut-theoretical;
-          discrepancy=actualLevel-expectedLevel;
-          const pctDiff=theoretical>0?Math.abs(discrepancy)/theoretical*100:0;
-          // Min-burn floor (must match backfill_discrepancy_flags.py): when the
-          // expected burn is below dipstick resolution (~25 L), a "discrepancy"
-          // is measurement noise — short-run days would otherwise always flag.
-          discFlag=pctDiff>thresholdPct&&theoretical>=25;
-        }
+      if(!isOven&&actualLevel!=null&&theoretical!=null&&prevLevel!=null){
+        const expectedLevel=prevLevel+added-transfersOut-theoretical;
+        discrepancy=actualLevel-expectedLevel;
+        const pctDiff=theoretical>0?Math.abs(discrepancy)/theoretical*100:0;
+        // Min-burn floor (must match backfill_discrepancy_flags.py): when the
+        // expected burn is below dipstick resolution (~25 L), a "discrepancy"
+        // is measurement noise — short-run days would otherwise always flag.
+        discFlag=pctDiff>thresholdPct&&theoretical>=25;
       }
       // Helper for photo upload
       const uploadPhoto=async(file,folder)=>{
@@ -986,7 +1000,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         generatorId:selGen,storeLoc:g?.loc||userStore||"",date:entryDate,
         genHoursOpening:hOpen,genHoursClosing:hClose,
         dieselLevelActual:actualLevel,dieselLevelTheoretical:theoretical?Math.round(theoretical):null,
-        dieselAdded:added,consumptionLitres:theoretical?Math.round(theoretical):null,consumptionRate:rate,
+        dieselAdded:added,consumptionLitres:consumptionLitres,consumptionRate:consumptionRate,
         genPhotoUrl:genPhotoUrl,genSource:inputMode,
         dieselLevelPhotoUrl:tankPhotoUrl,
         aiReadings:aiNotes?{raw:aiNotes}:null,aiConfidence:null,
