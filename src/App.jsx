@@ -2252,6 +2252,15 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const openMap={};const byGen={};
       dieselReadings.forEach(r=>{(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
       Object.values(byGen).forEach(arr=>{arr.sort((a,b)=>a.date.localeCompare(b.date));arr.forEach((r,i)=>{openMap[r.id]=i>0?arr[i-1].dieselLevelActual:(r.dieselLevelActual!=null&&r.consumptionLitres!=null?r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres:null);});});
+      // Transfers OUT per (generator, date) — moved to vehicles/oven, not burned.
+      const txMap={};(dieselTransfers||[]).forEach(t=>{if(t.sourceGenId){const kk=t.sourceGenId+"|"+t.date;txMap[kk]=(txMap[kk]||0)+(t.litres||0);}});
+      const isOvenId=(id)=>((generators||[]).find(g=>g.id===id)?.assetType)==="oven";
+      // USED = measured tank drop (prior close + added - transfers - close) —
+      // the diesel that actually left the tank. EXPECTED = the model
+      // (hours × learned rate), generators only; for ovens consumption_litres
+      // already IS the measured drop, so there is no separate expected.
+      const usedOf=(r)=>{const o=openMap[r.id];return(o!=null&&r.dieselLevelActual!=null)?Math.max(0,Math.round(o+(r.dieselAdded||0)-(txMap[r.generatorId+"|"+r.date]||0)-r.dieselLevelActual)):null;};
+      const expectedOf=(r)=>isOvenId(r.generatorId)?null:r.consumptionLitres;
       const rows=dieselReadings
         .filter(r=>!rdStore||r.storeLoc===rdStore)
         .filter(r=>!rdGen||r.generatorId===rdGen)
@@ -2260,19 +2269,19 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         .sort((a,b)=>b.date.localeCompare(a.date)||a.storeLoc.localeCompare(b.storeLoc));
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
       const tHours=rows.reduce((s,r)=>s+(r.hoursRun||0),0);
-      const tCons=rows.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+      const tUsed=rows.reduce((s,r)=>s+(usedOf(r)||0),0);
       const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
       const tBatches=rows.reduce((s,r)=>s+(r.batchesProduced||0),0);
       // Pagination
       const pageCount=Math.max(1,Math.ceil(rows.length/rdPageSize));
       const curPage=Math.min(rdPage,pageCount-1);
       const pageRows=rows.slice(curPage*rdPageSize,(curPage+1)*rdPageSize);
-      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Consumption (L)","Batches","Rate (L/hr | L/batch)","NEPA Open","NEPA Close","Notes"];
+      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Expected (L)","Batches","Rate (L/hr | L/batch)","NEPA Open","NEPA Close","Notes"];
       const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1,background:"#F4F4F4"};
       const resetPage=()=>setRdPage(0);
       const exportCsv=()=>{
         const head=cols.join(",");
-        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",r.consumptionLitres??"",r.batchesProduced??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",expectedOf(r)??"",r.batchesProduced??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
         const blob=new Blob([head+"\n"+body],{type:"text/csv"});
         const url=URL.createObjectURL(blob);const a=document.createElement("a");
         a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
@@ -2290,9 +2299,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":`repeat(${tBatches>0?5:4},1fr)`,gap:12,marginBottom:14}}>
           <Kpi icon={FileText} label="Readings" value={rows.length}/>
           <Kpi icon={Clock} label="Total Hours Run" value={tHours.toFixed(1)}/>
-          <Kpi icon={Droplet} label="Total Consumption" value={tCons.toLocaleString()+" L"}/>
+          <Kpi icon={Droplet} label="Total Used" value={tUsed.toLocaleString()+" L"} sub="Measured tank drop"/>
           <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
-          {tBatches>0&&<Kpi icon={Package} label="Bread Batches" value={tBatches.toLocaleString()} sub={tCons>0?`${(tCons/tBatches).toFixed(2)} L/batch avg`:""}/>}
+          {tBatches>0&&<Kpi icon={Package} label="Bread Batches" value={tBatches.toLocaleString()} sub={tUsed>0?`${(tUsed/tBatches).toFixed(2)} L/batch avg`:""}/>}
         </div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
           {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
@@ -2307,7 +2316,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={tc}>{openMap[r.id]!=null?openMap[r.id].toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:600}}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
             <td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td>
-            <td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td>
+            <td style={{...tc,fontWeight:600}}>{usedOf(r)!=null?usedOf(r).toLocaleString():"-"}</td>
+            <td style={{...tc,color:"#8D8D8D"}}>{expectedOf(r)!=null?expectedOf(r).toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:r.batchesProduced!=null?600:400,color:r.batchesProduced!=null?"#8B5CF6":"#161616"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td>
             <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
             <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
