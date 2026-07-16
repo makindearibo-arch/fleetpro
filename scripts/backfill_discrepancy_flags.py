@@ -35,10 +35,11 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_THRESHOLD_PCT = 20.0
-# Don't flag days whose expected burn is below dipstick resolution (~25 L):
-# a tank stick can't show a 12 L change, so tiny-run days always look "off".
-# Must match the same floor in App.jsx handleSave.
-MIN_THEORETICAL_L = 25.0
+# Min-GAP floor: only flag when the discrepancy ITSELF exceeds ~25 L. Below a
+# dipstick's resolution a gap is measurement noise. Keying off the gap (not the
+# expected burn) fixes the case where a short run with a large actual drop was
+# wrongly suppressed while a smaller gap flagged. Must match App.jsx handleSave.
+MIN_DISCREPANCY_L = 25.0
 
 
 def load_env_file():
@@ -146,12 +147,13 @@ def main(apply_mode):
                     expected = prev_level + added - tr - theoretical
                     disc = actual - expected
                     pct = abs(disc) / theoretical * 100
-                    # Min-burn floor: when the expected burn is below what a
-                    # dipstick can resolve (~a few cm), a "discrepancy" is
-                    # measurement noise, not signal — e.g. Ado 1 runs <1.5 h/day
-                    # (expected ~12 L) on a stick that reads in ~40 L steps, so
-                    # every short-run day flagged. Only flag meaningful burns.
-                    flag = pct > threshold and theoretical >= MIN_THEORETICAL_L
+                    # Min-GAP floor: only flag when the discrepancy itself is
+                    # above dipstick resolution (~25 L). Keying off the gap (not
+                    # the expected burn) means a short run with a large actual
+                    # drop is no longer suppressed while a smaller gap flags
+                    # (Ado 1 Jul 6: used 41 vs expected 22, gap 20 L, was hidden
+                    # because expected < 25 while Jul 4's gap of 9 L flagged).
+                    flag = pct > threshold and abs(disc) >= MIN_DISCREPANCY_L
                     g_eval += 1
                     if flag:
                         g_flag += 1

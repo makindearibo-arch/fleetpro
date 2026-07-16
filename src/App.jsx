@@ -976,10 +976,12 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         const expectedLevel=prevLevel+added-transfersOut-theoretical;
         discrepancy=actualLevel-expectedLevel;
         const pctDiff=theoretical>0?Math.abs(discrepancy)/theoretical*100:0;
-        // Min-burn floor (must match backfill_discrepancy_flags.py): when the
-        // expected burn is below dipstick resolution (~25 L), a "discrepancy"
-        // is measurement noise — short-run days would otherwise always flag.
-        discFlag=pctDiff>thresholdPct&&theoretical>=25;
+        // Min-GAP floor (must match backfill_discrepancy_flags.py): only flag
+        // when the discrepancy itself exceeds ~25 L — below dipstick resolution
+        // a gap is measurement noise. Keying the floor off the gap (not the
+        // expected burn) fixes the case where a short run with a LARGE actual
+        // drop was wrongly suppressed while a smaller gap flagged.
+        discFlag=pctDiff>thresholdPct&&Math.abs(discrepancy)>=25;
       }
       // Helper for photo upload
       const uploadPhoto=async(file,folder)=>{
@@ -2009,7 +2011,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             ?<><b>The tank has more diesel than the running hours predict.</b> The generator ran {hours.toFixed(1)} h{actualDrop!=null?`, but the tank only fell ${actualDrop.toLocaleString()} L`:""}. Usually harmless: it burned below its average on a long run, the hour meter was over-read, or diesel was added without being logged. This is the <b>opposite</b> of the theft direction.</>
             :<><b>The tank dropped more than the running hours predict.</b>{actualDrop!=null?` Expected ~${expected?.toLocaleString()} L for ${hours.toFixed(1)} h, but the tank fell ${actualDrop.toLocaleString()} L.`:""} Worth checking: an unrecorded vehicle transfer, a leak, extra draw, or diesel removed. This is the direction that matters most for possible theft.</>}
         </div>
-        <div style={{fontSize:11,color:"#8D8D8D",marginTop:10}}>Gaps over 20% of expected use (and above ~25 L) are flagged. A flag is a prompt to look, not proof of a problem.</div>
+        <div style={{fontSize:11,color:"#8D8D8D",marginTop:10}}>A reading is flagged only when the gap is BOTH over 20% of expected use AND at least ~25 L (below that, dipstick reading error can't be told from a real difference). A flag is a prompt to look, not proof of a problem.</div>
         <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}><button onClick={()=>setDscRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Got it</button></div>
       </Modal>);
     })()}
