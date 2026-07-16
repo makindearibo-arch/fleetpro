@@ -1904,6 +1904,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdTo,setRdTo]=useState("");
   const [rdPage,setRdPage]=useState(0);
   const [rdPageSize,setRdPageSize]=useState(25);
+  const [dscRow,setDscRow]=useState(null); // flagged reading being explained (+ its opening level)
   const [wtStore,setWtStore]=useState(null); // Watchtower drill-down store
   const [cmpMonth,setCmpMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}); // Compliance calendar month
   // Paid = invoice quantity (drives cost). Received = actual litres that came
@@ -1981,6 +1982,37 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const staffTank=staffTankRows.reduce((s,r)=>s+r.dieselLevelActual,0);
   const staffTankAsOf=staffTankRows.length?staffTankRows.map(r=>r.date).sort().slice(-1)[0]:null;
   return(<div style={{maxWidth:1000}}>
+    {dscRow&&(()=>{
+      const g=(generators||[]).find(x=>x.id===dscRow.generatorId);
+      const bl=genBaselines?.find(b=>b.generator_id===dscRow.generatorId);
+      const hours=dscRow.hoursRun||0;
+      const expected=dscRow.consumptionLitres;
+      const rate=bl?.avg_litres_per_hour||((hours>0&&expected!=null)?expected/hours:null);
+      const openL=dscRow.openLevel;const added=dscRow.dieselAdded||0;const closeL=dscRow.dieselLevelActual;
+      const actualDrop=(openL!=null&&closeL!=null)?openL+added-closeL:null;
+      const disc=dscRow.discrepancyLitres;
+      const pct=(expected&&expected>0&&disc!=null)?Math.round(Math.abs(disc)/expected*100):null;
+      const usedLess=disc!=null&&disc>0; // tank higher than expected -> dropped LESS than the running hours predict
+      const rs={display:"flex",justifyContent:"space-between",gap:12,padding:"7px 0",borderBottom:"1px solid #F4F4F4",fontSize:13};
+      return(<Modal title="Why this reading is flagged" onClose={()=>setDscRow(null)}>
+        <div style={{fontSize:12,color:"#8D8D8D",marginBottom:12}}>{g?.name||dscRow.generatorId} — {dscRow.storeLoc} — {dscRow.date}</div>
+        <div style={{marginBottom:14}}>
+          <div style={rs}><span>Generator ran</span><b>{hours.toFixed(1)} h</b></div>
+          <div style={rs}><span>Store's learned rate</span><b>{rate!=null?rate.toFixed(1)+" L/hr":"—"}</b></div>
+          <div style={rs}><span>Expected use (hours × rate)</span><b>{expected!=null?expected.toLocaleString()+" L":"—"}</b></div>
+          <div style={{...rs,color:"#8D8D8D"}}><span>Tank level</span><b>{openL!=null?openL.toLocaleString():"?"} → {closeL!=null?closeL.toLocaleString():"?"} L{added>0?`  (+${added.toLocaleString()} received)`:""}</b></div>
+          <div style={rs}><span>Actually used (tank drop)</span><b>{actualDrop!=null?actualDrop.toLocaleString()+" L":"—"}</b></div>
+          <div style={{...rs,borderBottom:"none"}}><span style={{fontWeight:700}}>Gap</span><b style={{color:"#DA1E28"}}>{disc!=null?`${Math.abs(disc).toLocaleString()} L ${usedLess?"less":"more"} than expected`:"—"}{pct!=null?` (${pct}%)`:""}</b></div>
+        </div>
+        <div style={{padding:"12px 14px",borderRadius:10,background:usedLess?"#EDF5FF":"#FFF1F1",border:"1px solid "+(usedLess?"#A6C8FF":"#FFB3B3"),fontSize:12.5,lineHeight:1.55,color:"#161616"}}>
+          {usedLess
+            ?<><b>The tank has more diesel than the running hours predict.</b> The generator ran {hours.toFixed(1)} h{actualDrop!=null?`, but the tank only fell ${actualDrop.toLocaleString()} L`:""}. Usually harmless: it burned below its average on a long run, the hour meter was over-read, or diesel was added without being logged. This is the <b>opposite</b> of the theft direction.</>
+            :<><b>The tank dropped more than the running hours predict.</b>{actualDrop!=null?` Expected ~${expected?.toLocaleString()} L for ${hours.toFixed(1)} h, but the tank fell ${actualDrop.toLocaleString()} L.`:""} Worth checking: an unrecorded vehicle transfer, a leak, extra draw, or diesel removed. This is the direction that matters most for possible theft.</>}
+        </div>
+        <div style={{fontSize:11,color:"#8D8D8D",marginTop:10}}>Gaps over 20% of expected use (and above ~25 L) are flagged. A flag is a prompt to look, not proof of a problem.</div>
+        <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}><button onClick={()=>setDscRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Got it</button></div>
+      </Modal>);
+    })()}
     {msg&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:10,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:13,fontWeight:500}}>{msg}</div>}
     {scopeStore&&<div style={{marginBottom:14,fontSize:13,color:"#525252"}}><span style={{fontWeight:700}}>{scopeStore}</span> \u2014 diesel supply, generators & readings for your store.</div>}
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:20}}>
@@ -2266,7 +2298,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
           :<><div style={{overflow:"auto",maxHeight:"60vh"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:1000}}><thead><tr>{cols.map(h=>(<th key={h} style={sth}>{h}</th>))}</tr></thead>
           <tbody>{pageRows.map(r=>(<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4",background:r.discrepancyFlag?"#FFF6F6":""}}>
-            <td style={{...tc,whiteSpace:"nowrap"}}><span style={{display:"inline-flex",alignItems:"center",gap:5}}>{r.discrepancyFlag&&<AlertTriangle size={12} color="#DA1E28"/>}{r.date}{r.genPhotoUrl?<a href={r.genPhotoUrl} target="_blank" rel="noreferrer" title="View meter photo" style={{display:"inline-flex"}}><Camera size={12} color={P}/></a>:null}</span></td>
+            <td style={{...tc,whiteSpace:"nowrap"}}><span style={{display:"inline-flex",alignItems:"center",gap:5}}>{r.discrepancyFlag&&<button onClick={()=>setDscRow({...r,openLevel:openMap[r.id]})} title="Why is this flagged? Click to explain" style={{display:"inline-flex",alignItems:"center",padding:2,border:"none",background:"none",cursor:"pointer"}}><AlertTriangle size={13} color="#DA1E28"/></button>}{r.date}{r.genPhotoUrl?<a href={r.genPhotoUrl} target="_blank" rel="noreferrer" title="View meter photo" style={{display:"inline-flex"}}><Camera size={12} color={P}/></a>:null}</span></td>
             <td style={tc}>{r.storeLoc}</td>
             <td style={{...tc,fontWeight:600}}>{genName(r.generatorId)}</td>
             <td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td>
