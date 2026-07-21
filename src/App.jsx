@@ -951,7 +951,11 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const rate=baselineRate||fallbackRate;
       const theoretical=hrsRun?hrsRun*rate:null;
       // Same-day transfers OUT of this tank (to vehicles/oven) are not consumption
-      const transfersOut=(dieselTransfers||[]).filter(t=>t.sourceGenId===selGen&&t.date===entryDate).reduce((s,t)=>s+(t.litres||0),0);
+      // Credit transfers from THIS generator, plus any unspecified-source
+      // transfer at this store on this date (staff sometimes leave the source
+      // blank; the store has one shared tank, so it still came out of here).
+      const gStoreT=g?.loc||userStore||"";
+      const transfersOut=(dieselTransfers||[]).filter(t=>t.date===entryDate&&(t.sourceGenId===selGen||(!t.sourceGenId&&t.storeLoc===gStoreT))).reduce((s,t)=>s+(t.litres||0),0);
       const prevRd=getPrevReading(selGen);
       const prevLevel=prevRd?.dieselLevelActual!=null?prevRd.dieselLevelActual:null;
       // Consumption & rate:
@@ -1417,6 +1421,11 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
   const storeGens=(generators||[]).filter(g=>g.loc===(isStoreStaff?userStore:storeLoc));
   const sourceOpts=storeGens.filter(g=>g.assetType!=="oven");
   const ovenOpts=storeGens.filter(g=>g.assetType==="oven");
+  // The source tank must be set, otherwise the transfer is orphaned and never
+  // subtracted from that generator's consumption (readings then falsely flag).
+  // Auto-pick when the store has one obvious tank: its single generator, or —
+  // at an oven-only store — the oven.
+  const defaultSource=sourceOpts.length===1?sourceOpts[0].id:(sourceOpts.length===0&&ovenOpts.length===1?ovenOpts[0].id:"");
   const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||(vehicles||[]).find(v=>v.id===id)?.name||id;
 
   const dateLocked=(()=>{
@@ -1443,7 +1452,7 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
         ?((vehicles||[]).find(v=>v.id===destId)?.name||destLabel.trim())
         :destType==="oven"?(genName(destId)||"Oven"):(destLabel.trim()||"Other");
       const row=await db.addDieselTransfer(fromDT({
-        date,storeLoc:loc,sourceGenId:sourceGen||null,destType,
+        date,storeLoc:loc,sourceGenId:sourceGen||defaultSource||null,destType,
         destId:destId||null,destLabel:destName,litres:parseFloat(litres),
         notes,recordedBy:user?.uid||null
       }));
@@ -1487,7 +1496,7 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
           :<select style={inp} value={storeLoc} onChange={e=>{setStoreLoc(e.target.value);setSourceGen("");setDestId("");}}><option value="">Select store...</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select>}
         </Field>
         <Field label="Date *"><input type="date" style={inp} value={date} max={todayStr} onChange={e=>setDate(e.target.value)}/></Field>
-        <Field label="From (source tank)"><select style={inp} value={sourceGen} onChange={e=>setSourceGen(e.target.value)}><option value="">Store tank / unspecified</option>{sourceOpts.map(g=>(<option key={g.id} value={g.id}>{g.name}</option>))}</select></Field>
+        <Field label="From (source tank) *"><select style={inp} value={sourceGen||defaultSource} onChange={e=>setSourceGen(e.target.value)}>{!defaultSource&&<option value="">-- pick the source tank --</option>}{sourceOpts.map(g=>(<option key={g.id} value={g.id}>{g.name}</option>))}{ovenOpts.map(g=>(<option key={g.id} value={g.id}>{g.name} (oven tank)</option>))}</select></Field>
         <Field label="Transfer To *">
           <div style={{display:"flex",gap:4,marginBottom:6}}>
             {[["vehicle","Vehicle"],["oven","Oven"],["other","Other"]].filter(([k])=>k!=="oven"||ovenOpts.length>0).map(([k,l])=>(
