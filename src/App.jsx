@@ -2264,7 +2264,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       dieselReadings.forEach(r=>{(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
       Object.values(byGen).forEach(arr=>{arr.sort((a,b)=>a.date.localeCompare(b.date));arr.forEach((r,i)=>{openMap[r.id]=i>0?arr[i-1].dieselLevelActual:(r.dieselLevelActual!=null&&r.consumptionLitres!=null?r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres:null);});});
       // Transfers OUT per (generator, date) — moved to vehicles/oven, not burned.
-      const txMap={};(dieselTransfers||[]).forEach(t=>{if(t.sourceGenId){const kk=t.sourceGenId+"|"+t.date;txMap[kk]=(txMap[kk]||0)+(t.litres||0);}});
+      // txMap = litres; txLabelMap = human list of destinations for the tooltip.
+      const txMap={};const txLabelMap={};(dieselTransfers||[]).forEach(t=>{const gid=t.sourceGenId||((generators||[]).find(g=>g.loc===t.storeLoc&&g.assetType!=="oven")||{}).id;if(!gid)return;const kk=gid+"|"+t.date;txMap[kk]=(txMap[kk]||0)+(t.litres||0);(txLabelMap[kk]=txLabelMap[kk]||[]).push(`${(t.litres||0).toLocaleString()} L → ${t.destLabel||t.destType||"out"}`);});
       const isOvenId=(id)=>((generators||[]).find(g=>g.id===id)?.assetType)==="oven";
       // USED = measured tank drop (prior close + added - transfers - close) —
       // the diesel that actually left the tank. EXPECTED = the model
@@ -2283,16 +2284,20 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const tUsed=rows.reduce((s,r)=>s+(usedOf(r)||0),0);
       const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
       const tBatches=rows.reduce((s,r)=>s+(r.batchesProduced||0),0);
+      const tTransferred=rows.reduce((s,r)=>s+(txMap[r.generatorId+"|"+r.date]||0),0);
+      const kpiCount=4+(tBatches>0?1:0)+(tTransferred>0?1:0);
       // Pagination
       const pageCount=Math.max(1,Math.ceil(rows.length/rdPageSize));
       const curPage=Math.min(rdPage,pageCount-1);
       const pageRows=rows.slice(curPage*rdPageSize,(curPage+1)*rdPageSize);
-      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Expected (L)","Batches","Rate (L/hr | L/batch)","NEPA Open","NEPA Close","Notes"];
+      const txOf=(r)=>txMap[r.generatorId+"|"+r.date]||0;
+      const txNote=(r)=>(txLabelMap[r.generatorId+"|"+r.date]||[]).join("; ");
+      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Transferred Out (L)","Expected (L)","Batches","Rate (L/hr | L/batch)","NEPA Open","NEPA Close","Notes"];
       const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1,background:"#F4F4F4"};
       const resetPage=()=>setRdPage(0);
       const exportCsv=()=>{
         const head=cols.join(",");
-        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",expectedOf(r)??"",r.batchesProduced??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",(r.notes||"").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",txOf(r)||"",expectedOf(r)??"",r.batchesProduced??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",[(r.notes||""),txNote(r)].filter(Boolean).join(" | ").replace(/[",\n]/g," ")].join(",")).join("\n");
         const blob=new Blob([head+"\n"+body],{type:"text/csv"});
         const url=URL.createObjectURL(blob);const a=document.createElement("a");
         a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
@@ -2307,11 +2312,12 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <div style={{flex:1}}/>
           <button onClick={exportCsv} disabled={rows.length===0} style={{display:"flex",alignItems:"center",gap:5,padding:"9px 14px",borderRadius:8,border:"1.5px solid "+P,background:rows.length?"#D0E2FF":"#F4F4F4",color:rows.length?P:"#8D8D8D",fontSize:12,fontWeight:600,cursor:rows.length?"pointer":"not-allowed"}}><Download size={14}/>Export CSV</button>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":`repeat(${tBatches>0?5:4},1fr)`,gap:12,marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":`repeat(${kpiCount},1fr)`,gap:12,marginBottom:14}}>
           <Kpi icon={FileText} label="Readings" value={rows.length}/>
           <Kpi icon={Clock} label="Total Hours Run" value={tHours.toFixed(1)}/>
           <Kpi icon={Droplet} label="Total Used" value={tUsed.toLocaleString()+" L"} sub="Measured tank drop"/>
           <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
+          {tTransferred>0&&<Kpi icon={Send} label="Transferred Out" value={tTransferred.toLocaleString()+" L"} sub="To vehicles / oven"/>}
           {tBatches>0&&<Kpi icon={Package} label="Bread Batches" value={tBatches.toLocaleString()} sub={tUsed>0?`${(tUsed/tBatches).toFixed(2)} L/batch avg`:""}/>}
         </div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
@@ -2328,12 +2334,13 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={{...tc,fontWeight:600}}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
             <td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:600}}>{usedOf(r)!=null?usedOf(r).toLocaleString():"-"}</td>
+            <td style={{...tc,color:txOf(r)>0?"#8A3FFC":"#8D8D8D",fontWeight:txOf(r)>0?600:400}} title={txNote(r)}>{txOf(r)>0?txOf(r).toLocaleString()+" L":"-"}</td>
             <td style={{...tc,color:"#8D8D8D"}}>{expectedOf(r)!=null?expectedOf(r).toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:r.batchesProduced!=null?600:400,color:r.batchesProduced!=null?"#8B5CF6":"#161616"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td>
             <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
             <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
             <td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td>
-            <td style={{...tc,maxWidth:200,fontSize:11,color:"#8D8D8D"}}>{r.notes||""}</td>
+            <td style={{...tc,maxWidth:220,fontSize:11,color:"#8D8D8D"}}>{r.notes||""}{txNote(r)?<span style={{color:"#8A3FFC"}}>{r.notes?" · ":""}Transferred: {txNote(r)}</span>:""}</td>
           </tr>))}</tbody></table></div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 16px",borderTop:"1px solid #E8ECF1",flexWrap:"wrap"}}>
             <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"#525252"}}>
