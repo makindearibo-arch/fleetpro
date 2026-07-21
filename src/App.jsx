@@ -1916,6 +1916,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdPage,setRdPage]=useState(0);
   const [rdPageSize,setRdPageSize]=useState(25);
   const [dscRow,setDscRow]=useState(null); // flagged reading being explained (+ its opening level)
+  const [noteRow,setNoteRow]=useState(null); // reading whose notes/transfers popup is open
   const [wtStore,setWtStore]=useState(null); // Watchtower drill-down store
   const [cmpMonth,setCmpMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}); // Compliance calendar month
   // Paid = invoice quantity (drives cost). Received = actual litres that came
@@ -2024,6 +2025,13 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}><button onClick={()=>setDscRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Got it</button></div>
       </Modal>);
     })()}
+    {noteRow&&(<Modal title="Reading notes" onClose={()=>setNoteRow(null)}>
+      <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14}}>{noteRow.gen} — {noteRow.store} — {noteRow.date}</div>
+      {noteRow.notes&&<div style={{marginBottom:noteRow.transfers.length?16:0}}><div style={{fontSize:11,fontWeight:700,color:"#525252",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Note</div><div style={{fontSize:13,lineHeight:1.5}}>{noteRow.notes}</div></div>}
+      {noteRow.transfers.length>0&&<div><div style={{fontSize:11,fontWeight:700,color:"#8A3FFC",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.04em"}}>Transferred out ({noteRow.transfers.length})</div>{noteRow.transfers.map((t,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid #F4F4F4",fontSize:13}}><Send size={13} color="#8A3FFC"/>{t}</div>))}</div>}
+      {!noteRow.notes&&!noteRow.transfers.length&&<div style={{fontSize:13,color:"#8D8D8D"}}>No notes.</div>}
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}><button onClick={()=>setNoteRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Close</button></div>
+    </Modal>)}
     {msg&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:10,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:13,fontWeight:500}}>{msg}</div>}
     {scopeStore&&<div style={{marginBottom:14,fontSize:13,color:"#525252"}}><span style={{fontWeight:700}}>{scopeStore}</span> \u2014 diesel supply, generators & readings for your store.</div>}
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:20}}>
@@ -2340,7 +2348,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
             <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
             <td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td>
-            <td style={{...tc,maxWidth:220,fontSize:11,color:"#8D8D8D"}}>{r.notes||""}{txNote(r)?<span style={{color:"#8A3FFC"}}>{r.notes?" · ":""}Transferred: {txNote(r)}</span>:""}</td>
+            <td style={{...tc,whiteSpace:"nowrap"}}>{(r.notes||txOf(r)>0)?<button onClick={()=>setNoteRow({date:r.date,gen:genName(r.generatorId),store:r.storeLoc,notes:r.notes||"",transfers:txLabelMap[r.generatorId+"|"+r.date]||[]})} title="View notes" style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 9px",borderRadius:6,border:"1px solid "+(txOf(r)>0?"#E0D4FF":"#E0E0E0"),background:txOf(r)>0?"#F5F0FF":"#fff",fontSize:11,fontWeight:600,color:txOf(r)>0?"#8A3FFC":"#525252",cursor:"pointer"}}><FileText size={11}/>{txOf(r)>0?"Transfer":"Note"}</button>:<span style={{color:"#C6C6C6"}}>-</span>}</td>
           </tr>))}</tbody></table></div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 16px",borderTop:"1px solid #E8ECF1",flexWrap:"wrap"}}>
             <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"#525252"}}>
