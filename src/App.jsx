@@ -1998,13 +1998,15 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const g=(generators||[]).find(x=>x.id===dscRow.generatorId);
       const bl=genBaselines?.find(b=>b.generator_id===dscRow.generatorId);
       const hours=dscRow.hoursRun||0;
-      const expected=dscRow.consumptionLitres;
-      const rate=bl?.avg_litres_per_hour||((hours>0&&expected!=null)?expected/hours:null);
+      const rate=bl?.avg_litres_per_hour??null;
+      const expected=(rate!=null&&hours)?Math.round(hours*rate):null;   // model = hours × rate
       const openL=dscRow.openLevel;const added=dscRow.dieselAdded||0;const closeL=dscRow.dieselLevelActual;
-      const actualDrop=(openL!=null&&closeL!=null)?openL+added-closeL:null;
+      const txOut=(dieselTransfers||[]).filter(t=>t.date===dscRow.date&&(t.sourceGenId===dscRow.generatorId||(!t.sourceGenId&&t.storeLoc===dscRow.storeLoc))).reduce((s,t)=>s+(t.litres||0),0);
+      const tankDrop=(openL!=null&&closeL!=null)?openL+added-closeL:null;      // raw drop (incl. transfers)
+      const genUsed=(tankDrop!=null)?Math.max(0,tankDrop-txOut):null;          // what the generator actually burned
       const disc=dscRow.discrepancyLitres;
       const pct=(expected&&expected>0&&disc!=null)?Math.round(Math.abs(disc)/expected*100):null;
-      const usedLess=disc!=null&&disc>0; // tank higher than expected -> dropped LESS than the running hours predict
+      const usedLess=disc!=null&&disc>0; // gen used LESS than predicted (tank higher than expected)
       const rs={display:"flex",justifyContent:"space-between",gap:12,padding:"7px 0",borderBottom:"1px solid #F4F4F4",fontSize:13};
       return(<Modal title="Why this reading is flagged" onClose={()=>setDscRow(null)}>
         <div style={{fontSize:12,color:"#8D8D8D",marginBottom:12}}>{g?.name||dscRow.generatorId} — {dscRow.storeLoc} — {dscRow.date}</div>
@@ -2013,13 +2015,15 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <div style={rs}><span>Store's learned rate</span><b>{rate!=null?rate.toFixed(1)+" L/hr":"—"}</b></div>
           <div style={rs}><span>Expected use (hours × rate)</span><b>{expected!=null?expected.toLocaleString()+" L":"—"}</b></div>
           <div style={{...rs,color:"#8D8D8D"}}><span>Tank level</span><b>{openL!=null?openL.toLocaleString():"?"} → {closeL!=null?closeL.toLocaleString():"?"} L{added>0?`  (+${added.toLocaleString()} received)`:""}</b></div>
-          <div style={rs}><span>Actually used (tank drop)</span><b>{actualDrop!=null?actualDrop.toLocaleString()+" L":"—"}</b></div>
-          <div style={{...rs,borderBottom:"none"}}><span style={{fontWeight:700}}>Gap</span><b style={{color:"#DA1E28"}}>{disc!=null?`${Math.abs(disc).toLocaleString()} L ${usedLess?"less":"more"} than expected`:"—"}{pct!=null?` (${pct}%)`:""}</b></div>
+          <div style={{...rs,color:"#8D8D8D"}}><span>Tank dropped</span><b>{tankDrop!=null?tankDrop.toLocaleString()+" L":"—"}</b></div>
+          {txOut>0&&<div style={{...rs,color:"#8A3FFC"}}><span>… of which transferred out</span><b>−{txOut.toLocaleString()} L</b></div>}
+          <div style={rs}><span style={{fontWeight:700}}>Used by generator{txOut>0?" (drop − transfers)":""}</span><b>{genUsed!=null?genUsed.toLocaleString()+" L":"—"}</b></div>
+          <div style={{...rs,borderBottom:"none"}}><span style={{fontWeight:700}}>Gap (used − expected)</span><b style={{color:"#DA1E28"}}>{disc!=null?`${Math.abs(disc).toLocaleString()} L ${usedLess?"less":"more"} than expected`:"—"}{pct!=null?` (${pct}%)`:""}</b></div>
         </div>
         <div style={{padding:"12px 14px",borderRadius:10,background:usedLess?"#EDF5FF":"#FFF1F1",border:"1px solid "+(usedLess?"#A6C8FF":"#FFB3B3"),fontSize:12.5,lineHeight:1.55,color:"#161616"}}>
           {usedLess
-            ?<><b>The tank has more diesel than the running hours predict.</b> The generator ran {hours.toFixed(1)} h{actualDrop!=null?`, but the tank only fell ${actualDrop.toLocaleString()} L`:""}. Usually harmless: it burned below its average on a long run, the hour meter was over-read, or diesel was added without being logged. This is the <b>opposite</b> of the theft direction.</>
-            :<><b>The tank dropped more than the running hours predict.</b>{actualDrop!=null?` Expected ~${expected?.toLocaleString()} L for ${hours.toFixed(1)} h, but the tank fell ${actualDrop.toLocaleString()} L.`:""} Worth checking: an unrecorded vehicle transfer, a leak, extra draw, or diesel removed. This is the direction that matters most for possible theft.</>}
+            ?<><b>The generator burned less diesel than its running hours predict.</b> It ran {hours.toFixed(1)} h{genUsed!=null?`, but only ${genUsed.toLocaleString()} L came out of the tank for it`:""}. Usually harmless: it ran below its average, the hour meter was over-read, or diesel was added without being logged. This is the <b>opposite</b> of the theft direction.</>
+            :<><b>The generator used more diesel than its running hours predict.</b>{genUsed!=null?` Expected ~${expected?.toLocaleString()} L for ${hours.toFixed(1)} h, but ${genUsed.toLocaleString()} L was used${txOut>0?` (after ${txOut.toLocaleString()} L of logged transfers)`:""}.`:""} Worth checking: an <b>unrecorded</b> transfer, a leak, extra draw, or diesel removed. This is the direction that matters most for possible theft.</>}
         </div>
         <div style={{fontSize:11,color:"#8D8D8D",marginTop:10}}>A reading is flagged only when the gap is BOTH over 20% of expected use AND at least ~25 L (below that, dipstick reading error can't be told from a real difference). A flag is a prompt to look, not proof of a problem.</div>
         <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}><button onClick={()=>setDscRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Got it</button></div>
@@ -2275,12 +2279,16 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       // txMap = litres; txLabelMap = human list of destinations for the tooltip.
       const txMap={};const txLabelMap={};(dieselTransfers||[]).forEach(t=>{const gid=t.sourceGenId||((generators||[]).find(g=>g.loc===t.storeLoc&&g.assetType!=="oven")||{}).id;if(!gid)return;const kk=gid+"|"+t.date;txMap[kk]=(txMap[kk]||0)+(t.litres||0);(txLabelMap[kk]=txLabelMap[kk]||[]).push(`${(t.litres||0).toLocaleString()} L → ${t.destLabel||t.destType||"out"}`);});
       const isOvenId=(id)=>((generators||[]).find(g=>g.id===id)?.assetType)==="oven";
-      // USED = measured tank drop (prior close + added - transfers - close) —
-      // the diesel that actually left the tank. EXPECTED = the model
-      // (hours × learned rate), generators only; for ovens consumption_litres
-      // already IS the measured drop, so there is no separate expected.
+      // USED = the diesel the GENERATOR actually burned = tank drop minus what
+      // was transferred out (prior close + added - transfers - close).
+      // EXPECTED = the model the flag uses: hours × the store's learned rate.
+      // (Do NOT use consumption_litres here — for imported rows that column
+      // holds the sheet's ACTUAL consumption, so it equals Used and the row
+      // looked flagged against a hidden third number.) Ovens have no hours
+      // model, so no expected.
       const usedOf=(r)=>{const o=openMap[r.id];return(o!=null&&r.dieselLevelActual!=null)?Math.max(0,Math.round(o+(r.dieselAdded||0)-(txMap[r.generatorId+"|"+r.date]||0)-r.dieselLevelActual)):null;};
-      const expectedOf=(r)=>isOvenId(r.generatorId)?null:r.consumptionLitres;
+      const rateOf=(r)=>{const b=genBaselines?.find(x=>x.generator_id===r.generatorId);return b?.avg_litres_per_hour??null;};
+      const expectedOf=(r)=>{if(isOvenId(r.generatorId))return null;const rt=rateOf(r);return(rt!=null&&r.hoursRun)?Math.round(r.hoursRun*rt):null;};
       const rows=dieselReadings
         .filter(r=>!rdStore||r.storeLoc===rdStore)
         .filter(r=>!rdGen||r.generatorId===rdGen)
