@@ -92,6 +92,17 @@ All DB columns use snake_case. The app uses camelCase internally. Mapper functio
 - `Field` — form field wrapper
 - `SearchSelect` — searchable dropdown
 
+### Vehicle Groups (2026-09-10)
+
+Vehicles can be tagged into groups (seeded: **Operations, Executive, Senior Managers**) and Reports can be scoped to one group.
+
+- **Storage**: the group lives on the existing `vehicles.grp` column (already mapped by `toV`/`fromV` as `group`). The *list* of available groups lives in `app_settings.vehicle_groups` (a jsonb array) via `db.setAppSetting` -- **no migration needed**.
+- **`mergeVehicleGroups(appSettings, vehicles)`** (App.jsx, near `fmt`) unions the stored list with `DEFAULT_VEHICLE_GROUPS` and any group already present on a vehicle, so a group can never disappear from the dropdowns while vehicles still carry it. App scope exposes `vehicleGroups` + `saveVehicleGroups(list)` and passes both to VehiclesPage / ReportsPage / SettingsPage.
+- **Vehicles page**: a "All groups / (No group)" filter beside the status buttons; a select-all header checkbox plus per-row checkboxes; ticking any row reveals a blue bulk bar with a group dropdown (incl. "Remove from group" and "+ New group..."), Apply and Clear. Apply writes `{grp}` per vehicle via `db.updateVehicle`. Selection is cleared whenever either filter changes so Apply can never hit a hidden row. There is also a Group field in the add/edit vehicle modal.
+- **Reports page**: the props are destructured as `allVehicles`/`allGenerators` and re-bound to `vehicles`/`generators`, so every existing calculation is scoped automatically. Generators belong to no vehicle group, so a group selection drops them. The scope only applies on `GROUPABLE_REPORTS` = fleet / fuel / maintenance / driver -- the tabs that actually SHOW the Group control; the diesel tabs are generator-based and must not be silently emptied by an invisible filter.
+- **Settings -> "vehicle groups"** tab (admin/non-store-staff): add and remove groups. Removing only drops the name from the list; vehicles keep their tag (and the merge above makes the name reappear) until they are reassigned on the Vehicles page.
+- **Bug fixed in passing**: `VehiclesPage.startEdit` did not copy `vin` into the form, so editing any vehicle wiped its VIN on save. It now copies `vin` and `group`.
+
 ## Database Schema (Supabase)
 
 ### Key Tables
