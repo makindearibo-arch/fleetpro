@@ -136,6 +136,26 @@ function Field({label,children}){return(<div style={{marginBottom:14}}><label st
 // registration to anyone who ever saw the link. Requires
 // supabase/migrations/20260922_document_uploads.sql; until that is run the
 // pages hide these controls entirely rather than fail on save.
+// Upload a meter / NEPA / tank photo. Returns {url, error} and NEVER swallows
+// the failure. For as long as this code has existed every upload failed (the
+// meter-photos bucket did not exist in the project) and the old code stored ""
+// silently, so all 2,483 readings with a photo field kept nothing and no one
+// found out. Callers show the reason and ask whether to save without the photo:
+// broken storage must not block the day log, but it must not be invisible.
+const uploadMeterPhoto=async(file,folder,keyPart)=>{
+  if(!file)return{url:"",error:null};
+  const ext=(String(file.name||"").split(".").pop()||"jpg").toLowerCase();
+  const key=String(keyPart||"photo").replace(/[^a-zA-Z0-9._-]/g,"_");
+  const path=folder+"/"+key+"-"+Date.now()+"."+ext;
+  try{
+    const{data,error}=await supabase.storage.from("meter-photos").upload(path,file,{contentType:file.type||undefined});
+    if(error||!data){console.error("meter photo upload failed:",error);return{url:"",error:(error&&error.message)||"the upload was rejected"};}
+    const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);
+    if(!urlData||!urlData.publicUrl)return{url:"",error:"it uploaded, but no public URL came back"};
+    return{url:urlData.publicUrl,error:null};
+  }catch(e){console.error("meter photo upload threw:",e);return{url:"",error:(e&&e.message)?e.message:String(e)};}
+};
+const confirmWithoutPhoto=(what,why)=>confirm("The "+what+" could not be uploaded.\n\n"+why+"\n\nSave the entry anyway, without the photo?");
 const DOC_BUCKET="documents";
 const openDoc=async(path)=>{if(!path)return;const{data,error}=await supabase.storage.from(DOC_BUCKET).createSignedUrl(path,3600);if(error||!data){alert("Could not open that file: "+((error&&error.message)||"unknown error"));return;}window.open(data.signedUrl,"_blank","noopener");};
 function DocLink({path,title}){if(!path)return <span style={{color:"#C6C6C6"}}>-</span>;return <button type="button" title={title||"View attachment"} onClick={()=>openDoc(path)} style={{display:"inline-flex",alignItems:"center",gap:4,background:"none",border:"none",color:P,cursor:"pointer",padding:0,fontSize:12,fontWeight:600}}><Paperclip size={13}/>View</button>;}
@@ -347,10 +367,9 @@ function MeterSnap({generators,setGenerators,odoLog,setOdoLog,embedded}){
       // Upload photo to Supabase Storage
       let photoUrl="";
       if(photo){
-        const ext=photo.name.split(".").pop();
-        const path="meter-readings/"+gen+"-"+Date.now()+"."+ext;
-        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,photo);
-        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);photoUrl=urlData?.publicUrl||"";}
+        const up=await uploadMeterPhoto(photo,"meter-readings",gen);
+        if(up.error){setMsg("Photo upload failed: "+up.error);if(!confirmWithoutPhoto("meter photo",up.error)){setSaving(false);return;}}
+        photoUrl=up.url;
       }
       // Save reading log with all data
       const now=new Date();
@@ -1140,19 +1159,19 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         discFlag=pctDiff>thresholdPct&&Math.abs(discrepancy)>=25;
       }
       // Helper for photo upload
-      const uploadPhoto=async(file,folder)=>{
-        if(!file)return"";
-        const ext=file.name.split(".").pop();
-        const path=folder+"/"+selGen+"-"+Date.now()+"."+ext;
-        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,file);
-        if(upErr||!upData)return"";
-        const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);
-        return urlData?.publicUrl||"";
-      };
       const existing=editingId?dieselReadings.find(r=>r.id===editingId):null;
-      const genPhotoUrl=photo?await uploadPhoto(photo,"diesel-readings"):(existing?.genPhotoUrl||"");
-      const nepaPhotoUrl=nepaPhoto?await uploadPhoto(nepaPhoto,"nepa-readings"):(existing?.nepaPhotoUrl||"");
-      const tankPhotoUrl=tankPhoto?await uploadPhoto(tankPhoto,"diesel-tank"):(existing?.dieselLevelPhotoUrl||"");
+      const upGen=await uploadMeterPhoto(photo,"diesel-readings",selGen);
+      const upNepa=await uploadMeterPhoto(nepaPhoto,"nepa-readings",selGen);
+      const upTank=await uploadMeterPhoto(tankPhoto,"diesel-tank",selGen);
+      const upFailed=[["generator meter photo",upGen],["NEPA meter photo",upNepa],["tank photo",upTank]].filter(x=>x[1].error);
+      if(upFailed.length){
+        const why=upFailed.map(x=>x[0]+" - "+x[1].error).join("; ");
+        setMsg("Photo upload failed: "+why);
+        if(!confirmWithoutPhoto(upFailed.length>1?"photos":upFailed[0][0],why)){setSaving(false);return;}
+      }
+      const genPhotoUrl=photo?upGen.url:(existing?.genPhotoUrl||"");
+      const nepaPhotoUrl=nepaPhoto?upNepa.url:(existing?.nepaPhotoUrl||"");
+      const tankPhotoUrl=tankPhoto?upTank.url:(existing?.dieselLevelPhotoUrl||"");
       // Build record
       const record=fromDR({
         generatorId:selGen,storeLoc:g?.loc||userStore||"",date:entryDate,
@@ -1738,10 +1757,9 @@ function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appS
     try{
       let photoUrl=preview&&!photo?preview:"";
       if(photo){
-        const ext=photo.name.split(".").pop();
-        const path="nepa-period/"+storeLoc.replace(/\s+/g,"_")+"-"+Date.now()+"."+ext;
-        const{data:upData,error:upErr}=await supabase.storage.from("meter-photos").upload(path,photo);
-        if(!upErr&&upData){const{data:urlData}=supabase.storage.from("meter-photos").getPublicUrl(path);photoUrl=urlData?.publicUrl||"";}
+        const up=await uploadMeterPhoto(photo,"nepa-period",storeLoc);
+        if(up.error){setMsg("Photo upload failed: "+up.error);if(!confirmWithoutPhoto("NEPA photo",up.error)){setSaving(false);return;}}
+        photoUrl=up.url;
       }
       const computedHours=totalHours?parseFloat(totalHours):(meterClose&&meterOpen?parseFloat(meterClose)-parseFloat(meterOpen):null);
       const record=fromNPL({storeLoc,fromDate,toDate,totalHours:computedHours,meterOpening:parseFloat(meterOpen)||null,meterClosing:parseFloat(meterClose)||null,photoUrl,notes,submittedBy:user?.uid||null});
