@@ -156,6 +156,32 @@ const uploadMeterPhoto=async(file,folder,keyPart)=>{
   }catch(e){console.error("meter photo upload threw:",e);return{url:"",error:(e&&e.message)?e.message:String(e)};}
 };
 const confirmWithoutPhoto=(what,why)=>confirm("The "+what+" could not be uploaded.\n\n"+why+"\n\nSave the entry anyway, without the photo?");
+// Shrink a camera photo before upload. A phone shot is 3-6 MB; a receipt stays
+// perfectly readable at 1600px / JPEG 0.8, which is usually ~300 KB -- a real
+// saving on mobile data and in storage. Rules: images only (a PDF passes
+// through untouched), skip anything already small, keep the original if the
+// "compressed" version somehow comes out bigger, and fall back to the original
+// whenever the browser cannot decode the file (HEIC on most desktops) rather
+// than failing the upload. imageOrientation:"from-image" applies the EXIF
+// rotation, without which a portrait phone photo lands on its side.
+const MAX_IMAGE_EDGE=1600,IMAGE_QUALITY=0.8,COMPRESS_ABOVE=400*1024;
+const shrinkImage=async(file)=>{
+  if(!file||!file.type||file.type.indexOf("image/")!==0)return file;
+  if(file.size<=COMPRESS_ABOVE)return file;
+  try{
+    const bmp=await createImageBitmap(file,{imageOrientation:"from-image"});
+    const scale=Math.min(1,MAX_IMAGE_EDGE/Math.max(bmp.width,bmp.height));
+    const w=Math.max(1,Math.round(bmp.width*scale)),h=Math.max(1,Math.round(bmp.height*scale));
+    const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;
+    const ctx=canvas.getContext("2d");ctx.fillStyle="#fff";ctx.fillRect(0,0,w,h);ctx.drawImage(bmp,0,0,w,h);
+    if(bmp.close)bmp.close();
+    const blob=await new Promise(res=>canvas.toBlob(res,"image/jpeg",IMAGE_QUALITY));
+    if(!blob||blob.size>=file.size)return file;
+    const dot=file.name.lastIndexOf(".");
+    const base=(dot>0?file.name.slice(0,dot):file.name)||"photo";
+    return new File([blob],base+".jpg",{type:"image/jpeg",lastModified:Date.now()});
+  }catch(e){console.warn("image compression skipped, uploading the original:",e);return file;}
+};
 const DOC_BUCKET="documents";
 const openDoc=async(path)=>{if(!path)return;const{data,error}=await supabase.storage.from(DOC_BUCKET).createSignedUrl(path,3600);if(error||!data){alert("Could not open that file: "+((error&&error.message)||"unknown error"));return;}window.open(data.signedUrl,"_blank","noopener");};
 function DocLink({path,title}){if(!path)return <span style={{color:"#C6C6C6"}}>-</span>;return <button type="button" title={title||"View attachment"} onClick={()=>openDoc(path)} style={{display:"inline-flex",alignItems:"center",gap:4,background:"none",border:"none",color:P,cursor:"pointer",padding:0,fontSize:12,fontWeight:600}}><Paperclip size={13}/>View</button>;}
@@ -163,13 +189,15 @@ function DocUpload({folder,value,onChange,accept}){
   const [busy,setBusy]=useState(false);const [err,setErr]=useState("");
   const shown=value?value.split("/").pop().replace(/^[0-9]+-/,""):"";
   const btn={display:"flex",alignItems:"center",justifyContent:"center",gap:7,flex:1,minWidth:128,padding:"10px 12px",border:"1.5px dashed #C6C6C6",borderRadius:8,cursor:busy?"wait":"pointer",color:"#525252",fontSize:12,fontWeight:600};
-  const pick=async(e)=>{const file=e.target.files&&e.target.files[0];e.target.value="";if(!file)return;
-    if(file.size>10*1024*1024){setErr("That file is "+(file.size/1048576).toFixed(1)+" MB. The limit is 10 MB.");return;}
+  const pick=async(e)=>{const raw=e.target.files&&e.target.files[0];e.target.value="";if(!raw)return;
     setBusy(true);setErr("");
+    const file=await shrinkImage(raw);
+    if(file.size>10*1024*1024){setBusy(false);setErr("That file is "+(file.size/1048576).toFixed(1)+" MB even after compression. The limit is 10 MB.");return;}
     const path=folder+"/"+Date.now()+"-"+file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
     const{error}=await supabase.storage.from(DOC_BUCKET).upload(path,file,{contentType:file.type||undefined});
     setBusy(false);
     if(error){setErr(error.message||"Upload failed");return;}
+    if(file!==raw)console.log("receipt compressed:",Math.round(raw.size/1024)+" KB ->",Math.round(file.size/1024)+" KB");
     onChange(path);};
   // Detach only -- do NOT delete the stored object. Removing or retaking and
   // then cancelling the form would otherwise leave the saved record pointing
