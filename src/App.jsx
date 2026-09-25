@@ -162,6 +162,7 @@ function DocLink({path,title}){if(!path)return <span style={{color:"#C6C6C6"}}>-
 function DocUpload({folder,value,onChange,accept}){
   const [busy,setBusy]=useState(false);const [err,setErr]=useState("");
   const shown=value?value.split("/").pop().replace(/^[0-9]+-/,""):"";
+  const btn={display:"flex",alignItems:"center",justifyContent:"center",gap:7,flex:1,minWidth:128,padding:"10px 12px",border:"1.5px dashed #C6C6C6",borderRadius:8,cursor:busy?"wait":"pointer",color:"#525252",fontSize:12,fontWeight:600};
   const pick=async(e)=>{const file=e.target.files&&e.target.files[0];e.target.value="";if(!file)return;
     if(file.size>10*1024*1024){setErr("That file is "+(file.size/1048576).toFixed(1)+" MB. The limit is 10 MB.");return;}
     setBusy(true);setErr("");
@@ -170,8 +171,12 @@ function DocUpload({folder,value,onChange,accept}){
     setBusy(false);
     if(error){setErr(error.message||"Upload failed");return;}
     onChange(path);};
-  const drop=async()=>{if(!confirm("Remove this attachment?"))return;try{await supabase.storage.from(DOC_BUCKET).remove([value]);}catch(e){}onChange("");setErr("");};
-  return(<div>{value?(<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#F4F4F4",borderRadius:8}}><Paperclip size={14} color="#525252"/><span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shown}</span><button type="button" onClick={()=>openDoc(value)} style={{background:"none",border:"none",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}>View</button><button type="button" onClick={drop} style={{background:"none",border:"none",color:"#DA1E28",fontSize:12,fontWeight:600,cursor:"pointer"}}>Remove</button></div>):(<label style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",border:"1.5px dashed #C6C6C6",borderRadius:8,cursor:busy?"wait":"pointer",color:"#525252",fontSize:12,fontWeight:600}}><Upload size={14}/>{busy?"Uploading...":"Choose a photo or PDF"}<input type="file" accept={accept||"image/*,application/pdf"} onChange={pick} disabled={busy} style={{display:"none"}}/></label>)}{err&&<div style={{fontSize:11,color:"#DA1E28",marginTop:5}}>{err}</div>}</div>);}
+  // Detach only -- do NOT delete the stored object. Removing or retaking and
+  // then cancelling the form would otherwise leave the saved record pointing
+  // at a file that no longer exists. Unreferenced files just sit in the
+  // private bucket; a sweep can clean them up later.
+  const drop=()=>{if(!confirm("Remove this attachment from the record?"))return;onChange("");setErr("");};
+  return(<div>{value?(<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#F4F4F4",borderRadius:8}}><Paperclip size={14} color="#525252"/><span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shown}</span><button type="button" onClick={()=>openDoc(value)} style={{background:"none",border:"none",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}>View</button><label style={{color:P,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>{busy?"...":"Retake"}<input type="file" accept="image/*" capture="environment" onChange={pick} disabled={busy} style={{display:"none"}}/></label><button type="button" onClick={drop} style={{background:"none",border:"none",color:"#DA1E28",fontSize:12,fontWeight:600,cursor:"pointer"}}>Remove</button></div>):(<div style={{display:"flex",gap:8,flexWrap:"wrap"}}><label style={btn}><Camera size={14}/>{busy?"Uploading...":"Take photo"}<input type="file" accept="image/*" capture="environment" onChange={pick} disabled={busy} style={{display:"none"}}/></label><label style={btn}><Upload size={14}/>{busy?"Uploading...":"Choose file"}<input type="file" accept={accept||"image/*,application/pdf"} onChange={pick} disabled={busy} style={{display:"none"}}/></label></div>)}{err&&<div style={{fontSize:11,color:"#DA1E28",marginTop:5}}>{err}</div>}</div>);}
 
 function SearchSelect({options,value,onChange,placeholder}){
   const [open,setOpen]=useState(false);const [q,setQ]=useState("");
