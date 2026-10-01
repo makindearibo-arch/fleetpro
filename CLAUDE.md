@@ -271,8 +271,25 @@ There is also a second tracker that has never been online — it needs SIM card 
 
 ## Development Workflow
 
+**`main` is branch-protected (since 2026-10-01): changes reach `main` only through a Pull Request approved by Makinde.** Makinde (repo admin, GitHub `makindearibo-arch`) can still push straight to `main`; everyone else (IT staff) cannot.
+
+**Before any git work, check who is driving:** `gh api user --jq .login`. If it is `makindearibo-arch`, the direct flow is allowed. Otherwise use the PR flow, and never try to push to `main`.
+
+### PR flow (IT staff, required)
+1. `git checkout main && git pull`
+2. `git checkout -b <short-topic>` (e.g. `fix-diesel-log-date`)
+3. Edit, then test locally with `npm run dev`
+4. Commit, `git push -u origin <branch>`, then `gh pr create --base main` with a plain-English summary of what changed and how it was tested
+5. Vercel posts a **Preview** link on the PR. Makinde checks it, approves, and merges. Merging deploys to production, and the branch auto-deletes.
+6. After the merge: `git checkout main && git pull`
+
+### Direct flow (Makinde only)
 1. Edit files in `C:\Users\MakindeAribo\Documents\fleetpro\`
-2. Test locally: `npm run dev`
-3. Commit and push: `git add -A && git commit -m "message" && git push`
-4. Vercel auto-deploys from GitHub on push to `main`
-5. If `git index.lock` blocks: `del .git\index.lock`
+2. `git pull` first (work also happens from other machines and sessions)
+3. Test locally: `npm run dev`
+4. Commit and push: `git add -A && git commit -m "message" && git push`
+5. Vercel auto-deploys from GitHub on push to `main`
+
+**To review an IT-staff PR:** `gh pr list`, `gh pr diff <n>`, open the Vercel preview, then `gh pr review <n> --approve` and `gh pr merge <n> --squash`.
+
+If `git index.lock` blocks: `del .git\index.lock`

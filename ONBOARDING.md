@@ -72,12 +72,22 @@ Ask Claude: *"Run the app locally so I can see it."* FleetPro should open in a b
 
 ## Daily rules (important)
 
-1. **Before starting any work, tell Claude: "Pull the latest changes from GitHub."**
-   This gets Makinde's latest work. Skipping it causes conflicts.
-2. **Pushing to `main` goes live immediately.** Vercel updates the real website within about a minute, and store staff are using it. Always test locally first.
-3. **Don't both edit at the same time.** Most of the app is in one large file (`src/App.jsx`), so two people changing it at once creates conflicts. Send a quick message like "I'm working on FleetPro now."
-4. **Scripts in `scripts/` change the real database** when run with `--apply`. Always run them first *without* `--apply` (a preview) and check the output.
-5. **When you finish, tell Claude: "Commit and push my changes."**
+### How your changes reach the live site
+
+You **can't push directly to `main`**, because GitHub blocks it. Every change goes through Makinde for approval first:
+
+1. **Start each task:** tell Claude *"Pull the latest changes and start a new branch for [what you're doing]."*
+2. **Do the work** with Claude and test it locally.
+3. **When you finish:** tell Claude *"Commit, push, and open a pull request."*
+4. Vercel automatically builds a **preview website** of your changes and posts the link on the pull request. Send Makinde the pull request link.
+5. Makinde checks the preview and approves it. Your change then goes live.
+6. If Makinde asks for changes, tell Claude what to fix and *"push the update to the same pull request."*
+
+### Other rules
+
+1. **Keep each pull request to one task** (one fix or one feature). Small pull requests are quick to review.
+2. **Coordinate with Makinde on `src/App.jsx`.** Most of the app lives in this one large file, so two people changing the same part at once creates conflicts.
+3. **Scripts in `scripts/` change the real database immediately.** A pull request doesn't protect against this. Always run scripts first *without* `--apply` (a preview), and check with Makinde before running anything with `--apply`.
 
 ## Sharing knowledge with Makinde's Claude
 
