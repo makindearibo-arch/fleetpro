@@ -1280,6 +1280,17 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     setSaving(true);setMsg("");
     try{
       const g=generators.find(x=>x.id===selGen);
+      // One reading per asset per day: a second one double-counts that day's
+      // diesel. The 2026-10-01 sweep found 6, saved 1 minute to 2 days apart --
+      // Save tapped again after it had already worked, or a second phone holding
+      // stale data. Local state catches the double tap; the DATABASE catches the
+      // second phone, whose local state is exactly what is out of date. If the
+      // check itself fails (offline) the save goes ahead rather than blocking.
+      if(!editingId){
+        let dupe=dieselReadings.find(r=>r.generatorId===selGen&&r.date===entryDate);
+        if(!dupe){try{const{data}=await supabase.from("diesel_readings").select("id").eq("generator_id",selGen).eq("date",entryDate).limit(1);if(data&&data.length)dupe=data[0];}catch(e){}}
+        if(dupe){setMsg(`Already saved: ${g?.name||"this asset"} already has a reading for ${entryDate}, so nothing new was added. To change it, pick ${g?.name||"it"} again from the list and the saved reading opens for editing.`);setSaving(false);return;}
+      }
       // Opening ALWAYS comes from the previous day's closing (live), never a
       // stale stored value; manual entry only for the first-ever reading.
       const prevForOpen=getPrevReading(selGen);
@@ -1362,6 +1373,29 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         // expected burn) fixes the case where a short run with a LARGE actual
         // drop was wrongly suppressed while a smaller gap flagged.
         discFlag=pctDiff>thresholdPct&&Math.abs(discrepancy)>=25;
+      }
+      // Tank-level sanity check (2026-10-01 sweep). Three typed-in level typos --
+      // Akure 6 entered 20 for ~2,200 L -- each made a fake loss AND a fake gain,
+      // and deliveries landing on the wrong day made 1,000-2,500 L phantom flags.
+      // ASK, never block: a real loss must still be recordable. Thresholds measured
+      // on 2,647 app readings: fires on ~1.3% (about 1 in 75) and catches all three
+      // typos. Rise: over 100 L that no accepted delivery or logged transfer in
+      // explains (skipped when a delivery is waiting to be accepted -- the existing
+      // prompt covers that). Drop: beyond the expected burn by more than the larger
+      // of 150 L or twice that burn. Generators only for drops (ovens have no meter).
+      if(actualLevel!=null&&prevLevel!=null){
+        const tIn=isOven?(dieselTransfers||[]).filter(t=>t.date===entryDate&&t.destType==="oven"&&t.destId===selGen).reduce((s,t)=>s+(t.litres||0),0):0;
+        const rise=actualLevel-prevLevel-added-tIn;
+        const drop=prevLevel+added-transfersOut-actualLevel;
+        const pendingToday=(dieselDistributions||[]).some(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&!d.confirmed);
+        const fromTo=`${prevLevel.toLocaleString()} L on ${prevRd?.date||"the last reading"} to ${actualLevel.toLocaleString()} L`;
+        let q=null;
+        if(rise>100&&!pendingToday){
+          q=`The tank level went UP by ${Math.round(rise).toLocaleString()} L (from ${fromTo}), but no delivery has been accepted${isOven?" and no transfer into this oven is logged":""} for ${entryDate}.\n\n- If diesel arrived, accept the delivery${isOven?" or log the transfer":""} first, then save.\n- If the level is a typo, press Cancel and correct it.\n\nPress OK only if ${actualLevel.toLocaleString()} L is right.`;
+        }else if(!isOven&&theoretical!=null&&drop>theoretical+Math.max(150,2*theoretical)){
+          q=`The tank level went DOWN by ${Math.round(drop).toLocaleString()} L (from ${fromTo}), but the generator only ran long enough to burn about ${Math.round(theoretical).toLocaleString()} L${transfersOut>0?` (and ${Math.round(transfersOut).toLocaleString()} L was transferred out)`:""}.\n\n- If the level is a typo, press Cancel and correct it.\n- If it is right, press OK. The reading will be flagged for review.\n\nIs ${actualLevel.toLocaleString()} L correct?`;
+        }
+        if(q&&!confirm(q)){setSaving(false);return;}
       }
       // Helper for photo upload
       const existing=editingId?dieselReadings.find(r=>r.id===editingId):null;
