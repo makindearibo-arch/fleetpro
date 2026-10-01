@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
-import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin, Paperclip, Upload } from "lucide-react";
+import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, ChevronDown, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin, Paperclip, Upload } from "lucide-react";
 import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
 import LiveMapPage from "./LiveMapPage.jsx";
@@ -109,6 +109,48 @@ const allMeterDeltas=(fuelLogs)=>{
   Object.entries(g).forEach(([k,L])=>{const d=meterDeltas(L);d.forEach((v,id)=>deltas.set(id,v));if(k.startsWith("v:"))usual.set(k.slice(2),usualKmPerL(d));});
   return {deltas,usual};
 };
+// --- Diesel usage by store ---------------------------------------------------
+// A single diesel reading over this many litres is physically impossible. The
+// largest legitimate one in 7,420 readings is 2,096 L; the next value up is a
+// 3.4 million L typo (Ado 1, 30 Sep 2026: closing meter typed 352922 for
+// 3529.22). Usage views set such readings aside and SAY so on screen -- they
+// never sum them silently. Do NOT key this off hours: Akure 1's imported rows
+// carry absurd hours (82,730 h/day) next to correct, measured litres.
+const IMPLAUSIBLE_READING_L=5000;
+const DIESEL_COLORS=["#0F62FE","#24A148","#FF832B","#8A3FFC","#DA1E28","#009D9A"];
+const MON3=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const isoDaysAgo=n=>new Date(Date.now()-n*864e5).toISOString().split("T")[0];
+// A meter reading that jumps impossibly far is usually a dropped decimal point.
+// Returns the reading with the decimal restored if one fits, else null.
+const suggestDecimal=(open,close,maxHours)=>{for(const d of [10,100,1000]){const v=close/d;if(v>=open&&v-open<=maxHours)return Math.round(v*100)/100;}return null;};
+// Diesel usage per store over [from,to]. "Used" is consumptionLitres -- the
+// same figure the Diesel Cost tab and the readings table use, so every screen
+// agrees. "Received" is admin deliveries (as on Store Comparison). Transfers
+// out stay SEPARATE: diesel moved into a vehicle left the store but was not
+// burned there. Buckets by day, week or month so a long range stays readable.
+// Weeks are computed in UTC: a local-midnight Date run through toISOString()
+// lands on the previous day in Nigeria (UTC+1).
+const dieselUsage=({readings,distributions,transfers,stores,from,to})=>{
+  const want=s=>!stores||stores.length===0||stores.includes(s);
+  const inR=d=>!!d&&d>=from&&d<=to;
+  const span=Math.round((new Date(to+"T00:00:00Z")-new Date(from+"T00:00:00Z"))/864e5)+1;
+  const unit=span<=45?"day":span<=200?"week":"month";
+  const bucketOf=d=>{if(unit==="day")return d;if(unit==="month")return d.slice(0,7);const t=new Date(d+"T00:00:00Z");t.setUTCDate(t.getUTCDate()-((t.getUTCDay()+6)%7));return t.toISOString().slice(0,10);};
+  const labelOf=k=>unit==="month"?MON3[+k.slice(5,7)-1]+" "+k.slice(2,4):(unit==="week"?"w/c ":"")+(+k.slice(8,10))+" "+MON3[+k.slice(5,7)-1];
+  const by={},bk={},excluded=[];
+  const row=s=>by[s]=by[s]||{store:s,used:0,received:0,transferred:0,days:new Set(),flags:0};
+  (readings||[]).forEach(r=>{if(!inR(r.date)||!want(r.storeLoc))return;
+    const L=r.consumptionLitres||0;const s=row(r.storeLoc);s.days.add(r.date);
+    if(L>IMPLAUSIBLE_READING_L){excluded.push(r);return;}
+    s.used+=L;if(r.discrepancyFlag)s.flags++;
+    const k=bucketOf(r.date);const b=bk[k]=bk[k]||{key:k,total:0};b.total+=L;b[r.storeLoc]=(b[r.storeLoc]||0)+L;});
+  (distributions||[]).forEach(d=>{if(inR(d.date)&&want(d.storeLoc))row(d.storeLoc).received+=d.litres||0;});
+  (transfers||[]).forEach(t=>{if(inR(t.date)&&want(t.storeLoc))row(t.storeLoc).transferred+=t.litres||0;});
+  const rows=Object.values(by).map(s=>({...s,days:s.days.size})).sort((a,b)=>b.used-a.used);
+  const series=Object.values(bk).sort((a,b)=>a.key.localeCompare(b.key)).map(b=>({...b,label:labelOf(b.key)}));
+  const total=rows.reduce((t,s)=>({used:t.used+s.used,received:t.received+s.received,transferred:t.transferred+s.transferred}),{used:0,received:0,transferred:0});
+  return{rows,series,unit,span,excluded,total};
+};
 const DEFAULT_VEHICLE_GROUPS=["Operations","Executive","Senior Managers"];
 const mergeVehicleGroups=(settings,vehicles)=>{
   const stored=Array.isArray(settings?.vehicle_groups)?settings.vehicle_groups:DEFAULT_VEHICLE_GROUPS;
@@ -213,7 +255,81 @@ function SearchSelect({options,value,onChange,placeholder}){
   return(<div style={{position:"relative"}}><div onClick={()=>setOpen(!open)} style={{...inp,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff"}}><span style={{color:selected?"#161616":"#8D8D8D",fontSize:13}}>{selected?selected.label:(placeholder||"-- Select --")}</span><ChevronRight size={13} color="#8D8D8D" style={{transform:open?"rotate(90deg)":"rotate(0)",transition:"transform 0.15s"}}/></div>{open&&(<div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1.5px solid #E0E0E0",borderRadius:8,marginTop:4,zIndex:999,maxHeight:220,overflow:"auto",boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}><div style={{padding:"8px 10px",borderBottom:"1px solid #F4F4F4",position:"sticky",top:0,background:"#fff"}}><div style={{display:"flex",alignItems:"center",gap:6,background:"#F4F4F4",borderRadius:6,padding:"6px 10px"}}><Search size={13} color="#8D8D8D"/><input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Type to search..." style={{border:"none",outline:"none",background:"transparent",fontSize:12,width:"100%",fontFamily:"inherit"}}/></div></div>{filtered.length===0?(<div style={{padding:14,textAlign:"center",color:"#8D8D8D",fontSize:12}}>No results</div>):filtered.map(o=>(<div key={o.value} onClick={()=>{onChange(o.value);setOpen(false);setQ("");}} style={{padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:value===o.value?600:400,color:value===o.value?P:"#161616",background:value===o.value?"#D0E2FF":"transparent"}} onMouseEnter={e=>{if(value!==o.value)e.currentTarget.style.background="#F8FAFF"}} onMouseLeave={e=>{if(value!==o.value)e.currentTarget.style.background="transparent"}}>{o.label}</div>))}</div>)}</div>);
 }
 
-function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,papers,svcReminders}){
+// Multi-store picker. An EMPTY selection means "all stores". Searching then
+// "Select these" grabs every match at once -- e.g. "bakery" for all 7 bakeries.
+function StoreMultiSelect({stores,value,onChange,width}){
+  const [open,setOpen]=useState(false);const [q,setQ]=useState("");const ref=useRef(null);
+  useEffect(()=>{if(!open)return;const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[open]);
+  const sel=value||[];const w=width||190;
+  const label=sel.length===0?"All stores":sel.length===1?sel[0]:sel.length+" stores";
+  const shown=(stores||[]).filter(s=>s.toLowerCase().includes(q.trim().toLowerCase()));
+  const toggle=s=>onChange(sel.includes(s)?sel.filter(x=>x!==s):[...sel,s]);
+  const link={background:"none",border:"none",color:P,fontSize:11,fontWeight:600,cursor:"pointer",padding:0};
+  return(<div ref={ref} style={{position:"relative"}}>
+    <button type="button" onClick={()=>setOpen(o=>!o)} style={{...inp,width:w,padding:"6px 10px",fontSize:12,display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,cursor:"pointer",background:"#fff",textAlign:"left"}}><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:sel.length?600:400,color:sel.length?P:"#161616"}}>{label}</span><ChevronDown size={14} color="#6F6F6F"/></button>
+    {open&&(<div style={{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:60,width:Math.max(w,250),background:"#fff",border:"1px solid #E0E0E0",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:8}}>
+      <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search stores..." style={{...inp,padding:"6px 10px",fontSize:12,marginBottom:6}}/>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"0 4px 6px"}}><button type="button" style={link} onClick={()=>onChange([])}>All stores</button>{q.trim()&&shown.length>0&&<button type="button" style={link} onClick={()=>onChange([...new Set([...sel,...shown])])}>Select these {shown.length}</button>}</div>
+      <div style={{maxHeight:260,overflowY:"auto"}}>{shown.length===0?<div style={{padding:8,fontSize:12,color:"#8D8D8D"}}>No store matches.</div>:shown.map(s=>(<label key={s} style={{display:"flex",alignItems:"center",gap:8,padding:"6px",borderRadius:6,cursor:"pointer",fontSize:12,background:sel.includes(s)?"#EDF5FF":"transparent"}}><input type="checkbox" checked={sel.includes(s)} onChange={()=>toggle(s)}/>{s}</label>))}</div>
+    </div>)}
+  </div>);
+}
+function DieselUsageChart({series,stackKeys,height}){
+  if(!series||!series.length)return <div style={{padding:28,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No diesel readings in this period.</div>;
+  return(<ResponsiveContainer width="100%" height={height||200}><BarChart data={series}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4" vertical={false}/><XAxis dataKey="label" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd"/><YAxis fontSize={10} tickLine={false} axisLine={false} width={44} tickFormatter={v=>v>=1000?(v/1000).toFixed(1)+"k":v}/><Tooltip formatter={(v,n)=>[Math.round(v).toLocaleString()+" L",n==="total"?"Used":n]}/>{stackKeys?stackKeys.map((k,i)=>(<Bar key={k} dataKey={k} stackId="u" fill={DIESEL_COLORS[i%DIESEL_COLORS.length]}/>)):<Bar dataKey="total" fill={P} radius={[3,3,0,0]}/>}{stackKeys&&<Legend wrapperStyle={{fontSize:11}}/>}</BarChart></ResponsiveContainer>);
+}
+function ImplausibleReadingsNote({items}){
+  if(!items||!items.length)return null;
+  return(<div style={{padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082",color:"#7A4F00",fontSize:12,lineHeight:1.55}}>
+    <b>{items.length} reading{items.length>1?"s":""} left out of these totals as impossible</b> (over {IMPLAUSIBLE_READING_L.toLocaleString()} L in a single reading):
+    {items.slice(0,4).map(r=>{const fix=(r.genHoursOpening!=null&&r.genHoursClosing!=null)?suggestDecimal(r.genHoursOpening,r.genHoursClosing,48):null;return(<div key={r.id}>- {r.storeLoc}, {r.date}: {Math.round(r.consumptionLitres).toLocaleString()} L{r.genHoursOpening!=null&&r.genHoursClosing!=null?<> (meter {r.genHoursOpening.toLocaleString()} to {r.genHoursClosing.toLocaleString()}{fix!=null?<> - closing was probably <b>{fix.toLocaleString()}</b>, a missing decimal point</>:null})</>:null}</div>);})}
+    {items.length>4&&<div>- and {items.length-4} more</div>}
+    <div style={{marginTop:4}}>Correct the reading and it will be counted again.</div>
+  </div>);
+}
+function MiniStat({label,value,sub,color}){return(<div style={{padding:"10px 12px",background:"#F8F9FB",borderRadius:10,minWidth:0}}><div style={{fontSize:11,color:"#8D8D8D",fontWeight:600}}>{label}</div><div style={{fontSize:18,fontWeight:700,marginTop:2,color:color||"#161616",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{value}</div>{sub&&<div style={{fontSize:11,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sub}</div>}</div>);}
+// Dashboard card: diesel used by the chosen stores over a short window. The
+// store choice is remembered per browser. "Full report" opens Reports on the
+// Diesel Usage tab with the same stores and dates.
+function DieselUsagePanel({dieselReadings,dieselDistributions,dieselTransfers,avgDieselPrice,go}){
+  const KEY="fp.dash.dieselStores";
+  const [stores,setStoresRaw]=useState(()=>{try{const v=JSON.parse(localStorage.getItem(KEY)||"[]");return Array.isArray(v)?v:[];}catch(e){return[];}});
+  const setStores=v=>{setStoresRaw(v);try{localStorage.setItem(KEY,JSON.stringify(v));}catch(e){}};
+  const [period,setPeriod]=useState("7d");
+  const storeList=useMemo(()=>[...new Set((dieselReadings||[]).map(r=>r.storeLoc).filter(Boolean))].sort(),[dieselReadings]);
+  const sel=stores.filter(s=>storeList.includes(s));
+  const today=new Date().toISOString().split("T")[0];
+  const from=period==="7d"?isoDaysAgo(6):period==="30d"?isoDaysAgo(29):today.slice(0,8)+"01";
+  const u=dieselUsage({readings:dieselReadings,distributions:dieselDistributions,transfers:dieselTransfers,stores:sel,from,to:today});
+  const stackKeys=sel.length>=1&&sel.length<=6?sel:null;
+  // Average over days that actually have readings: the window includes today,
+  // which usually is not logged yet, so dividing by calendar days understates it.
+  const loggedDays=u.series.length;
+  const perDay=loggedDays>0?u.total.used/loggedDays:0;
+  const scope=sel.length===0?"All stores":sel.length<=2?sel.join(", "):sel.length+" stores";
+  const openReport=()=>{try{sessionStorage.setItem("fp.reports.open",JSON.stringify({report:"dieselusage",stores:sel,from,to:today}));}catch(e){}go("reports");};
+  const pb=a=>({padding:"5px 11px",borderRadius:7,border:a?"1.5px solid "+P:"1.5px solid #E0E0E0",background:a?"#D0E2FF":"#fff",color:a?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"});
+  return(<div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1",display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <h3 style={{fontSize:14,fontWeight:700,margin:0,display:"flex",alignItems:"center",gap:8}}><Droplet size={16} color={P}/>Diesel Usage</h3>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <StoreMultiSelect stores={storeList} value={sel} onChange={setStores}/>
+        <div style={{display:"flex",gap:4}}>{[["7d","7 days"],["30d","30 days"],["month","This month"]].map(([k,l])=>(<button key={k} onClick={()=>setPeriod(k)} style={pb(period===k)}>{l}</button>))}</div>
+      </div>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:10}}>
+      <MiniStat label="Used" value={Math.round(u.total.used).toLocaleString()+" L"} sub={scope}/>
+      <MiniStat label="Est. cost" value={fmt(Math.round(u.total.used*avgDieselPrice))} color="#DA1E28" sub={avgDieselPrice>0?"@ "+fmt(Math.round(avgDieselPrice))+"/L":"no purchase prices yet"}/>
+      <MiniStat label="Per day" value={Math.round(perDay).toLocaleString()+" L"} sub={loggedDays?"avg over "+loggedDays+" day"+(loggedDays>1?"s":"")+" logged":"nothing logged yet"}/>
+      <MiniStat label="Received" value={Math.round(u.total.received).toLocaleString()+" L"} sub="admin deliveries"/>
+    </div>
+    <ImplausibleReadingsNote items={u.excluded}/>
+    <DieselUsageChart series={u.series} stackKeys={stackKeys} height={190}/>
+    {u.rows.length>0&&<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Used","Avg / day","Received","Flags"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{u.rows.slice(0,8).map(r=>(<tr key={r.store}><td style={{...tc,fontWeight:600}}>{r.store}</td><td style={tc}>{Math.round(r.used).toLocaleString()} L</td><td style={tc}>{r.days?Math.round(r.used/r.days).toLocaleString()+" L":"-"}</td><td style={tc}>{r.received?Math.round(r.received).toLocaleString()+" L":"-"}</td><td style={{...tc,color:r.flags?"#DA1E28":"#8D8D8D",fontWeight:r.flags?700:400}}>{r.flags||"-"}</td></tr>))}</tbody></table>}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:11,color:"#8D8D8D"}}>{u.rows.length>8?"Top 8 of "+u.rows.length+" stores. ":""}Avg / day is per day logged.</span><button onClick={openReport} style={{fontSize:12,color:P,fontWeight:600,background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:3}}>Full report<ChevronRight size={14}/></button></div>
+  </div>);
+}
+function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,papers,svcReminders}){
   const av=vehicles.filter(v=>v.status==="Active").length;const ag=generators.filter(g=>g.status==="Active").length;const ow=workOrders.filter(w=>w.status!=="Completed").length;
   const pd=[{name:"Active",value:av,color:"#24A148"},{name:"In Shop",value:vehicles.filter(v=>v.status==="In Shop").length,color:"#F1C21B"},{name:"Out of Svc",value:vehicles.filter(v=>v.status==="Out of Service").length,color:"#DA1E28"}].filter(d=>d.value>0);
   // Real operating costs: fuel logs (naira) + diesel consumption x weighted avg purchase price + WO costs, last 6 months
@@ -223,7 +339,7 @@ function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,die
     const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
     const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     const fuel=(fuelLogs||[]).filter(f=>f.date&&f.date.startsWith(ym)).reduce((s,f)=>s+(f.cost||0),0);
-    const dieselL=(dieselReadings||[]).filter(r=>r.date&&r.date.startsWith(ym)).reduce((s,r)=>s+(r.consumptionLitres||0),0);
+    const dieselL=(dieselReadings||[]).filter(r=>r.date&&r.date.startsWith(ym)&&(r.consumptionLitres||0)<=IMPLAUSIBLE_READING_L).reduce((s,r)=>s+(r.consumptionLitres||0),0);
     const maint=(workOrders||[]).filter(w=>w.due&&w.due.startsWith(ym)).reduce((s,w)=>s+(w.cost||0),0);
     return{m:d.toLocaleDateString("en",{month:"short"}),fuel,diesel:Math.round(dieselL*avgDieselPrice),maint};
   });
@@ -268,6 +384,7 @@ function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,die
       </div>);})}
       {attention.length>8&&<div style={{padding:"8px 20px",fontSize:11,color:"#8D8D8D"}}>{attention.length-8} more items…</div>}
     </div>}
+    <DieselUsagePanel dieselReadings={dieselReadings} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} avgDieselPrice={avgDieselPrice} go={go}/>
     <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr",gap:14}}>
       <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1"}}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 12px"}}>Operating Costs (last 6 months)</h3><ResponsiveContainer width="100%" height={180}><AreaChart data={costSeries}><CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0"/><XAxis dataKey="m" tick={{fontSize:11,fill:"#8D8D8D"}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:11,fill:"#8D8D8D"}} axisLine={false} tickLine={false} tickFormatter={nairaTick}/><Tooltip formatter={(v,n)=>[fmt(v),n==="fuel"?"Vehicle Fuel":n==="diesel"?"Gen Diesel":"Maintenance"]}/><Area dataKey="fuel" stroke={P} fill={P+"20"} strokeWidth={2}/><Area dataKey="diesel" stroke="#8A3FFC" fill="#8A3FFC20" strokeWidth={2}/><Area dataKey="maint" stroke="#FF832B" fill="#FF832B20" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
       <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #E8ECF1"}}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Fleet Status</h3><ResponsiveContainer width="100%" height={130}><PieChart><Pie data={pd} cx="50%" cy="50%" innerRadius={38} outerRadius={55} dataKey="value" strokeWidth={0}>{pd.map((e,i)=>(<Cell key={i} fill={e.color}/>))}</Pie></PieChart></ResponsiveContainer><div style={{display:"flex",gap:10,justifyContent:"center"}}>{pd.map(d=>(<span key={d.name} style={{fontSize:11,color:"#525252",display:"flex",alignItems:"center",gap:4}}><span style={{width:7,height:7,borderRadius:"50%",background:d.color}}/>{d.value} {d.name}</span>))}</div></div>
@@ -640,9 +757,20 @@ function VendorsPage({vendors,setVendors,vendorTypes,canEdit}){
   </div>);
 }
 
-function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,vehicleGroups}){
-  const [report,setReport]=useState("fleet");
+function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,vehicleGroups}){
+  // The Dashboard's "Full report" link leaves a one-shot hint so this opens on
+  // Diesel Usage with the same stores and dates. Read in the initialiser and
+  // cleared in an effect (StrictMode calls initialisers twice in dev).
+  const [hint]=useState(()=>{try{return JSON.parse(sessionStorage.getItem("fp.reports.open")||"null");}catch(e){return null;}});
+  const [report,setReport]=useState(hint?.report||"fleet");
   const [groupFilter,setGroupFilter]=useState("All");
+  const [storeFilter,setStoreFilter]=useState(Array.isArray(hint?.stores)?hint.stores:[]);
+  useEffect(()=>{try{sessionStorage.removeItem("fp.reports.open");}catch(e){}},[]);
+  const dieselStores=useMemo(()=>[...new Set((dieselReadings||[]).map(r=>r.storeLoc).filter(Boolean))].sort(),[dieselReadings]);
+  // Store scope for the diesel tabs. Like the vehicle Group, it only applies
+  // where its control is visible -- an invisible filter would just look like
+  // missing data on the other tabs.
+  const DIESEL_REPORTS=["dieselusage","dieselcost","storecompare"];
   // Vehicle-group scope. Shadowing the props means every existing use of
   // `vehicles` below is filtered automatically. Generators belong to no vehicle
   // group, so a group selection drops them rather than showing a misleading mix
@@ -657,8 +785,8 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const gvNames=new Set(vehicles.map(v=>v.name));
   const inGroupAsset=(assetId,isGen)=>!groupActive?true:(!isGen&&gvIds.has(assetId));
   const _rpNow=new Date();const _rpMonthStart=new Date(_rpNow.getFullYear(),_rpNow.getMonth(),1).toISOString().split("T")[0];
-  const [dateFrom,setDateFrom]=useState(_rpMonthStart);const [dateTo,setDateTo]=useState(_rpNow.toISOString().split("T")[0]);const [fuelTypeFilter,setFuelTypeFilter]=useState("All");
-  const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
+  const [dateFrom,setDateFrom]=useState(hint?.from||_rpMonthStart);const [dateTo,setDateTo]=useState(hint?.to||_rpNow.toISOString().split("T")[0]);const [fuelTypeFilter,setFuelTypeFilter]=useState("All");
+  const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselusage","Diesel Usage"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
   // A row with no date is NOT in any date window. This used to return true,
   // so the 433 work orders with a blank `due` (imported history) passed every
   // date filter -- the Maintenance tab showed the same 432 Completed and the
@@ -667,8 +795,12 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const fFL=fuelLogs.filter(f=>inRange(f.date)&&inGroupAsset(f.asset,f.isGen));
   const gWO=workOrders.filter(w=>!groupActive||(!w.isGen&&gvNames.has(w.asset)));
   const fWO=gWO.filter(w=>inRange(w.due));
-  const fDR=(dieselReadings||[]).filter(r=>inRange(r.date));
-  const fDD=(dieselDistributions||[]).filter(d=>inRange(d.date));
+  const storeScoped=storeFilter.length>0&&DIESEL_REPORTS.includes(report);
+  const inStores=s=>!storeScoped||storeFilter.includes(s);
+  const fDRall=(dieselReadings||[]).filter(r=>inRange(r.date)&&inStores(r.storeLoc));
+  const dieselExcluded=fDRall.filter(r=>(r.consumptionLitres||0)>IMPLAUSIBLE_READING_L);
+  const fDR=fDRall.filter(r=>(r.consumptionLitres||0)<=IMPLAUSIBLE_READING_L);
+  const fDD=(dieselDistributions||[]).filter(d=>inRange(d.date)&&inStores(d.storeLoc));
   const avgDieselPrice=(()=>{const priced=(dieselPurchases||[]).filter(p=>(p.pricePerL||0)>0);const tl=priced.reduce((s,p)=>s+(p.litres||0),0);const tcst=priced.reduce((s,p)=>s+(p.litres||0)*p.pricePerL,0);return tl>0?tcst/tl:0;})();
   const getVName=(id)=>{const v=vehicles.find(x=>x.id===id);return v?v.name:id;};
   const getGName=(id)=>{const g=generators.find(x=>x.id===id);return g?g.name:id;};
@@ -678,6 +810,31 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const renderFleet=()=>{const statusCount=(arr,s)=>arr.filter(x=>x.status===s).length;const vData=[{name:"Active",v:statusCount(vehicles,"Active"),g:statusCount(generators,"Active")},{name:"In Shop/Maint",v:statusCount(vehicles,"In Shop"),g:statusCount(generators,"In Maintenance")},{name:"Out/Standby",v:statusCount(vehicles,"Out of Service"),g:statusCount(generators,"Standby")}];const headers=["Asset","ID","Type","Status","Location"];const vRows=vehicles.map(v=>[v.name,v.id,v.type,v.status,v.loc]);const gRows=generators.map(g=>[g.name,g.id,g.cap||"-",g.status,g.loc]);const allRows=[...vRows,...gRows];return(<div style={{display:"flex",flexDirection:"column",gap:16}}><div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}><Kpi icon={Truck} label="Total Vehicles" value={vehicles.length}/><Kpi icon={Zap} label="Total Generators" value={generators.length}/><Kpi icon={AlertTriangle} label="In Shop / Maint." value={statusCount(vehicles,"In Shop")+statusCount(generators,"In Maintenance")} accent="#FF832B"/><Kpi icon={ClipboardList} label="Open Work Orders" value={gWO.filter(w=>w.status!=="Completed").length}/></div><div style={card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Fleet Status Overview</h4><div style={{display:"flex",gap:6}}><button onClick={()=>csvExport(headers,allRows,"fleet-summary")} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>CSV</button><button onClick={()=>pdfExport("Fleet Summary Report",headers,allRows)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>PDF</button></div></div><ResponsiveContainer width="100%" height={220}><BarChart data={vData}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="name" fontSize={11}/><YAxis fontSize={11}/><Tooltip/><Legend/><Bar dataKey="v" name="Vehicles" fill={P} radius={[4,4,0,0]}/><Bar dataKey="g" name="Generators" fill="#8A3FFC" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div><div style={card}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Asset","ID","Type/Capacity","Status","Location"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{vehicles.map(v=>(<tr key={v.id}><td style={{...tc,fontWeight:600}}>{v.name}</td><td style={tc}>{v.id}</td><td style={tc}>{v.type}</td><td style={tc}><Badge label={v.status}/></td><td style={tc}>{v.loc}</td></tr>))}{generators.map(g=>(<tr key={g.id}><td style={{...tc,fontWeight:600}}>{g.name}</td><td style={tc}>{g.id}</td><td style={tc}>{g.cap||"-"}</td><td style={tc}><Badge label={g.status}/></td><td style={tc}>{g.loc}</td></tr>))}</tbody></table></div></div>);};
   const renderFuel=()=>{const ftf=fuelTypeFilter;const vFuel=fFL.filter(f=>!f.isGen&&(ftf==="All"||f.fuelType===ftf));const gFuel=fFL.filter(f=>f.isGen&&(ftf==="All"||f.fuelType===ftf));const totalV=vFuel.reduce((s,f)=>s+f.cost,0);const totalG=gFuel.reduce((s,f)=>s+f.cost,0);const {deltas:rD}=allMeterDeltas(fuelLogs);const byAsset={};vFuel.forEach(f=>{const n=getVName(f.asset);if(!byAsset[n])byAsset[n]={litres:0,cost:0,km:0,mL:0,fills:0,measured:0};const b=byAsset[n];b.litres+=f.litres;b.cost+=f.cost;b.fills++;const d=rD.get(f.id);if(d&&d.delta>0&&d.litres>0){b.km+=d.delta;b.mL+=d.litres;b.measured++;}});const vTot=Object.values(byAsset).reduce((t,d)=>({km:t.km+d.km,mL:t.mL+d.mL,fills:t.fills+d.fills,measured:t.measured+d.measured}),{km:0,mL:0,fills:0,measured:0});const assetData=Object.entries(byAsset).map(([name,d])=>({name:name.length>15?name.substring(0,15)+"..":name,cost:d.cost}));const headers=["Asset","Litres","Cost","Distance","km/L","Fills with reading"];const rows=Object.entries(byAsset).map(([name,d])=>[name,d.litres.toFixed(0),fmt(d.cost),d.km>0?d.km.toLocaleString()+" km":"-",d.mL>0?(d.km/d.mL).toFixed(1):"-",d.measured+" / "+d.fills]);const gHeaders=["Generator","Litres","Cost","Hours","L/hr"];const gByAsset={};gFuel.forEach(f=>{const n=getGName(f.asset);if(!gByAsset[n])gByAsset[n]={litres:0,cost:0,hrs:0,mL:0};const b=gByAsset[n];b.litres+=f.litres;b.cost+=f.cost;const d=rD.get(f.id);if(d&&d.delta>0&&d.litres>0){b.hrs+=d.delta;b.mL+=d.litres;}});const gRows=Object.entries(gByAsset).map(([name,d])=>[name,d.litres.toFixed(0),fmt(d.cost),d.hrs>0?(Math.round(d.hrs*10)/10).toLocaleString()+" hrs":"-",d.hrs>0?(d.mL/d.hrs).toFixed(1):"-"]);return(<div style={{display:"flex",flexDirection:"column",gap:16}}><div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}><Kpi icon={Fuel} label="Vehicle Fuel Spend" value={fmt(totalV)}/><Kpi icon={Zap} label="Generator Fuel Spend" value={fmt(totalG)}/><Kpi icon={DollarSign} label="Total Fuel Spend" value={fmt(totalV+totalG)} accent="#DA1E28"/><Kpi icon={Gauge} label="Total Litres" value={(vFuel.reduce((s,f)=>s+f.litres,0)+gFuel.reduce((s,f)=>s+f.litres,0)).toLocaleString()+" L"}/></div><div style={card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Vehicle Fuel Cost by Asset</h4><div style={{display:"flex",gap:6}}><button onClick={()=>csvExport(headers,rows,"fuel-vehicles")} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>CSV</button><button onClick={()=>pdfExport("Vehicle Fuel Consumption Report",headers,rows)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>PDF</button></div></div>{assetData.length>0&&<ResponsiveContainer width="100%" height={220}><BarChart data={assetData}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="name" fontSize={10}/><YAxis fontSize={11}/><Tooltip formatter={(v)=>fmt(v)}/><Bar dataKey="cost" name="Cost" fill={P} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>}<table style={{width:"100%",borderCollapse:"collapse",marginTop:12}}><thead><tr style={{background:"#F4F4F4"}}>{headers.map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{rows.length===0?<tr><td colSpan={6} style={{...tc,textAlign:"center",color:"#8D8D8D"}}>No vehicle fuel data in range</td></tr>:rows.map((r,i)=>(<tr key={i}>{r.map((c,j)=>(<td key={j} style={{...tc,fontWeight:j===0?600:400}}>{c}</td>))}</tr>))}{rows.length>0&&<tr style={{background:"#F4F4F4"}}><td style={{...tc,fontWeight:700}}>Total</td><td style={{...tc,fontWeight:700}}>{Object.values(byAsset).reduce((s,d)=>s+d.litres,0).toLocaleString()} L</td><td style={{...tc,fontWeight:700}}>{fmt(Object.values(byAsset).reduce((s,d)=>s+d.cost,0))}</td><td style={{...tc,fontWeight:700}}>{vTot.km>0?vTot.km.toLocaleString()+" km":"-"}</td><td style={{...tc,fontWeight:700}}>{vTot.mL>0?(vTot.km/vTot.mL).toFixed(1):"-"}</td><td style={{...tc,fontWeight:700}}>{vTot.measured+" / "+vTot.fills}</td></tr>}</tbody></table></div><div style={card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Generator Fuel by Asset</h4><div style={{display:"flex",gap:6}}><button onClick={()=>csvExport(gHeaders,gRows,"fuel-generators")} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>CSV</button><button onClick={()=>pdfExport("Generator Fuel Report",gHeaders,gRows)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>PDF</button></div></div><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{gHeaders.map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{gRows.length===0?<tr><td colSpan={5} style={{...tc,textAlign:"center",color:"#8D8D8D"}}>No generator fuel data in range</td></tr>:gRows.map((r,i)=>(<tr key={i}>{r.map((c,j)=>(<td key={j} style={{...tc,fontWeight:j===0?600:400}}>{c}</td>))}</tr>))}</tbody></table></div></div>);};
   const renderMaint=()=>{const undated=gWO.filter(w=>!w.due).length;const open=fWO.filter(w=>w.status==="Open").length;const prog=fWO.filter(w=>w.status==="In Progress").length;const done=fWO.filter(w=>w.status==="Completed").length;const totalCost=fWO.reduce((s,w)=>s+(w.cost||0),0);const byType={};fWO.forEach(w=>{if(!byType[w.type])byType[w.type]={count:0,cost:0};byType[w.type].count++;byType[w.type].cost+=w.cost||0;});const typeData=Object.entries(byType).map(([t,d])=>({name:t,...d}));const headers=["Asset","WO ID","Type","Priority","Status","Cost","Due"];const rows=fWO.map(w=>[w.asset,w.id,w.type,w.priority,w.status,w.cost?fmt(w.cost):"-",w.due||"-"]);return(<div style={{display:"flex",flexDirection:"column",gap:16}}><div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}><Kpi icon={FileText} label="Open" value={open} accent="#F1C21B"/><Kpi icon={Clock} label="In Progress" value={prog} accent={P}/><Kpi icon={Wrench} label="Completed" value={done} accent="#24A148"/><Kpi icon={DollarSign} label="Total WO Cost" value={fmt(totalCost)}/></div>{undated>0&&(<div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderRadius:10,background:"#FFF8E1",border:"1px solid #F1C21B",fontSize:12,color:"#6F5500"}}><AlertTriangle size={15}/><span><b>{undated}</b> work order{undated>1?"s have":" has"} no due date, so {undated>1?"they are":"it is"} excluded from this date range. Give them a due date to make them countable in dated reports.</span></div>)}<div style={card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Work Orders by Type</h4><div style={{display:"flex",gap:6}}><button onClick={()=>csvExport(headers,rows,"work-orders")} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>CSV</button><button onClick={()=>pdfExport("Maintenance & Work Orders Report",headers,rows)} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>PDF</button></div></div>{typeData.length>0&&<ResponsiveContainer width="100%" height={220}><BarChart data={typeData}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="name" fontSize={11}/><YAxis fontSize={11}/><Tooltip formatter={(v,n)=>n==="cost"?fmt(v):v}/><Legend/><Bar dataKey="count" name="Count" fill="#8A3FFC" radius={[4,4,0,0]}/><Bar dataKey="cost" name="Cost" fill="#FF832B" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>}<table style={{width:"100%",borderCollapse:"collapse",marginTop:12}}><thead><tr style={{background:"#F4F4F4"}}>{headers.map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{rows.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D"}}>No work orders in range</td></tr>:rows.map((r,i)=>(<tr key={i}>{r.map((c,j)=>(<td key={j} style={{...tc,fontWeight:j===0?600:400}}>{c}</td>))}</tr>))}</tbody></table></div></div>);};
+  const renderDieselUsage=()=>{
+    const u=dieselUsage({readings:dieselReadings,distributions:dieselDistributions,transfers:dieselTransfers,stores:storeFilter,from:dateFrom,to:dateTo});
+    const stackKeys=storeFilter.length>=1&&storeFilter.length<=6?storeFilter:null;
+    const cost=Math.round(u.total.used*avgDieselPrice);
+    const scope=storeFilter.length===0?"All stores":storeFilter.length<=3?storeFilter.join(", "):storeFilter.length+" stores";
+    const headers=["Store","Used (L)","Avg / day logged (L)","Received (L)","Transferred out (L)","Days logged","Flags"];
+    const rows=u.rows.map(s=>[s.store,Math.round(s.used).toLocaleString(),s.days?Math.round(s.used/s.days).toLocaleString():"-",Math.round(s.received).toLocaleString(),Math.round(s.transferred).toLocaleString(),s.days,s.flags]);
+    const xb={display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"};
+    return(<div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}>
+        <Kpi icon={Droplet} label="Diesel Used" value={Math.round(u.total.used).toLocaleString()+" L"} sub={scope}/>
+        <Kpi icon={DollarSign} label="Est. Cost" value={fmt(cost)} accent="#DA1E28" sub={avgDieselPrice>0?"@ "+fmt(Math.round(avgDieselPrice))+"/L weighted avg":"no purchase prices yet"}/>
+        <Kpi icon={Package} label="Received" value={Math.round(u.total.received).toLocaleString()+" L"} sub="admin deliveries"/>
+        <Kpi icon={Send} label="Transferred Out" value={Math.round(u.total.transferred).toLocaleString()+" L"} sub="store tank to vehicles"/>
+      </div>
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,gap:8,flexWrap:"wrap"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Diesel used per {u.unit} - {scope}</h4><div style={{display:"flex",gap:6}}><button onClick={()=>csvExport(headers,rows,"diesel-usage")} style={xb}><Download size={12}/>CSV</button><button onClick={()=>pdfExport("Diesel Usage - "+scope,headers,rows)} style={xb}><Download size={12}/>PDF</button></div></div>
+        <DieselUsageChart series={u.series} stackKeys={stackKeys} height={240}/>
+        {!stackKeys&&storeFilter.length>6&&<div style={{fontSize:11,color:"#8D8D8D",marginTop:4}}>Showing the combined total. Pick 6 or fewer stores to see each one in its own colour.</div>}
+        <table style={{width:"100%",borderCollapse:"collapse",marginTop:12}}><thead><tr style={{background:"#F4F4F4"}}>{headers.map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>
+          {rows.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D"}}>No diesel readings for these stores in this period</td></tr>:rows.map((r,i)=>(<tr key={i}>{r.map((c,j)=>(<td key={j} style={{...tc,fontWeight:j===0?600:400,color:j===6&&c>0?"#DA1E28":undefined}}>{c}</td>))}</tr>))}
+          {rows.length>1&&<tr style={{background:"#F4F4F4"}}><td style={{...tc,fontWeight:700}}>Total</td><td style={{...tc,fontWeight:700}}>{Math.round(u.total.used).toLocaleString()}</td><td style={tc}>-</td><td style={{...tc,fontWeight:700}}>{Math.round(u.total.received).toLocaleString()}</td><td style={{...tc,fontWeight:700}}>{Math.round(u.total.transferred).toLocaleString()}</td><td style={tc}>-</td><td style={{...tc,fontWeight:700}}>{u.rows.reduce((t,s)=>t+s.flags,0)}</td></tr>}
+        </tbody></table>
+      </div>
+    </div>);};
   const renderDieselCost=()=>{
     const byStore={};
     fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{litres:0,hrs:0,readings:0};s.litres+=(r.consumptionLitres||0);s.hrs+=(r.hoursRun||0);s.readings++;});
@@ -748,9 +905,9 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
       <div style={{display:"flex",gap:6}}>{tabs.map(([id,label])=>(<button key={id} onClick={()=>setReport(id)} style={{padding:"7px 16px",borderRadius:7,border:report===id?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:report===id?"#D0E2FF":"#fff",color:report===id?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{label}</button>))}</div>
-      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{report==="fuel"&&<div style={{display:"flex",gap:4}}>{["All","Diesel","Petrol"].map(ft=>(<button key={ft} onClick={()=>setFuelTypeFilter(ft)} style={{padding:"5px 12px",borderRadius:6,border:fuelTypeFilter===ft?"1.5px solid "+P:"1.5px solid #E0E0E0",background:fuelTypeFilter===ft?"#D0E2FF":"#fff",color:fuelTypeFilter===ft?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{ft}</button>))}</div>}{GROUPABLE_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Group:</span><select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{...inp,width:160,padding:"6px 10px",fontSize:12}}><option value="All">All vehicles</option>{(vehicleGroups||[]).map(g=>(<option key={g} value={g}>{g}</option>))}<option value="__none">(No group)</option></select></>)}<span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Date Range:</span><input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/><span style={{color:"#8D8D8D"}}>to</span><input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/></div>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{report==="fuel"&&<div style={{display:"flex",gap:4}}>{["All","Diesel","Petrol"].map(ft=>(<button key={ft} onClick={()=>setFuelTypeFilter(ft)} style={{padding:"5px 12px",borderRadius:6,border:fuelTypeFilter===ft?"1.5px solid "+P:"1.5px solid #E0E0E0",background:fuelTypeFilter===ft?"#D0E2FF":"#fff",color:fuelTypeFilter===ft?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{ft}</button>))}</div>}{DIESEL_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Stores:</span><StoreMultiSelect stores={dieselStores} value={storeFilter} onChange={setStoreFilter}/></>)}{GROUPABLE_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Group:</span><select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{...inp,width:160,padding:"6px 10px",fontSize:12}}><option value="All">All vehicles</option>{(vehicleGroups||[]).map(g=>(<option key={g} value={g}>{g}</option>))}<option value="__none">(No group)</option></select></>)}<span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Date Range:</span><input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/><span style={{color:"#8D8D8D"}}>to</span><input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/></div>
     </div>
-    {report==="fleet"&&renderFleet()}{report==="fuel"&&renderFuel()}{report==="dieselcost"&&renderDieselCost()}{report==="storecompare"&&renderStoreCompare()}{report==="maintenance"&&renderMaint()}{report==="driver"&&renderDriver()}
+    {DIESEL_REPORTS.includes(report)&&dieselExcluded.length>0&&<div style={{marginBottom:12}}><ImplausibleReadingsNote items={dieselExcluded}/></div>}{report==="fleet"&&renderFleet()}{report==="fuel"&&renderFuel()}{report==="dieselusage"&&renderDieselUsage()}{report==="dieselcost"&&renderDieselCost()}{report==="storecompare"&&renderStoreCompare()}{report==="maintenance"&&renderMaint()}{report==="driver"&&renderDriver()}
   </div>);
 }
 
@@ -1133,6 +1290,21 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       if(hOpen!=null&&hClose!=null&&hClose<hOpen){
         setMsg(`Error: Closing hours (${hClose.toLocaleString()}) cannot be below opening hours (${hOpen.toLocaleString()}) — the meter can't run backwards. Check the reading.`);
         setSaving(false);return;
+      }
+      // ...nor jump further than it could possibly run. 48 h per day of gap, not
+      // 24: readings on consecutive dates can be ~2 days apart in clock time
+      // (4 genuine app readings logged 25-34 h). The usual cause is a dropped
+      // decimal point -- Ado 1 typed 352922 for 3529.22 on 30 Sep 2026, which
+      // booked 3,420,564 L for one day. Of 2,708 app readings since June, this
+      // rule blocks only that one.
+      if(hOpen!=null&&hClose!=null){
+        const gapDays=prevForOpen?.date?Math.max(1,Math.round((new Date(entryDate+"T00:00:00Z")-new Date(prevForOpen.date+"T00:00:00Z"))/864e5)):1;
+        const maxRun=48*gapDays;
+        if(hClose-hOpen>maxRun){
+          const fix=suggestDecimal(hOpen,hClose,maxRun);
+          setMsg(`Error: Closing hours (${hClose.toLocaleString()}) are ${Math.round(hClose-hOpen).toLocaleString()} hours after opening (${hOpen.toLocaleString()}). A generator cannot run that long in ${gapDays} day${gapDays>1?"s":""}.${fix!=null?` Did you mean ${fix}? It looks like a missing decimal point.`:" Check the reading."} If the meter was replaced, ask an admin.`);
+          setSaving(false);return;
+        }
       }
       const hrsRun=(hOpen!=null&&hClose!=null)?hClose-hOpen:null;
       const actualLevel=parseFloat(dieselLevel)||null;
@@ -2751,7 +2923,7 @@ function FleetProAppInner(){
     </header>
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
-        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} papers={papers} svcReminders={svcReminders}/>}/>
+        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
         <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles}/>}/>
@@ -2765,7 +2937,7 @@ function FleetProAppInner(){
         <Route path="/service" element={<ServicePage vehicles={vehicles} svcReminders={svcReminders} setSvcReminders={setSvcReminders} canEdit={canEdit}/>}/>
         <Route path="/inspections" element={<InspectionPage vehicles={vehicles} drivers={drivers} inspections={inspections} setInspections={setInspections} canEdit={canEdit} inspItems={inspItems} setInspItems={setInspItems}/>}/>
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
-        <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions}/>}/>
+        <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
