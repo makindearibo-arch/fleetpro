@@ -1,4 +1,18 @@
-import { supabase } from './supabase.js';
+import { supabase, signupClient } from './supabase.js';
+
+// Since the 20261005 access rules the DATABASE refuses actions a role may not
+// take. The guards' own messages are already plain English ("Store staff can
+// accept a delivery but not change it."); the generic row-level-security
+// wording is not, so translate that one.
+function friendlyError(error, verb) {
+  const msg = (error && error.message) || '';
+  if (/row-level security|permission denied/i.test(msg)) {
+    const e = new Error(`You don't have permission to ${verb} this.`);
+    e.code = '42501'; e.cause = error;
+    return e;
+  }
+  return error;
+}
 
 // ============================================
 // AUTH
@@ -32,7 +46,9 @@ export async function resetPassword(email) {
 
 // Admin: create user via Supabase Auth admin (requires service role, so we use invite)
 export async function inviteUser(email, name, role, password) {
-  const { data, error } = await supabase.auth.signUp({
+  // signupClient, not supabase: see src/supabase.js. The profile is then written
+  // by the admin's own session, which the access rules allow for a Super Admin.
+  const { data, error } = await signupClient.auth.signUp({
     email,
     password: password || Math.random().toString(36).slice(-12) + 'A1!',
     options: { data: { name, role } }
@@ -41,9 +57,10 @@ export async function inviteUser(email, name, role, password) {
   // Manually create profile since trigger is removed
   if (data.user) {
     const avatar = (name || email.split('@')[0]).split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-    await supabase.from('profiles').upsert({
+    const { error: pErr } = await supabase.from('profiles').upsert({
       id: data.user.id, name: name || email.split('@')[0], email, role: role || 'Viewer', avatar
     });
+    if (pErr) throw friendlyError(pErr, 'create users');   // was silently ignored
   }
   return data;
 }
@@ -82,19 +99,24 @@ async function fetchAll(table, orderBy = 'created_at', ascending = true) {
 
 async function insertRow(table, row) {
   const { data, error } = await supabase.from(table).insert(row).select().maybeSingle();
-  if (error) { console.error(`Error inserting ${table}:`, error); throw error; }
+  if (error) { console.error(`Error inserting ${table}:`, error); throw friendlyError(error, 'save'); }
   return data;
 }
 
 async function updateRow(table, id, updates, idCol = 'id') {
   const { data, error } = await supabase.from(table).update(updates).eq(idCol, id).select().maybeSingle();
-  if (error) { console.error(`Error updating ${table}:`, error); throw error; }
+  if (error) { console.error(`Error updating ${table}:`, error); throw friendlyError(error, 'change'); }
+  // A row the access rules don't let this user change updates NOTHING and returns
+  // no error. Without this check the app would show the change as saved.
+  if (!data) throw new Error("Not saved: you don't have permission to change this, or it no longer exists.");
   return data;
 }
 
 async function deleteRow(table, id, idCol = 'id') {
-  const { error } = await supabase.from(table).delete().eq(idCol, id);
-  if (error) { console.error(`Error deleting ${table}:`, error); throw error; }
+  const { data, error } = await supabase.from(table).delete().eq(idCol, id).select();
+  if (error) { console.error(`Error deleting ${table}:`, error); throw friendlyError(error, 'delete'); }
+  // Same as updateRow: a refused delete removes nothing and returns no error.
+  if (!data || data.length === 0) throw new Error("Not deleted: you don't have permission to delete this, or it was already deleted.");
 }
 
 // ============================================
@@ -227,7 +249,7 @@ export const db = {
   async getGeneratorBaselines() { return fetchAll('generator_baselines', 'generator_id'); },
   async upsertGeneratorBaseline(b) {
     const { data, error } = await supabase.from('generator_baselines').upsert(b, { onConflict: 'generator_id' }).select().maybeSingle();
-    if (error) { console.error('Error upserting baseline:', error); throw error; }
+    if (error) { console.error('Error upserting baseline:', error); throw friendlyError(error, 'change'); }
     return data;
   },
 
@@ -242,8 +264,17 @@ export const db = {
       { key, value, updated_at: new Date().toISOString(), updated_by: userId || null },
       { onConflict: 'key' }
     ).select().maybeSingle();
-    if (error) { console.error('Error upserting app_setting:', error); throw error; }
+    if (error) { console.error('Error upserting app_setting:', error); throw friendlyError(error, 'change'); }
     return data;
+  },
+
+  // Change history (20261005_change_history.sql). Super Admin only; newest first.
+  async getAuditLog({ from = 0, limit = 100, table = null } = {}) {
+    let q = supabase.from('audit_log').select('*').order('id', { ascending: false }).range(from, from + limit - 1);
+    if (table) q = q.eq('table_name', table);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
   },
 
   // Diesel Locks (manual admin locks on date ranges)

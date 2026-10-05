@@ -20,6 +20,16 @@ const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 const hasWebLocks = typeof globalThis !== 'undefined' && globalThis.navigator && globalThis.navigator.locks;
 const longLock = hasWebLocks ? (name, _acquireTimeout, fn) => navigatorLock(name, 25000, fn) : processLock;
 
+// A second client used ONLY to create user accounts (Settings > Team Members).
+// It keeps its session in memory under its own storage key, so creating a
+// user can never replace the admin's own login. With email auto-confirm on,
+// signUp returns a session: on the main client that logged the admin in AS
+// the new user, and the profile insert then ran as them -- which the
+// 20261005 access rules refuse (only a Super Admin may create profiles).
+export const signupClient = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'fp-signup-client' },
+});
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
