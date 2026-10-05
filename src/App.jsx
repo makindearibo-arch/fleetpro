@@ -2383,6 +2383,14 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdPageSize,setRdPageSize]=useState(25);
   const [dscRow,setDscRow]=useState(null); // flagged reading being explained (+ its opening level)
   const [noteRow,setNoteRow]=useState(null); // reading whose notes/transfers popup is open
+  const [dscPeriod,setDscPeriod]=useState(30); // Discrepancies tab: days back (0 = all time)
+  const [dscStore,setDscStore]=useState("");
+  // Per reading: days since the same asset's previous reading + that reading's
+  // tank level. Used to spot impossible hour-meter values (negative, or more
+  // than 48 h per day of gap -- same limit as the Diesel Log save guard) so
+  // they are left out of totals instead of producing "-22,120,011 hours".
+  const rdPrev=useMemo(()=>{const m={};const by={};(dieselReadings||[]).forEach(r=>{(by[r.generatorId]=by[r.generatorId]||[]).push(r);});Object.values(by).forEach(a=>{a.sort((x,y)=>x.date.localeCompare(y.date));a.forEach((r,i)=>{const pv=a[i-1];m[r.id]={gapDays:pv?Math.max(1,Math.round((new Date(r.date)-new Date(pv.date))/864e5)):1,prevLevel:pv?pv.dieselLevelActual:null};});});return m;},[dieselReadings]);
+  const hoursOk=(r)=>r.hoursRun==null||(r.hoursRun>=0&&r.hoursRun<=48*((rdPrev[r.id]||{}).gapDays||1));
   const [wtStore,setWtStore]=useState(null); // Watchtower drill-down store
   const [cmpMonth,setCmpMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}); // Compliance calendar month
   // Paid = invoice quantity (drives cost). Received = actual litres that came
@@ -2714,23 +2722,71 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       <tbody>{(generators||[]).map(g=>{const bl=genBaselines?.find(b=>b.generator_id===g.id);return(<tr key={g.id}><td style={{...tc,fontWeight:600}}>{g.name}</td><td style={tc}>{g.loc||"—"}</td><td style={{...tc,fontWeight:700,color:bl?.avg_litres_per_hour?P:"#8D8D8D"}}>{bl?.avg_litres_per_hour?bl.avg_litres_per_hour.toFixed(2)+" L/hr":"No data"}</td><td style={tc}>{bl?.min_rate?bl.min_rate.toFixed(2):"-"}</td><td style={tc}>{bl?.max_rate?bl.max_rate.toFixed(2):"-"}</td><td style={tc}>{bl?.baseline_readings_count||0}</td><td style={tc}><input type="number" disabled={!canManage} value={bl?.threshold_pct||20} onChange={async(e)=>{const val=parseFloat(e.target.value);if(isNaN(val)||val<1)return;try{const upserted=await db.upsertGeneratorBaseline({generator_id:g.id,avg_litres_per_hour:bl?.avg_litres_per_hour||null,baseline_readings_count:bl?.baseline_readings_count||0,last_calculated:bl?.last_calculated||null,min_rate:bl?.min_rate||null,max_rate:bl?.max_rate||null,threshold_pct:val});if(upserted)setGenBaselines(prev=>{const filtered=prev.filter(b=>b.generator_id!==g.id);return[...filtered,upserted];});}catch(err){alert("Error: "+err.message);}}} style={{width:60,padding:"4px 6px",borderRadius:5,border:"1px solid #E0E0E0",fontSize:12,textAlign:"center"}}/></td><td style={tc}>{bl?.baseline_readings_count>0&&<button onClick={async()=>{if(!confirm("Reset baseline for "+g.name+"? This clears the learned rate."))return;try{const upserted=await db.upsertGeneratorBaseline({generator_id:g.id,avg_litres_per_hour:null,baseline_readings_count:0,last_calculated:null,min_rate:null,max_rate:null,threshold_pct:bl?.threshold_pct||20});if(upserted)setGenBaselines(prev=>{const filtered=prev.filter(b=>b.generator_id!==g.id);return[...filtered,upserted];});}catch(err){alert("Error: "+err.message);}}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer",fontSize:11,color:"#DA1E28",fontWeight:600}}>Reset</button>}</td></tr>);})}</tbody></table>}
     </div>)}
     {tab==="discrepancies"&&(()=>{
-      const flagged=dieselReadings.filter(r=>r.discrepancyFlag).sort((a,b)=>b.date.localeCompare(a.date));
-      const totalUnaccounted=flagged.reduce((s,r)=>s+Math.abs(r.discrepancyLitres||0),0);
-      const storeFlags={};flagged.forEach(r=>{storeFlags[r.storeLoc]=(storeFlags[r.storeLoc]||0)+1;});
-      const worstStore=Object.entries(storeFlags).sort((a,b)=>b[1]-a[1])[0];
+      // Plain-English view of flagged readings. Each flag becomes a sentence:
+      // "ran X hours, should use about Y L, but Z L left the tank".
+      // gap = stored discrepancy_litres = actual level - expected level, so a
+      // NEGATIVE gap means the tank fell further than the hours explain (used
+      // MORE -- the direction that matters); positive means used LESS.
+      // used = expected - gap keeps every sentence arithmetically consistent.
+      const cutoff=dscPeriod?new Date(Date.now()-dscPeriod*864e5).toISOString().slice(0,10):"";
+      const gName=(id)=>(generators||[]).find(x=>x.id===id)?.name||id;
+      const nd=(d)=>new Date(d+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:dscPeriod&&dscPeriod<=90?undefined:"numeric"});
+      const L=(n)=>Math.round(n).toLocaleString()+" L";
+      const hrsTxt=(h)=>h<1?`${Math.round(h*60)} minutes`:`${h.toFixed(1)} hours`;
+      const items=dieselReadings.filter(r=>r.discrepancyFlag&&(!cutoff||r.date>=cutoff)&&(!dscStore||r.storeLoc===dscStore)).map(r=>{
+        const bl=genBaselines?.find(b=>b.generator_id===r.generatorId);const rate=bl?.avg_litres_per_hour??null;
+        const h=r.hoursRun||0;const gap=r.discrepancyLitres||0;
+        const exp=rate!=null?h*rate:null;const used=exp!=null?Math.max(0,exp-gap):null;
+        const tx=(dieselTransfers||[]).filter(t=>t.date===r.date&&(t.sourceGenId===r.generatorId||(!t.sourceGenId&&t.storeLoc===r.storeLoc))).reduce((s2,t)=>s2+(t.litres||0),0);
+        const kind=!hoursOk(r)?"meter":gap<0?"more":"less";
+        let text;
+        if(kind==="meter")text=`The hour meter numbers don't make sense (${r.hoursRun!=null?r.hoursRun.toLocaleString(undefined,{maximumFractionDigits:1}):"?"} hours in one day), so this day can't be judged. The meter reading was probably typed wrong.`;
+        else if(exp==null)text=`${L(Math.abs(gap))} ${kind==="more"?"more":"less"} diesel left the tank than expected.`;
+        else if(kind==="more")text=`The generator ran ${hrsTxt(h)}. At its usual ${rate.toFixed(1)} L an hour that should use about ${L(exp)}, but ${L(used)} went out of the tank${tx>0?` (not counting ${L(tx)} moved to vehicles/oven)`:""}. That is ${L(-gap)} more than it should have used.`;
+        else text=`The generator ran ${hrsTxt(h)}, which should use about ${L(exp)}, but only ${L(used)} went out of the tank${tx>0?` (after ${L(tx)} moved out)`:""}. That is ${L(gap)} less than expected. Usually the hour meter or tank level was read wrong, or a top-up wasn't recorded. Not a theft sign.`;
+        return{r,kind,gap,text,gen:gName(r.generatorId)};
+      }).sort((a,b)=>b.r.date.localeCompare(a.r.date));
+      const more=items.filter(i=>i.kind==="more"),less=items.filter(i=>i.kind==="less"),meter=items.filter(i=>i.kind==="meter");
+      const extraTotal=more.reduce((s2,i)=>s2-i.gap,0);
+      const byStore={};more.forEach(i=>{const o=byStore[i.r.storeLoc]=byStore[i.r.storeLoc]||{store:i.r.storeLoc,n:0,extra:0,big:null};o.n++;o.extra-=i.gap;if(!o.big||-i.gap>-o.big.gap)o.big=i;});
+      const stores=Object.values(byStore).sort((a,b)=>b.extra-a.extra);
+      const periodTxt=dscPeriod?`in the last ${dscPeriod} days`:"in all records";
+      const openRow=(r)=>setDscRow({...r,openLevel:(rdPrev[r.id]||{}).prevLevel});
+      const pill=(on)=>({padding:"7px 14px",borderRadius:8,border:"1.5px solid "+(on?P:"#E0E0E0"),background:on?"#D0E2FF":"#fff",color:on?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"});
+      const multiGen=(loc)=>(generators||[]).filter(g=>g.loc===loc&&g.assetType!=="oven").length>1;
+      const item=(i)=>(<div key={i.r.id} onClick={()=>openRow(i.r)} title="Click for the full breakdown" style={{padding:"12px 16px",borderBottom:"1px solid #F4F4F4",cursor:"pointer",display:"flex",gap:14,alignItems:"flex-start"}}>
+        <div style={{minWidth:isMob()?70:110}}><div style={{fontSize:13,fontWeight:700}}>{i.r.storeLoc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{nd(i.r.date)}</div></div>
+        <div style={{flex:1,fontSize:13,lineHeight:1.5,color:"#262626"}}>{i.text}{multiGen(i.r.storeLoc)&&<span style={{color:"#8D8D8D"}}> ({i.gen})</span>}</div>
+        {i.kind!=="meter"&&<div style={{whiteSpace:"nowrap",fontSize:12,fontWeight:700,padding:"3px 10px",borderRadius:10,background:i.kind==="more"?"#FFF1F1":"#EDF5FF",color:i.kind==="more"?"#DA1E28":"#0043CE"}}>{i.kind==="more"?"+":"−"}{L(Math.abs(i.gap))}</div>}
+      </div>);
+      const box={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden",marginBottom:14};
+      const sumS={padding:"14px 18px",cursor:"pointer",fontSize:14,fontWeight:700};
       return(<div>
-        <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:16}}>
-          <Kpi icon={AlertTriangle} label="Total Flags" value={flagged.length} sub="All time" accent="#DA1E28"/>
-          <Kpi icon={Fuel} label="Unaccounted" value={totalUnaccounted.toFixed(0)+" L"} sub="Total discrepancy" accent="#DA1E28"/>
-          <Kpi icon={TrendingDown} label="Worst Store" value={worstStore?worstStore[0]:"-"} sub={worstStore?worstStore[1]+" flags":"No flags"}/>
-          <Kpi icon={CheckCircle} label="Clean Readings" value={dieselReadings.filter(r=>!r.discrepancyFlag&&r.dieselLevelActual!=null).length} sub="No discrepancy" accent="#24A148"/>
+        <div style={{...box,padding:16,display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+          {[[7,"Last 7 days"],[30,"Last 30 days"],[90,"Last 90 days"],[0,"All time"]].map(([d,l])=>(<button key={d} onClick={()=>setDscPeriod(d)} style={pill(dscPeriod===d)}>{l}</button>))}
+          <div style={{flex:1}}/>
+          <select style={{...inp,width:isMob()?"100%":200}} value={dscStore} onChange={e=>setDscStore(e.target.value)}><option value="">All stores</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select>
         </div>
-        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
-          <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0,color:"#DA1E28",display:"flex",alignItems:"center",gap:6}}><AlertTriangle size={16}/>Flagged Readings</h4></div>
-          {flagged.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No discrepancies detected yet. Flags appear after baselines are learned and discrepancies exceed the threshold.</div>
-          :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#FFF1F1"}}>{["Date","Store","Generator","Expected (L)","Actual (L)","Discrepancy","Severity"].map(h=>(<th key={h} style={{...th,color:"#DA1E28"}}>{h}</th>))}</tr></thead>
-          <tbody>{flagged.slice(0,50).map(r=>{const g=(generators||[]).find(x=>x.id===r.generatorId);const bl=genBaselines?.find(b=>b.generator_id===r.generatorId);const rate=bl?.avg_litres_per_hour||r.consumptionRate||0;const expected=r.hoursRun?r.hoursRun*rate:null;const pct=expected&&expected>0?Math.abs(r.discrepancyLitres||0)/expected*100:0;return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{r.storeLoc}</td><td style={tc}>{g?.name||r.generatorId}</td><td style={tc}>{expected?expected.toFixed(1)+" L":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+" L":"-"}</td><td style={{...tc,fontWeight:700,color:"#DA1E28"}}>{r.discrepancyLitres!=null?r.discrepancyLitres.toFixed(1)+" L":"-"}</td><td style={tc}><span style={{padding:"3px 10px",borderRadius:10,fontSize:11,fontWeight:600,background:pct>50?"#DA1E28":pct>30?"#FF832B":"#FFD700",color:pct>50?"#fff":"#161616"}}>{pct.toFixed(0)}%</span></td></tr>);})}</tbody></table>}
+        <div style={{...box,padding:"16px 20px",fontSize:14,lineHeight:1.6}}>
+          {more.length===0?<><b style={{color:"#24A148"}}>Nothing to worry about {periodTxt}.</b> No generator{dscStore?" at "+dscStore:""} used more diesel than its running hours explain.</>
+          :<><b>{dscStore||(stores.length===1?stores[0].store:stores.length+" stores")}</b> used more diesel than {dscStore||stores.length===1?"it":"they"} should have on <b style={{color:"#DA1E28"}}>{more.length} day{more.length>1?"s":""}</b> {periodTxt}, <b style={{color:"#DA1E28"}}>{L(extraTotal)} extra</b> in total. These are the ones to check: ask the store where the diesel went (a transfer that wasn't logged, a leak, or diesel taken out).</>}
+          {(less.length>0||meter.length>0)&&<div style={{fontSize:12.5,color:"#6F6F6F",marginTop:6}}>{less.length>0&&<>{less.length} day{less.length>1?"s":""} used <i>less</i> than expected (usually a reading mistake, not theft). </>}{meter.length>0&&<>{meter.length} day{meter.length>1?"s have":" has"} hour-meter numbers that don't make sense and can't be judged.</>}</div>}
         </div>
+        {stores.length>1&&<div style={box}>
+          <div style={{padding:"14px 18px",borderBottom:"1px solid #E8ECF1",fontSize:14,fontWeight:700}}>Which stores to look at first</div>
+          {stores.map(o=>(<div key={o.store} onClick={()=>setDscStore(o.store)} title="Show only this store" style={{padding:"10px 18px",borderBottom:"1px solid #F4F4F4",fontSize:13,lineHeight:1.5,cursor:"pointer",display:"flex",gap:12,alignItems:"center"}}>
+            <div style={{flex:1}}><b>{o.store}</b> used too much on {o.n} day{o.n>1?"s":""}, <b style={{color:"#DA1E28"}}>{L(o.extra)} extra</b> in total. Biggest: {L(-o.big.gap)} on {nd(o.big.r.date)}.</div>
+            {!isMob()&&<div style={{width:120,height:8,borderRadius:4,background:"#F4F4F4",overflow:"hidden"}}><div style={{width:Math.max(4,o.extra/stores[0].extra*100)+"%",height:"100%",background:"#DA1E28"}}/></div>}
+          </div>))}
+        </div>}
+        {more.length>0&&<div style={box}>
+          <div style={{padding:"14px 18px",borderBottom:"1px solid #E8ECF1",fontSize:14,fontWeight:700,color:"#DA1E28",display:"flex",alignItems:"center",gap:6}}><AlertTriangle size={16}/>Used more diesel than it should ({more.length})</div>
+          {more.slice(0,100).map(item)}
+          {more.length>100&&<div style={{padding:12,fontSize:12,color:"#8D8D8D",textAlign:"center"}}>Showing the latest 100. Pick a store or a shorter period to see the rest.</div>}
+        </div>}
+        {less.length>0&&<details style={box}><summary style={sumS}>Used less than expected ({less.length}) <span style={{fontWeight:400,fontSize:12,color:"#8D8D8D"}}>usually a reading mistake, not theft</span></summary>{less.slice(0,100).map(item)}</details>}
+        {meter.length>0&&<details style={box}><summary style={sumS}>Hour-meter numbers to fix ({meter.length}) <span style={{fontWeight:400,fontSize:12,color:"#8D8D8D"}}>can't be judged until corrected</span></summary>{meter.slice(0,100).map(item)}</details>}
+        <div style={{fontSize:11.5,color:"#8D8D8D",lineHeight:1.5,padding:"0 4px"}}>How a day gets flagged: each generator has a normal rate (litres per hour), learned from its own past readings. Hours run × that rate = what it should use. If what actually left the tank is more than 20% off from that, and by at least 25 L, the day is flagged. Click any line for the full breakdown.</div>
       </div>);
     })()}
     {tab==="readings"&&(()=>{
@@ -2762,7 +2818,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         .filter(r=>!rdTo||r.date<=rdTo)
         .sort((a,b)=>b.date.localeCompare(a.date)||a.storeLoc.localeCompare(b.storeLoc));
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
-      const tHours=rows.reduce((s,r)=>s+(r.hoursRun||0),0);
+      const tHours=rows.reduce((s,r)=>s+(hoursOk(r)?(r.hoursRun||0):0),0);
+      const badHrs=rows.filter(r=>!hoursOk(r)).length;
       const tUsed=rows.reduce((s,r)=>s+(usedOf(r)||0),0);
       const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
       const tBatches=rows.reduce((s,r)=>s+(r.batchesProduced||0),0);
@@ -2796,7 +2853,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         </div>
         <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr 1fr":`repeat(${kpiCount},1fr)`,gap:12,marginBottom:14}}>
           <Kpi icon={FileText} label="Readings" value={rows.length}/>
-          <Kpi icon={Clock} label="Total Hours Run" value={tHours.toFixed(1)}/>
+          <Kpi icon={Clock} label="Total Hours Run" value={Math.round(tHours).toLocaleString()} sub={badHrs?`${badHrs} bad meter reading${badHrs>1?"s":""} left out`:undefined}/>
           <Kpi icon={Droplet} label="Total Used" value={tUsed.toLocaleString()+" L"} sub="Measured tank drop"/>
           <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
           {tTransferred>0&&<Kpi icon={Send} label="Transferred Out" value={tTransferred.toLocaleString()+" L"} sub="To vehicles / oven"/>}
@@ -2811,7 +2868,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={{...tc,fontWeight:600}}>{genName(r.generatorId)}</td>
             <td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td>
             <td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td>
-            <td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td>
+            <td style={{...tc,fontWeight:600}}>{!hoursOk(r)?<span title="Impossible hour-meter value, left out of totals. The meter reading was probably typed wrong." style={{color:"#DA1E28"}}>{r.hoursRun.toLocaleString(undefined,{maximumFractionDigits:1})} ?</span>:r.hoursRun?r.hoursRun.toFixed(1):"-"}</td>
             <td style={tc}>{openMap[r.id]!=null?openMap[r.id].toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:600}}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td>
             <td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td>
