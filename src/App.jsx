@@ -28,6 +28,7 @@ const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.
 const toDT=(r)=>({id:r.id,date:r.date,storeLoc:r.store_location,sourceGenId:r.source_generator_id,destType:r.dest_type||"vehicle",destId:r.dest_id,destLabel:r.dest_label||"",litres:Number(r.litres)||0,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const fromDT=(d)=>({date:d.date,store_location:d.storeLoc,source_generator_id:d.sourceGenId||null,dest_type:d.destType||"vehicle",dest_id:d.destId||null,dest_label:d.destLabel||"",litres:d.litres,notes:d.notes||"",recorded_by:d.recordedBy||null});
 const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate:r.to_date,totalHours:Number(r.total_hours)||0,meterOpening:r.meter_opening!=null?Number(r.meter_opening):null,meterClosing:r.meter_closing!=null?Number(r.meter_closing):null,photoUrl:r.photo_url||"",notes:r.notes||"",submittedBy:r.submitted_by,createdAt:r.created_at});
+const toPW=(r)=>({id:r.id,storeLoc:r.store_location,onAt:r.on_at,offAt:r.off_at||null,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
 const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
 const toDP=(r)=>({id:r.id,date:r.date,supplier:r.supplier,litres:Number(r.litres)||0,litresReceived:r.litres_received!=null?Number(r.litres_received):null,pricePerL:Number(r.price_per_litre)||0,totalCost:Number(r.total_cost)||0,notes:r.notes,purchasedBy:r.purchased_by,createdAt:r.created_at});
@@ -123,7 +124,76 @@ const isoDaysAgo=n=>new Date(Date.now()-n*864e5).toISOString().split("T")[0];
 // A meter reading that jumps impossibly far is usually a dropped decimal point.
 // Returns the reading with the decimal restored if one fits, else null.
 const suggestDecimal=(open,close,maxHours)=>{for(const d of [10,100,1000]){const v=close/d;if(v>=open&&v-open<=maxHours)return Math.round(v*100)/100;}return null;};
-// Diesel usage per store over [from,to]. "Used" is consumptionLitres -- the
+// What actually LEFT each tank, per reading (2026-10-05): the previous
+// level + accepted deliveries + transfers IN (bakery gen -> oven) - transfers
+// OUT - this level. This is "Used" everywhere: reports, both dashboards, the
+// Generators page, Watchtower's rate check. consumption_litres is NOT: for a
+// generator reading saved in the app it is hours x the generator's usual rate,
+// i.e. what it SHOULD have used (Ondo CR Sep 2026: 432 L "used" while the tank
+// fell 185 L; Akure 1 Jul-Oct: 1,995 L reported vs 5,832 L out of the tank).
+// - SIGNED on purpose: a level typo (1000 -> 100 -> 990) is +900 then -890,
+//   so any period's total is still start + deliveries - end (10 L). Clamping
+//   each day at 0 would report 900 L. A negative day = the tank rose with no
+//   delivery recorded.
+// - A reading with no level (220 imported Ado Bakery oven rows, a few app
+//   rows) uses its stored consumption and carries an ESTIMATED level forward,
+//   so the next measured drop does not count those litres a second time.
+// - An asset's first reading has nothing to measure from: stored figure.
+// rateL = usedL per hour run (per batch for ovens); null when used is negative
+// or the hours are impossible (negative, or over 48 h a day since the
+// previous reading). App applies this once to the readings it hands every page.
+const withTankUsed=(readings,transfers)=>{
+  const out={},inn={};
+  (transfers||[]).forEach(t=>{const L=t.litres||0;
+    if(t.sourceGenId)out[t.sourceGenId+"|"+t.date]=(out[t.sourceGenId+"|"+t.date]||0)+L;
+    if(t.destType==="oven"&&t.destId)inn[t.destId+"|"+t.date]=(inn[t.destId+"|"+t.date]||0)+L;});
+  const by={};(readings||[]).forEach(r=>{(by[r.generatorId]=by[r.generatorId]||[]).push(r);});
+  const res=new Map();
+  Object.values(by).forEach(arr=>{
+    arr.sort((a,b)=>(a.date||"").localeCompare(b.date||"")||String(a.id).localeCompare(String(b.id)));
+    let est=null,prevDate=null;
+    arr.forEach(r=>{const k=r.generatorId+"|"+r.date;
+      const flow=(r.dieselAdded||0)+(inn[k]||0)-(out[k]||0);
+      const lvl=r.dieselLevelActual;
+      const usedL=(est!=null&&lvl!=null)?Math.round(est+flow-lvl):(r.consumptionLitres??null);
+      est=lvl!=null?lvl:(est!=null?est+flow-(usedL||0):null);
+      const days=prevDate?Math.max(1,Math.round((new Date(r.date)-new Date(prevDate))/864e5)):1;
+      prevDate=r.date;
+      const h=r.hoursRun;
+      const rateL=(usedL==null||usedL<0)?null:r.batchesProduced>0?Math.round(usedL/r.batchesProduced*100)/100:(h>0&&h<=48*days)?Math.round(usedL/h*100)/100:null;
+      res.set(r,{usedL,rateL});});});
+  return (readings||[]).map(r=>({...r,...res.get(r)}));
+};
+// Grid (NEPA) power, from the power on/off log (power_periods). Times and
+// days are NIGERIAN (WAT = UTC+1, no daylight saving) for every viewer: the
+// stores' phones are on WAT, but an admin PC may not be (Makinde's reports
+// America/Toronto), and the device's own zone would shift every time by 5 h
+// and split days at the wrong midnight. A period still on counts up to now.
+const WAT_MS=36e5;
+const ngDate=t=>new Date(new Date(t).getTime()+WAT_MS).toISOString().slice(0,10);
+const dayBounds=d=>{const a=new Date(d+"T00:00:00+01:00").getTime();return[a,a+864e5];};
+const nextDayStr=d=>ngDate(new Date(d+"T12:00:00+01:00").getTime()+864e5);
+const daysFromTo=(a,b)=>{const out=[];let d=a;while(d<=b&&out.length<400){out.push(d);d=nextDayStr(d);}return out;};
+const powerOnDay=(periods,store,date,now=Date.now())=>{const[d0,d1]=dayBounds(date);let ms=0,count=0;
+  (periods||[]).forEach(p=>{if(p.storeLoc!==store)return;const a=new Date(p.onAt).getTime(),b=p.offAt?new Date(p.offAt).getTime():now;const s=Math.max(a,d0),e=Math.min(b,d1);if(e>s){ms+=e-s;count++;}});
+  return{ms,count,hours:Math.round(ms/36e4)/10};};
+// Same, for every store and day at once: {"store|date": {ms,count}} (tables).
+const powerHoursByDay=(periods,now=Date.now())=>{const m={};
+  (periods||[]).forEach(p=>{let a=new Date(p.onAt).getTime();const b=p.offAt?new Date(p.offAt).getTime():now;
+    while(a<b){const d=ngDate(a);const e=Math.min(b,dayBounds(d)[1]);if(e<=a)break;const o=m[p.storeLoc+"|"+d]=m[p.storeLoc+"|"+d]||{ms:0,count:0};o.ms+=e-a;o.count++;a=e;}});
+  return m;};
+const fmtDur=ms=>{const m=Math.max(0,Math.round(ms/6e4));const h=Math.floor(m/60),mm=m%60;return h?(h+" h"+(mm?" "+mm+" min":"")):mm+" min";};
+const fmtClock=iso=>new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Africa/Lagos"});
+const fmtDayLabel=d=>new Date(d+"T12:00:00+01:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",timeZone:"Africa/Lagos"});
+const nowHM=()=>fmtClock(new Date().toISOString());
+const atLocal=(date,hm)=>new Date(date+"T"+hm+":00+01:00").getTime();
+// nepa_period_logs (the daily NEPA meter): the old form saved closing - opening
+// as total_hours whenever staff left hours blank, so ~270 entries hold METER
+// UNITS in the hours field (Ado 3 "367 h" = 268,283 - 267,916). A total that
+// equals the meter difference is treated as "no hours recorded".
+const nplUnits=n=>(n&&n.meterOpening!=null&&n.meterClosing!=null)?Math.round((n.meterClosing-n.meterOpening)*10)/10:null;
+const nplHours=n=>{const u=nplUnits(n);return(n&&n.totalHours&&!(u!=null&&Math.abs(n.totalHours-u)<0.05))?n.totalHours:null;};
+// Diesel usage per store over [from,to]. "Used" is usedL (withTankUsed) -- the
 // same figure the Diesel Cost tab and the readings table use, so every screen
 // agrees. "Received" is admin deliveries (as on Store Comparison). Transfers
 // out stay SEPARATE: diesel moved into a vehicle left the store but was not
@@ -140,7 +210,7 @@ const dieselUsage=({readings,distributions,transfers,stores,from,to})=>{
   const by={},bk={},excluded=[];
   const row=s=>by[s]=by[s]||{store:s,used:0,received:0,transferred:0,days:new Set(),flags:0};
   (readings||[]).forEach(r=>{if(!inR(r.date)||!want(r.storeLoc))return;
-    const L=r.consumptionLitres||0;const s=row(r.storeLoc);s.days.add(r.date);
+    const L=r.usedL||0;const s=row(r.storeLoc);s.days.add(r.date);
     if(L>IMPLAUSIBLE_READING_L){excluded.push(r);return;}
     s.used+=L;if(r.discrepancyFlag)s.flags++;
     const k=bucketOf(r.date);const b=bk[k]=bk[k]||{key:k,total:0};b.total+=L;b[r.storeLoc]=(b[r.storeLoc]||0)+L;});
@@ -251,8 +321,8 @@ function DocUpload({folder,value,onChange,accept}){
 // Change history (Settings, Super Admin only). Reads public.audit_log, which the
 // database fills from triggers on every stock-related insert/edit/delete -- the
 // app cannot skip or alter it. Shows who, when, and before -> after.
-const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks"};
-const AUDIT_FIELDS={litres:"litres",litres_received:"received",price_per_litre:"price/L",supplier:"supplier",date:"date",store_location:"store",received_confirmed:"accepted",received_date:"accepted on",diesel_level_actual:"tank level",diesel_added:"added",consumption_litres:"used",discrepancy_litres:"discrepancy",discrepancy_flag:"flagged",gen_hours_opening:"meter open",gen_hours_closing:"meter close",avg_litres_per_hour:"baseline L/hr",role:"role",name:"name",email:"email",value:"value",notes:"notes",purchase_id:"from purchase",batches_produced:"batches",dest_label:"to",from_date:"from",to_date:"to"};
+const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off"};
+const AUDIT_FIELDS={on_at:"power on",off_at:"power off",litres:"litres",litres_received:"received",price_per_litre:"price/L",supplier:"supplier",date:"date",store_location:"store",received_confirmed:"accepted",received_date:"accepted on",diesel_level_actual:"tank level",diesel_added:"added",consumption_litres:"used",discrepancy_litres:"discrepancy",discrepancy_flag:"flagged",gen_hours_opening:"meter open",gen_hours_closing:"meter close",avg_litres_per_hour:"baseline L/hr",role:"role",name:"name",email:"email",value:"value",notes:"notes",purchase_id:"from purchase",batches_produced:"batches",dest_label:"to",from_date:"from",to_date:"to"};
 const AUDIT_HIDE=new Set(["updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
 const auditVal=v=>v===null||v===undefined||v===""?"-":typeof v==="boolean"?(v?"yes":"no"):typeof v==="number"?v.toLocaleString():typeof v==="object"?JSON.stringify(v).slice(0,60):String(v).length>60?String(v).slice(0,57)+"...":String(v);
 const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.litres).toLocaleString()+" L":"";
@@ -262,6 +332,7 @@ const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.lit
   if(t==="generator_baselines")return"generator "+(d.generator_id||"?");
   if(t==="profiles")return(d.name||"?")+(d.email?" ("+d.email+")":"");
   if(t==="app_settings")return d.key||"";
+  if(t==="power_periods")return(d.store_location||"?")+" "+(d.on_at?new Date(d.on_at).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Africa/Lagos"}):"")+(d.off_at?" to "+fmtClock(d.off_at):" (still on)");
   if(t==="diesel_locks")return(d.store_location||"all stores")+" "+(d.from_date||"")+" to "+(d.to_date||"");
   return d.id||"";};
 function ChangeHistoryPanel(){
@@ -331,7 +402,7 @@ function ImplausibleReadingsNote({items}){
   if(!items||!items.length)return null;
   return(<div style={{padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082",color:"#7A4F00",fontSize:12,lineHeight:1.55}}>
     <b>{items.length} reading{items.length>1?"s":""} left out of these totals as impossible</b> (over {IMPLAUSIBLE_READING_L.toLocaleString()} L in a single reading):
-    {items.slice(0,4).map(r=>{const fix=(r.genHoursOpening!=null&&r.genHoursClosing!=null)?suggestDecimal(r.genHoursOpening,r.genHoursClosing,48):null;return(<div key={r.id}>- {r.storeLoc}, {r.date}: {Math.round(r.consumptionLitres).toLocaleString()} L{r.genHoursOpening!=null&&r.genHoursClosing!=null?<> (meter {r.genHoursOpening.toLocaleString()} to {r.genHoursClosing.toLocaleString()}{fix!=null?<> - closing was probably <b>{fix.toLocaleString()}</b>, a missing decimal point</>:null})</>:null}</div>);})}
+    {items.slice(0,4).map(r=>{const fix=(r.genHoursOpening!=null&&r.genHoursClosing!=null)?suggestDecimal(r.genHoursOpening,r.genHoursClosing,48):null;return(<div key={r.id}>- {r.storeLoc}, {r.date}: {Math.round(r.usedL).toLocaleString()} L out of the tank{r.dieselLevelActual!=null?<> (tank level typed as {r.dieselLevelActual.toLocaleString()} L)</>:null}{fix!=null?<> - hour meter closing was probably <b>{fix.toLocaleString()}</b>, a missing decimal point</>:null}</div>);})}
     {items.length>4&&<div>- and {items.length-4} more</div>}
     <div style={{marginTop:4}}>Correct the reading and it will be counted again.</div>
   </div>);
@@ -388,7 +459,7 @@ function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,die
     const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
     const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     const fuel=(fuelLogs||[]).filter(f=>f.date&&f.date.startsWith(ym)).reduce((s,f)=>s+(f.cost||0),0);
-    const dieselL=(dieselReadings||[]).filter(r=>r.date&&r.date.startsWith(ym)&&(r.consumptionLitres||0)<=IMPLAUSIBLE_READING_L).reduce((s,r)=>s+(r.consumptionLitres||0),0);
+    const dieselL=(dieselReadings||[]).filter(r=>r.date&&r.date.startsWith(ym)&&(r.usedL||0)<=IMPLAUSIBLE_READING_L).reduce((s,r)=>s+(r.usedL||0),0);
     const maint=(workOrders||[]).filter(w=>w.due&&w.due.startsWith(ym)).reduce((s,w)=>s+(w.cost||0),0);
     return{m:d.toLocaleDateString("en",{month:"short"}),fuel,diesel:Math.round(dieselL*avgDieselPrice),maint};
   });
@@ -644,7 +715,7 @@ function GenPage({generators,setGenerators,locations,fuelLogs,canEdit,odoLog,set
     const aReadings=(dieselReadings||[]).filter(r=>r.generatorId===g.id).sort((a,b)=>b.date.localeCompare(a.date));
     const isOvenAsset=g.assetType==="oven";
     const tBatches=aReadings.reduce((s,r)=>s+(r.batchesProduced||0),0);
-    const tConsumed=aReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+    const tConsumed=aReadings.reduce((s,r)=>s+(r.usedL||0),0);
     return(<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}><button onClick={()=>setSel(null)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600}}><ChevronLeft size={16}/> Back</button>{canEdit&&<div style={{display:"flex",gap:6}}><button onClick={()=>{startEdit(g);setSel(null);}} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#525252"}}><Pencil size={13}/>Edit</button><button onClick={()=>handleDelete(g.id)} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#DA1E28"}}><Trash2 size={13}/>Delete</button></div>}</div><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><div style={{background:"linear-gradient(135deg,#1a1a2e,#0f3460)",padding:"22px 26px",color:"#fff"}}><h2 style={{fontSize:18,fontWeight:700,margin:0}}>{g.name}</h2><div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{g.id} - {g.brand} - {g.cap}</div></div><div style={{padding:22,display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"1fr 1fr 1fr",gap:14}}>{(isOvenAsset
       ?[["Total Batches",tBatches?tBatches.toLocaleString():"-"],["Avg L/Batch",(tBatches>0&&tConsumed>0)?(tConsumed/tBatches).toFixed(2)+" L":"-"],["Total Consumed",tConsumed?tConsumed.toLocaleString()+" L":"-"],["Location",g.loc||"-"],["Readings",aReadings.length||"-"],["Last Reading",aReadings[0]?.date||"-"],["Tank",g.tank?`${g.tank} L`:"-"],["Capacity",g.cap||"-"],["Assigned",g.assigned||"-"]]
       :[["Run Hours",`${(g.hrs||0).toLocaleString()} hrs`],["Cost/Hour",g.costHr?fmt(g.costHr):"-"],["Capacity",g.cap||"-"],["Location",g.loc||"-"],["Fuel Type",g.fuelType||"-"],["Assigned",g.assigned||"-"],["Tank",g.tank?`${g.tank} L`:"-"],["Next Service",g.nextSvc||"-"],["Fuel Costs (Life)",g.fuelCostLife?fmt(g.fuelCostLife):"-"],["Service Costs (Life)",g.svcCostLife?fmt(g.svcCostLife):"-"]]
@@ -653,8 +724,8 @@ function GenPage({generators,setGenerators,locations,fuelLogs,canEdit,odoLog,set
       <h4 style={{fontSize:13,fontWeight:700,marginBottom:10}}>Recent Diesel Readings ({aReadings.length})</h4>
       <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:isOvenAsset?480:560}}><thead><tr style={{background:"#F4F4F4"}}>{(isOvenAsset?["Date","Batches","Consumed (L)","Level (L)","L/Batch"]:["Date","Open Hrs","Close Hrs","Hours Run","Consumed (L)","Level (L)","Flag"]).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
       <tbody>{aReadings.slice(0,14).map(r=>(isOvenAsset
-        ?<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600,color:"#8B5CF6"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td><td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{(r.batchesProduced>0&&r.consumptionLitres>0)?(r.consumptionLitres/r.batchesProduced).toFixed(2):"-"}</td></tr>
-        :<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4",background:r.discrepancyFlag?"#FFF6F6":""}}><td style={tc}>{r.date}</td><td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td><td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td><td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={tc}>{r.discrepancyFlag?<AlertTriangle size={13} color="#DA1E28"/>:"-"}</td></tr>
+        ?<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600,color:"#8B5CF6"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td><td style={tc}>{r.usedL!=null?r.usedL.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{(r.batchesProduced>0&&r.usedL>0)?(r.usedL/r.batchesProduced).toFixed(2):"-"}</td></tr>
+        :<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4",background:r.discrepancyFlag?"#FFF6F6":""}}><td style={tc}>{r.date}</td><td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td><td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td><td style={tc}>{r.usedL!=null?r.usedL.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={tc}>{r.discrepancyFlag?<AlertTriangle size={13} color="#DA1E28"/>:"-"}</td></tr>
       ))}</tbody></table></div>
       {aReadings.length>14&&<div style={{fontSize:11,color:"#8D8D8D",marginTop:6}}>Showing latest 14 — full history in Diesel Management → readings (filter: {g.name})</div>}
     </div>}{canEdit&&!isOvenAsset&&<div style={{marginTop:14}}><button onClick={()=>setShowHrs(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"9px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Clock size={14}/>Update Run Hours</button></div>}{showHrs&&(<Modal title="Update Run Hours" onClose={()=>setShowHrs(false)}><div style={{padding:"10px 0 6px",background:"#F4F4F4",borderRadius:8,textAlign:"center",marginBottom:14}}><div style={{fontSize:11,color:"#8D8D8D"}}>Current Hours</div><div style={{fontSize:20,fontWeight:700}}>{(g.hrs||0).toLocaleString()} hrs</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Field label="New Hours *"><input style={inp} type="number" placeholder="e.g. 4900" value={hrsVal} onChange={e=>setHrsVal(e.target.value)}/></Field><Field label="Date"><input style={inp} type="date" value={hrsDate} onChange={e=>setHrsDate(e.target.value)}/></Field></div><div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}><button onClick={()=>setShowHrs(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={()=>addHrsReading(g.id)} disabled={!hrsVal} style={{padding:"9px 20px",borderRadius:8,border:"none",background:hrsVal?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:hrsVal?"pointer":"not-allowed"}}><Save size={14}/> Save</button></div></Modal>)}{(()=>{const gFuel=fuelLogs?fuelLogs.filter(f=>f.asset===g.id&&f.isGen):[];return gFuel.length>0?(<div style={{marginTop:14,background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18}}><h4 style={{fontSize:13,fontWeight:700,marginBottom:10}}>Fuel History ({gFuel.length})</h4><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Cost","Reading","Station"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{gFuel.slice(0,10).map(f=>(<tr key={f.id}><td style={tc}>{f.date}</td><td style={tc}>{f.litres} L</td><td style={{...tc,fontWeight:600}}>{fmt(f.cost)}</td><td style={tc}>{f.reading?.toLocaleString()||"-"} hrs</td><td style={tc}>{f.station||"-"}</td></tr>))}</tbody></table>{gFuel.length>10&&<div style={{fontSize:11,color:"#8D8D8D",marginTop:4}}>{gFuel.length-10} more entries...</div>}</div>):null;})()}
@@ -847,8 +918,8 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const storeScoped=storeFilter.length>0&&DIESEL_REPORTS.includes(report);
   const inStores=s=>!storeScoped||storeFilter.includes(s);
   const fDRall=(dieselReadings||[]).filter(r=>inRange(r.date)&&inStores(r.storeLoc));
-  const dieselExcluded=fDRall.filter(r=>(r.consumptionLitres||0)>IMPLAUSIBLE_READING_L);
-  const fDR=fDRall.filter(r=>(r.consumptionLitres||0)<=IMPLAUSIBLE_READING_L);
+  const dieselExcluded=fDRall.filter(r=>(r.usedL||0)>IMPLAUSIBLE_READING_L);
+  const fDR=fDRall.filter(r=>(r.usedL||0)<=IMPLAUSIBLE_READING_L);
   const fDD=(dieselDistributions||[]).filter(d=>inRange(d.date)&&inStores(d.storeLoc));
   const avgDieselPrice=(()=>{const priced=(dieselPurchases||[]).filter(p=>(p.pricePerL||0)>0);const tl=priced.reduce((s,p)=>s+(p.litres||0),0);const tcst=priced.reduce((s,p)=>s+(p.litres||0)*p.pricePerL,0);return tl>0?tcst/tl:0;})();
   const getVName=(id)=>{const v=vehicles.find(x=>x.id===id);return v?v.name:id;};
@@ -886,12 +957,12 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
     </div>);};
   const renderDieselCost=()=>{
     const byStore={};
-    fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{litres:0,hrs:0,readings:0};s.litres+=(r.consumptionLitres||0);s.hrs+=(r.hoursRun||0);s.readings++;});
+    fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{litres:0,hrs:0,readings:0};s.litres+=(r.usedL||0);s.hrs+=(r.hoursRun||0);s.readings++;});
     const totalL=Object.values(byStore).reduce((s,d)=>s+d.litres,0);
     const totalCost=Math.round(totalL*avgDieselPrice);
     const storeRows=Object.entries(byStore).filter(([,d])=>d.litres>0).map(([loc,d])=>({loc,...d,cost:Math.round(d.litres*avgDieselPrice),perHr:d.hrs>0?d.litres*avgDieselPrice/d.hrs:0,share:totalL>0?d.litres/totalL*100:0})).sort((a,b)=>b.cost-a.cost);
     const byMonth={};
-    fDR.forEach(r=>{const m=r.date.slice(0,7);const s=byMonth[m]=byMonth[m]||{litres:0};s.litres+=(r.consumptionLitres||0);});
+    fDR.forEach(r=>{const m=r.date.slice(0,7);const s=byMonth[m]=byMonth[m]||{litres:0};s.litres+=(r.usedL||0);});
     const monthRows=Object.entries(byMonth).sort((a,b)=>a[0].localeCompare(b[0])).map(([m,d])=>({m,litres:Math.round(d.litres),cost:Math.round(d.litres*avgDieselPrice)}));
     const chartData=storeRows.slice(0,12).map(s=>({name:s.loc.length>12?s.loc.substring(0,12)+"..":s.loc,cost:s.cost}));
     const headers=["Store","Consumed (L)","Est. Cost","Hours Run","Cost/Hr","Share %"];
@@ -919,7 +990,7 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
     </div>);};
   const renderStoreCompare=()=>{
     const byStore={};
-    fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{readings:0,hrs:0,litres:0,flags:0,evaluated:0,photo:0};s.readings++;s.hrs+=(r.hoursRun||0);s.litres+=(r.consumptionLitres||0);if(r.discrepancyLitres!=null)s.evaluated++;if(r.discrepancyFlag)s.flags++;if(r.genSource==="photo")s.photo++;});
+    fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{readings:0,hrs:0,litres:0,flags:0,evaluated:0,photo:0};s.readings++;s.hrs+=(r.hoursRun||0);s.litres+=(r.usedL||0);if(r.discrepancyLitres!=null)s.evaluated++;if(r.discrepancyFlag)s.flags++;if(r.genSource==="photo")s.photo++;});
     fDD.forEach(d=>{const s=byStore[d.storeLoc];if(s)s.received=(s.received||0)+(d.litres||0);});
     const list=Object.entries(byStore).map(([loc,s])=>({loc,...s,rate:s.hrs>0?s.litres/s.hrs:0,received:s.received||0,balance:(s.received||0)-s.litres,flagPct:s.evaluated>0?s.flags/s.evaluated*100:null,photoPct:s.readings>0?s.photo/s.readings*100:0})).sort((a,b)=>b.litres-a.litres);
     const withRate=list.filter(s=>s.rate>0);
@@ -1088,7 +1159,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
 // ============================================
 // DIESEL LOG PAGE - Daily Staff Input
 // ============================================
-function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings,vehicles,dieselTransfers,setDieselTransfers}){
+function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings,vehicles,dieselTransfers,setDieselTransfers,powerPeriods,setPowerPeriods,powerReady}){
   const [pageTab,setPageTab]=useState("daily"); // daily | nepa
   const [step,setStep]=useState("select"); // select | input | review | done
   const [selGen,setSelGen]=useState("");
@@ -1380,7 +1451,9 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const storeHasGenAsset=(generators||[]).some(x=>x.loc===storeForAdd&&x.assetType!=="oven");
       const added=(g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0);
       const isOven=g?.assetType==="oven";
-      const nHours=parseFloat(nepaHours)||0;
+      // Hours of grid power: from the on/off log when the store used it that day.
+      const pwSave=powerReady?powerOnDay(powerPeriods,g?.loc||userStore||"",entryDate):{count:0};
+      const nHours=pwSave.count>0?pwSave.hours:(parseFloat(nepaHours)||0);
       const bl=genBaselines?.find(b=>b.generator_id===selGen);
       const baselineRate=bl?.avg_litres_per_hour||null;
       const thresholdPct=bl?.threshold_pct||20;
@@ -1562,7 +1635,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     last30.forEach(r=>{
       if(!storeData[r.storeLoc])storeData[r.storeLoc]={totalHrs:0,totalConsumption:0,count:0};
       storeData[r.storeLoc].totalHrs+=r.hoursRun||0;
-      storeData[r.storeLoc].totalConsumption+=r.consumptionLitres||0;
+      storeData[r.storeLoc].totalConsumption+=r.usedL||0;
       storeData[r.storeLoc].count++;
     });
     const ranked=Object.entries(storeData).filter(([,d])=>d.totalHrs>0).map(([loc,d])=>({loc,efficiency:d.totalConsumption/d.totalHrs})).sort((a,b)=>a.efficiency-b.efficiency);
@@ -1622,7 +1695,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     {/* Page-level tab switcher: Daily Reading | NEPA Period */}
     <div style={{display:"flex",gap:6,marginBottom:14}}>
       <button onClick={()=>setPageTab("daily")} style={{padding:"8px 18px",borderRadius:8,border:pageTab==="daily"?"1.5px solid "+P:"1.5px solid #E0E0E0",background:pageTab==="daily"?"#D0E2FF":"#fff",color:pageTab==="daily"?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Daily Reading</button>
-      <button onClick={()=>setPageTab("nepa")} style={{padding:"8px 18px",borderRadius:8,border:pageTab==="nepa"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:pageTab==="nepa"?"#EDE7F6":"#fff",color:pageTab==="nepa"?"#8B5CF6":"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>NEPA Period</button>
+      <button onClick={()=>setPageTab("nepa")} style={{padding:"8px 18px",borderRadius:8,border:pageTab==="nepa"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:pageTab==="nepa"?"#EDE7F6":"#fff",color:pageTab==="nepa"?"#8B5CF6":"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Power (NEPA)</button>
       <button onClick={()=>setPageTab("transfer")} style={{padding:"8px 18px",borderRadius:8,border:pageTab==="transfer"?"1.5px solid #FF832B":"1.5px solid #E0E0E0",background:pageTab==="transfer"?"#FFF4EC":"#fff",color:pageTab==="transfer"?"#FF832B":"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Transfer Diesel</button>
     </div>
 
@@ -1792,33 +1865,14 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
             })()}
           </div>
 
-          {/* Section 3: NEPA (hidden for ovens) */}
-          {selectedGen.assetType!=="oven"&&<div style={{marginBottom:20}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-              <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}><div style={{width:22,height:22,borderRadius:"50%",background:"#8B5CF6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>3</div> NEPA / Power</div>
-              <div style={{display:"flex",gap:4}}>
-                <button onClick={()=>setNepaMode("manual")} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:nepaMode==="manual"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:nepaMode==="manual"?"#EDE7F6":"#fff",color:nepaMode==="manual"?"#8B5CF6":"#8D8D8D",cursor:"pointer"}}>Manual</button>
-                <button onClick={()=>setNepaMode("photo")} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:nepaMode==="photo"?"1.5px solid #8B5CF6":"1.5px solid #E0E0E0",background:nepaMode==="photo"?"#EDE7F6":"#fff",color:nepaMode==="photo"?"#8B5CF6":"#8D8D8D",cursor:"pointer"}}>Photo</button>
-              </div>
-            </div>
-
-            {nepaMode==="manual"?(
-              <Field label="Total NEPA Hours Today"><input style={inp} type="number" step="0.5" placeholder="e.g. 14" value={nepaHours} onChange={e=>setNepaHours(e.target.value)}/></Field>
-            ):(
-              <div>
-                {!nepaPreview?(<div onClick={()=>document.getElementById("diesel-nepa-photo").click()} style={{border:"2px dashed #D1C4E9",borderRadius:12,padding:"22px 16px",textAlign:"center",cursor:"pointer",background:"#F3E5F5",marginBottom:10}}>
-                  <Camera size={26} color="#8B5CF6" style={{marginBottom:4}}/><div style={{fontSize:12,fontWeight:600,color:"#8B5CF6"}}>Photo of NEPA meter</div></div>)
-                :(<div style={{position:"relative",marginBottom:10}}><img src={nepaPreview} style={{width:"100%",borderRadius:12,maxHeight:180,objectFit:"cover"}}/><button onClick={()=>{setNepaPreview("");setNepaPhoto(null);setNepaMeterClose("");}} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={12} color="#fff"/></button></div>)}
-                <input id="diesel-nepa-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleNepaPhotoCapture}/>
-                {nepaAnalyzing&&<div style={{display:"flex",alignItems:"center",gap:6,padding:8,background:"#EDE7F6",borderRadius:8,marginBottom:8}}><div style={{width:14,height:14,border:"2px solid #8B5CF6",borderTop:"2px solid transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/><span style={{fontSize:11,fontWeight:600,color:"#8B5CF6"}}>Reading meter...</span></div>}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                  <Field label="Opening Reading"><input style={inp} type="number" placeholder="0" value={nepaMeterOpen} onChange={e=>setNepaMeterOpen(e.target.value)}/></Field>
-                  <Field label="Closing Reading"><input style={inp} type="number" placeholder="0" value={nepaMeterClose} onChange={e=>setNepaMeterClose(e.target.value)}/></Field>
-                </div>
-                <Field label="Total NEPA Hours"><input style={inp} type="number" step="0.5" placeholder="e.g. 14" value={nepaHours} onChange={e=>setNepaHours(e.target.value)}/></Field>
-              </div>
-            )}
-          </div>}
+          {/* Section 3: grid power (hidden for ovens) -- read from the Power (NEPA) tab */}
+          {selectedGen.assetType!=="oven"&&(()=>{const st=selectedGen.loc||userStore||"";const pw=powerReady?powerOnDay(powerPeriods,st,entryDate):{count:0,ms:0};const mlog=(nepaPeriodLogs||[]).find(n=>n.storeLoc===st&&n.fromDate<=entryDate&&n.toDate>=entryDate);const u=nplUnits(mlog);const goPower=<span onClick={()=>setPageTab("nepa")} style={{color:"#8B5CF6",fontWeight:700,cursor:"pointer",textDecoration:"underline"}}>Power (NEPA) tab</span>;return(<div style={{marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6,marginBottom:10}}><div style={{width:22,height:22,borderRadius:"50%",background:"#8B5CF6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>3</div> NEPA / Power</div>
+            {pw.count>0
+              ?(<div style={{padding:"10px 14px",borderRadius:10,background:"#F3E5F5",border:"1px solid #D1C4E9",fontSize:13,marginBottom:8}}>Power was on for <b>{fmtDur(pw.ms)}</b> on this day ({pw.count} period{pw.count>1?"s":""} in the on/off log).</div>)
+              :(<Field label="Hours of NEPA power on this day"><input style={inp} type="number" step="0.5" placeholder="e.g. 14" value={nepaHours} onChange={e=>setNepaHours(e.target.value)}/>{powerReady&&<div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>Or tap when power comes on and goes off in the {goPower} - the hours then fill in by themselves.</div>}</Field>)}
+            <div style={{fontSize:12,color:"#525252"}}>{u!=null?<>NEPA meter: {mlog.meterOpening.toLocaleString()} to {mlog.meterClosing.toLocaleString()} = <b>{u.toLocaleString()} units</b>{mlog.fromDate!==mlog.toDate?" (since "+fmtDayLabel(mlog.fromDate)+")":""}</>:<>NEPA meter not recorded for this day yet - record it in the {goPower}.</>}</div>
+          </div>);})()}
 
           {/* Notes */}
           <Field label="Notes (optional)"><input style={inp} placeholder="e.g. generator serviced today" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
@@ -1850,7 +1904,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     </div>)}
 
     {/* NEPA Period Tab */}
-    {pageTab==="nepa"&&<NepaPeriodSection user={user} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} locations={locations} appSettings={appSettings}/>}
+    {pageTab==="nepa"&&<NepaPeriodSection user={user} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} locations={locations} appSettings={appSettings} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady}/>}
 
     {/* Transfer Diesel Tab */}
     {pageTab==="transfer"&&<TransferSection user={user} generators={generators} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} locations={locations} appSettings={appSettings} dieselLocks={dieselLocks}/>}
@@ -1985,35 +2039,116 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
 // NEPA PERIOD SECTION - inside Diesel Log page
 // Custom date-range NEPA tracking (separate from daily readings)
 // ============================================
-function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appSettings}){
+function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appSettings,powerPeriods,setPowerPeriods,powerReady}){
+  // Power (NEPA) tab, per store: (1) a live power on/off log -- staff tap when
+  // NEPA comes on and goes off, the app adds up the hours; (2) the daily NEPA
+  // meter reading, opening carried from the last closing (like the generator
+  // hour meter) so staff type one number; (3) the history. Meter readings are
+  // nepa_period_logs rows (from_date..to_date: one day, or the days since the
+  // last reading); on/off times are power_periods rows.
   const isStoreStaff=user?.role==="Store Staff";
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
+  const canWrite=isStoreStaff||isAdmin;
   const editWindowMinutes=Number(appSettings?.diesel_edit_window_minutes??60);
   const canEditEntry=(entry)=>{
     if(isAdmin)return true;
     if(!entry||!entry.createdAt)return true;
-    const elapsedMin=(Date.now()-new Date(entry.createdAt).getTime())/60000;
-    return elapsedMin<=editWindowMinutes;
+    return (Date.now()-new Date(entry.createdAt).getTime())/60000<=editWindowMinutes;
   };
   const userStore=user?.store_location||"";
-  const todayStr=new Date().toISOString().split("T")[0];
-  const monthStart=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().split("T")[0];
-  const [showForm,setShowForm]=useState(false);
+  const todayStr=ngDate(Date.now());
+  const yesterdayStr=ngDate(Date.now()-864e5);
+  const purple="#8B5CF6";
+  const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?16:20,marginBottom:14};
+  const btn=(bg)=>({padding:"10px 18px",borderRadius:8,border:"none",background:bg,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"});
+  const ghost={padding:"6px 12px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#525252"};
+  const note=(bg,fg)=>({padding:"8px 12px",borderRadius:8,background:bg,color:fg,fontSize:12,marginBottom:10});
+  const [store,setStore]=useState(isStoreStaff?userStore:"");
+  const ms=iso=>new Date(iso).getTime();
+
+  // ---- (1) power on/off log -------------------------------------------------
+  const sp=(powerPeriods||[]).filter(p=>p.storeLoc===store);
+  const openP=sp.find(p=>!p.offAt);
+  const [pending,setPending]=useState(null);   // {kind:"on"|"off", time:"HH:MM"}
+  const [viewDate,setViewDate]=useState(todayStr);
+  const [addP,setAddP]=useState(null);         // {id?, date, on, off, open?}
+  const [busy,setBusy]=useState(false);
+  const [pmsg,setPmsg]=useState("");
+  const overlaps=(a,b,exceptId)=>sp.some(p=>p.id!==exceptId&&ms(p.onAt)<b&&(p.offAt?ms(p.offAt):Infinity)>a);
+  const periodErr=(e)=>/one_open/.test(e?.message||"")?"Power is already marked ON at this store (from another phone). Refresh the page to see it.":"Not saved: "+(e?.message||e);
+  const savePending=async()=>{
+    if(!pending?.time){setPmsg("Enter the time.");return;}
+    const t=atLocal(todayStr,pending.time);
+    if(t>Date.now()+5*6e4){setPmsg("That time is later than now.");return;}
+    if(pending.kind==="on"&&overlaps(t,t+1)){setPmsg("Power is already logged as ON at that time. Check today's list below.");return;}
+    if(pending.kind==="off"&&t<=ms(openP.onAt)){setPmsg("Power went off before it came on? Check the time.");return;}
+    setBusy(true);setPmsg("");
+    try{
+      if(pending.kind==="on"){const saved=await db.addPowerPeriod({store_location:store,on_at:new Date(t).toISOString()});setPowerPeriods(prev=>[toPW(saved),...prev]);}
+      else{const saved=await db.updatePowerPeriod(openP.id,{off_at:new Date(t).toISOString()});setPowerPeriods(prev=>prev.map(p=>p.id===openP.id?toPW(saved):p));}
+      setPending(null);setViewDate(todayStr);
+    }catch(e){setPmsg(periodErr(e));}
+    setBusy(false);
+  };
+  const saveAdd=async()=>{
+    if(!addP?.on||(!addP.open&&!addP.off)){setPmsg(addP?.open?"Enter the time power came on.":"Enter both times.");return;}
+    const a=atLocal(addP.date,addP.on);
+    let b=addP.open?null:atLocal(addP.date,addP.off);
+    if(b!=null&&b<=a)b+=864e5; // went off after midnight
+    if(a>Date.now()+5*6e4||(b!=null&&b>Date.now()+5*6e4)){setPmsg(addP.open?"That time is later than now.":"The OFF time is later than now. For power that is still on, use the Power came ON button.");return;}
+    if(overlaps(a,b??Date.now(),addP.id)){setPmsg("That overlaps a period already logged. Change that one instead.");return;}
+    setBusy(true);setPmsg("");
+    try{
+      const body=addP.open?{on_at:new Date(a).toISOString()}:{on_at:new Date(a).toISOString(),off_at:new Date(b).toISOString()};
+      if(addP.id){const saved=await db.updatePowerPeriod(addP.id,body);setPowerPeriods(prev=>prev.map(p=>p.id===addP.id?toPW(saved):p));}
+      else{const saved=await db.addPowerPeriod({store_location:store,...body});setPowerPeriods(prev=>[toPW(saved),...prev]);}
+      setAddP(null);
+    }catch(e){setPmsg(periodErr(e));}
+    setBusy(false);
+  };
+  const delPeriod=async(p)=>{
+    if(!confirm("Delete this power period ("+fmtClock(p.onAt)+(p.offAt?" to "+fmtClock(p.offAt):", still on")+")?"))return;
+    try{await db.deletePowerPeriod(p.id);setPowerPeriods(prev=>prev.filter(x=>x.id!==p.id));}catch(e){setPmsg(periodErr(e));}
+  };
+  // staff may fix periods that started today or yesterday; managers any
+  const canTouch=(p)=>isAdmin||(isStoreStaff&&ngDate(ms(p.onAt))>=yesterdayStr);
+  const [vd0,vd1]=dayBounds(viewDate);
+  const dayPeriods=sp.filter(p=>(p.offAt?ms(p.offAt):Date.now())>vd0&&ms(p.onAt)<vd1).sort((a,b)=>a.onAt.localeCompare(b.onAt));
+  const dayTot=powerOnDay(powerPeriods,store,viewDate);
+
+  // ---- (2) daily NEPA meter reading ----------------------------------------
+  const storeLogs=(nepaPeriodLogs||[]).filter(n=>n.storeLoc===store).sort((a,b)=>b.toDate.localeCompare(a.toDate));
   const [editId,setEditId]=useState(null);
-  const [storeLoc,setStoreLoc]=useState(isStoreStaff?userStore:"");
-  const [fromDate,setFromDate]=useState(monthStart);
-  const [toDate,setToDate]=useState(todayStr);
-  const [meterOpen,setMeterOpen]=useState("");
-  const [meterClose,setMeterClose]=useState("");
-  const [totalHours,setTotalHours]=useState("");
+  const [mDate,setMDate]=useState(todayStr);
+  const [mOpen,setMOpen]=useState("");
+  const [mClose,setMClose]=useState("");
+  const [mHours,setMHours]=useState("");
   const [photo,setPhoto]=useState(null);
   const [preview,setPreview]=useState("");
   const [notes,setNotes]=useState("");
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState("");
-
-  const visible=(nepaPeriodLogs||[]).filter(n=>isStoreStaff?n.storeLoc===userStore:true).sort((a,b)=>b.fromDate.localeCompare(a.fromDate));
-
+  const editing=editId?(nepaPeriodLogs||[]).find(n=>n.id===editId):null;
+  const prevLog=storeLogs.find(n=>n.id!==editId&&n.toDate<mDate);
+  const carried=!editing&&prevLog&&prevLog.meterClosing!=null?prevLog.meterClosing:null;
+  const already=!editing&&storeLogs.find(n=>n.fromDate<=mDate&&n.toDate>=mDate);
+  const fromDate=editing?editing.fromDate:(prevLog&&nextDayStr(prevLog.toDate)<mDate?nextDayStr(prevLog.toDate):mDate);
+  const span=daysFromTo(fromDate,mDate);
+  const sumLog=(st,days)=>powerReady?days.reduce((acc,d)=>{const x=powerOnDay(powerPeriods,st,d);return{ms:acc.ms+x.ms,count:acc.count+x.count};},{ms:0,count:0}):{ms:0,count:0};
+  const logSpan=sumLog(store,span);
+  const openVal=carried!=null?carried:(mOpen===""?null:parseFloat(mOpen));
+  const closeVal=mClose===""?null:parseFloat(mClose);
+  const units=(openVal!=null&&closeVal!=null&&!isNaN(openVal)&&!isNaN(closeVal))?Math.round((closeVal-openVal)*10)/10:null;
+  const hoursVal=logSpan.count>0?Math.round(logSpan.ms/36e4)/10:(mHours===""?null:parseFloat(mHours));
+  const resetMeter=()=>{setEditId(null);setMDate(todayStr);setMOpen("");setMClose("");setMHours("");setPhoto(null);setPreview("");setNotes("");};
+  const startEdit=(n)=>{
+    if(!isStoreStaff)setStore(n.storeLoc);
+    setEditId(n.id);setMDate(n.toDate);
+    setMOpen(n.meterOpening!=null?String(n.meterOpening):"");setMClose(n.meterClosing!=null?String(n.meterClosing):"");
+    const h=nplHours(n);setMHours(h!=null?String(h):"");
+    setPreview(n.photoUrl||"");setPhoto(null);setNotes(n.notes||"");setMsg("");
+    window.scrollTo({top:0,behavior:"smooth"});
+  };
   const handlePhoto=(e)=>{
     const file=e.target.files?.[0];if(!file)return;
     setPhoto(file);
@@ -2021,96 +2156,133 @@ function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appS
     reader.onload=(ev)=>setPreview(ev.target.result);
     reader.readAsDataURL(file);
   };
-
-  const resetForm=()=>{
-    setEditId(null);setStoreLoc(isStoreStaff?userStore:"");setFromDate(monthStart);setToDate(todayStr);
-    setMeterOpen("");setMeterClose("");setTotalHours("");setPhoto(null);setPreview("");setNotes("");setMsg("");
-  };
-
-  const startEdit=(n)=>{
-    setEditId(n.id);setStoreLoc(n.storeLoc);setFromDate(n.fromDate);setToDate(n.toDate);
-    setMeterOpen(n.meterOpening!=null?String(n.meterOpening):"");
-    setMeterClose(n.meterClosing!=null?String(n.meterClosing):"");
-    setTotalHours(n.totalHours?String(n.totalHours):"");
-    setPreview(n.photoUrl||"");setPhoto(null);setNotes(n.notes||"");
-    setShowForm(true);setMsg("");
-  };
-
-  const handleSave=async()=>{
-    if(!storeLoc){setMsg("Store is required.");return;}
-    if(!fromDate||!toDate){setMsg("From and To dates are required.");return;}
-    if(fromDate>toDate){setMsg("From date must be before To date.");return;}
-    if(!totalHours&&!(meterOpen&&meterClose)){setMsg("Provide total hours OR both meter readings.");return;}
-    if(editId){
-      const existing=nepaPeriodLogs.find(n=>n.id===editId);
-      if(!canEditEntry(existing)){setMsg(`Edit window expired (>${editWindowMinutes} min). Contact a Fleet Manager or Super Admin.`);return;}
-    }
+  const saveMeter=async()=>{
+    if(!store){setMsg("Choose the store first.");return;}
+    if(already){setMsg("This date is already recorded"+(already.fromDate!==already.toDate?" ("+fmtDayLabel(already.fromDate)+" to "+fmtDayLabel(already.toDate)+")":"")+". Change it in the list below.");return;}
+    if(closeVal==null&&hoursVal==null){setMsg("Enter the meter reading (or the hours of power, if this store has no meter).");return;}
+    if((closeVal!=null&&isNaN(closeVal))||(openVal!=null&&isNaN(openVal))){setMsg("Meter readings must be numbers.");return;}
+    if(closeVal!=null&&openVal==null){setMsg("This is the first meter reading for this store - enter the opening reading too.");return;}
+    if(editing&&!canEditEntry(editing)){setMsg(`Edit window expired (more than ${editWindowMinutes} min). Ask a Fleet Manager or Super Admin.`);return;}
+    if(units!=null&&units<0&&!confirm(`The closing reading (${closeVal.toLocaleString()}) is LOWER than the opening (${openVal.toLocaleString()}). A meter cannot go backwards unless it was replaced.\n\nSave anyway?`))return;
+    if(units!=null&&units>3000*span.length&&!confirm(`That is ${units.toLocaleString()} units in ${span.length} day${span.length>1?"s":""} - far more than usual. Check for a missing decimal point.\n\nSave anyway?`))return;
     setSaving(true);setMsg("");
     try{
       let photoUrl=preview&&!photo?preview:"";
       if(photo){
-        const up=await uploadMeterPhoto(photo,"nepa-period",storeLoc);
-        if(up.error){setMsg("Photo upload failed: "+up.error);if(!confirmWithoutPhoto("NEPA photo",up.error)){setSaving(false);return;}}
-        photoUrl=up.url;
+        const up=await uploadMeterPhoto(photo,"nepa-period",store);
+        if(up.error&&!confirmWithoutPhoto("NEPA meter photo",up.error)){setSaving(false);return;}
+        photoUrl=up.url||"";
       }
-      const computedHours=totalHours?parseFloat(totalHours):(meterClose&&meterOpen?parseFloat(meterClose)-parseFloat(meterOpen):null);
-      const record=fromNPL({storeLoc,fromDate,toDate,totalHours:computedHours,meterOpening:parseFloat(meterOpen)||null,meterClosing:parseFloat(meterClose)||null,photoUrl,notes,submittedBy:user?.uid||null});
-      let saved;
-      if(editId){
-        saved=await db.updateNepaPeriodLog(editId,record);
-        if(saved)setNepaPeriodLogs(prev=>prev.map(n=>n.id===editId?toNPL(saved):n));
-      }else{
-        saved=await db.addNepaPeriodLog(record);
-        if(saved)setNepaPeriodLogs(prev=>[toNPL(saved),...prev]);
-      }
-      setShowForm(false);resetForm();
+      const record=fromNPL({storeLoc:store,fromDate,toDate:mDate,totalHours:hoursVal,meterOpening:openVal,meterClosing:closeVal,photoUrl,notes,submittedBy:user?.uid||null});
+      if(editing){const saved=await db.updateNepaPeriodLog(editing.id,record);setNepaPeriodLogs(prev=>prev.map(n=>n.id===editing.id?toNPL(saved):n));}
+      else{const saved=await db.addNepaPeriodLog(record);setNepaPeriodLogs(prev=>[toNPL(saved),...prev]);}
+      resetMeter();setMsg("Saved.");
     }catch(e){setMsg("Error: "+e.message);}
     setSaving(false);
   };
-
   const handleDelete=async(id)=>{
-    if(!confirm("Delete this NEPA period log?"))return;
-    try{await db.deleteNepaPeriodLog(id);setNepaPeriodLogs(prev=>prev.filter(n=>n.id!==id));}
+    if(!confirm("Delete this NEPA meter reading?"))return;
+    try{await db.deleteNepaPeriodLog(id);setNepaPeriodLogs(prev=>prev.filter(n=>n.id!==id));if(editId===id)resetMeter();}
     catch(e){alert("Error: "+e.message);}
   };
 
+  // ---- (3) history ------------------------------------------------------------
+  const [showAll,setShowAll]=useState(false);
+  const visible=(nepaPeriodLogs||[]).filter(n=>isStoreStaff?n.storeLoc===userStore:(!store||n.storeLoc===store)).sort((a,b)=>b.toDate.localeCompare(a.toDate)||b.fromDate.localeCompare(a.fromDate));
+  const shown=showAll?visible:visible.slice(0,60);
+  const rowPower=(n)=>{const x=sumLog(n.storeLoc,daysFromTo(n.fromDate,n.toDate));if(x.count)return fmtDur(x.ms);const h=nplHours(n);return h!=null?h.toFixed(1)+" h":"-";};
+
   return(<div>
-    {!showForm&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
-      <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>NEPA Period Logs</h3><div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Track NEPA/power hours for any custom date range</div></div>
-        <button onClick={()=>{resetForm();setShowForm(true);}} style={{padding:"8px 14px",borderRadius:8,border:"none",background:"#8B5CF6",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><Plus size={13}/>Add Log</button>
-      </div>
-      {visible.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No NEPA period logs yet</div>
-      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Period","Store","Hours","Meter Reading","Photo","Submitted","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-      <tbody>{visible.map(n=>{const editAllowed=canEditEntry(n);return(<tr key={n.id}><td style={tc}><div>{n.fromDate}</div><div style={{fontSize:10,color:"#8D8D8D"}}>to {n.toDate}</div></td><td style={tc}>{n.storeLoc}</td><td style={{...tc,fontWeight:700,color:"#8B5CF6"}}>{n.totalHours?n.totalHours.toFixed(1)+"h":"-"}</td><td style={tc}>{n.meterOpening!=null&&n.meterClosing!=null?n.meterOpening+" → "+n.meterClosing:"-"}</td><td style={tc}>{n.photoUrl?<a href={n.photoUrl} target="_blank" rel="noreferrer" style={{color:"#8B5CF6",fontSize:11,fontWeight:600}}>View</a>:"-"}</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}}>{n.createdAt?new Date(n.createdAt).toLocaleDateString():"-"}</td><td style={tc}><div style={{display:"flex",gap:6}}><button onClick={()=>{if(!editAllowed){alert(`Edit window expired (>${editWindowMinutes} min). Contact a Fleet Manager or Super Admin.`);return;}startEdit(n);}} disabled={!editAllowed} title={editAllowed?"":"Edit window expired"} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #E0E0E0",background:editAllowed?"#fff":"#F4F4F4",cursor:editAllowed?"pointer":"not-allowed",fontSize:11,fontWeight:600,color:editAllowed?"#525252":"#8D8D8D"}}>{editAllowed?"Edit":"Locked"}</button>{isAdmin&&<button onClick={()=>handleDelete(n.id)} style={{padding:"4px 10px",borderRadius:5,border:"1px solid #FFD7DA",background:"#FFF1F1",color:"#DA1E28",cursor:"pointer",fontSize:11,fontWeight:600}}>Delete</button>}</div></td></tr>);})}</tbody></table>}
+    {!isStoreStaff&&<div style={{...card,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <span style={{fontSize:13,fontWeight:700}}>Store</span>
+      <select style={{...inp,maxWidth:260}} value={store} onChange={e=>{setStore(e.target.value);setPending(null);setAddP(null);resetMeter();setMsg("");setPmsg("");}}><option value="">All stores (history only)</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select>
+      {!store&&<span style={{fontSize:12,color:"#8D8D8D"}}>Choose a store to log power or a meter reading.</span>}
     </div>}
 
-    {showForm&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:22}}>
-      <button onClick={()=>{setShowForm(false);resetForm();}} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:"#8B5CF6",fontSize:13,fontWeight:600,marginBottom:14}}><ChevronLeft size={16}/> Back to List</button>
-      <h3 style={{fontSize:16,fontWeight:700,margin:"0 0 16px"}}>{editId?"Edit NEPA Period Log":"New NEPA Period Log"}</h3>
-      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr":"1fr 1fr",gap:12,marginBottom:14}}>
-        <Field label="Store *">
-          {isStoreStaff?<input style={{...inp,background:"#F4F4F4"}} value={userStore} disabled/>
-          :<select style={inp} value={storeLoc} onChange={e=>setStoreLoc(e.target.value)}><option value="">Select store...</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select>}
-        </Field>
-        <Field label=""><div/></Field>
-        <Field label="From Date *"><input type="date" style={inp} value={fromDate} max={toDate} onChange={e=>setFromDate(e.target.value)}/></Field>
-        <Field label="To Date *"><input type="date" style={inp} value={toDate} min={fromDate} max={todayStr} onChange={e=>setToDate(e.target.value)}/></Field>
-        <Field label="Meter Opening"><input style={inp} type="number" placeholder="Optional" value={meterOpen} onChange={e=>setMeterOpen(e.target.value)}/></Field>
-        <Field label="Meter Closing"><input style={inp} type="number" placeholder="Optional" value={meterClose} onChange={e=>setMeterClose(e.target.value)}/></Field>
-        <Field label="Total Hours"><input style={inp} type="number" step="0.5" placeholder={meterOpen&&meterClose?"Auto from meters":"e.g. 320"} value={totalHours} onChange={e=>setTotalHours(e.target.value)}/></Field>
-        <Field label="Notes"><input style={inp} placeholder="Optional notes" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
+    {store&&!powerReady&&isAdmin&&<div style={note("#FFF8E1","#7A4F00")}>The power on/off log needs a one-time database update: run <b>supabase/migrations/20261006_power_periods.sql</b> in the Supabase SQL editor.</div>}
+
+    {store&&powerReady&&<div style={card}>
+      <h3 style={{fontSize:15,fontWeight:700,margin:0}}>Power on/off</h3>
+      <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Tap the button when NEPA power comes on and again when it goes off. The app adds up the hours.</div>
+      <div style={{marginTop:14,padding:14,borderRadius:12,background:openP?"#E8F5E9":"#F4F4F4",border:"1px solid "+(openP?"#A5D6A7":"#E0E0E0"),display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+        <div><div style={{fontSize:16,fontWeight:800,color:openP?"#1B5E20":"#525252"}}>{openP?"Power is ON":"Power is OFF"}</div>
+          <div style={{fontSize:12,color:"#525252",marginTop:2}}>{openP?<>since {fmtClock(openP.onAt)}{ngDate(ms(openP.onAt))!==todayStr?" ("+fmtDayLabel(ngDate(ms(openP.onAt)))+")":""} - {fmtDur(Date.now()-ms(openP.onAt))} so far</>:"No power logged as on right now"}</div></div>
+        {canWrite&&!pending&&<button onClick={()=>{setPmsg("");setAddP(null);setPending({kind:openP?"off":"on",time:nowHM()});}} style={btn(openP?"#DA1E28":"#24A148")}>{openP?"Power went OFF":"Power came ON"}</button>}
       </div>
+      {pending&&<div style={{marginTop:12,display:"flex",alignItems:"flex-end",gap:8,flexWrap:"wrap"}}>
+        <Field label={pending.kind==="on"?"Power came on at":"Power went off at"}><input type="time" style={{...inp,width:140}} value={pending.time} onChange={e=>setPending({...pending,time:e.target.value})}/></Field>
+        <button disabled={busy} onClick={savePending} style={{...btn(purple),marginBottom:14}}>{busy?"Saving...":"Save"}</button>
+        <button onClick={()=>setPending(null)} style={{...ghost,marginBottom:14}}>Cancel</button>
+      </div>}
+      <div style={{marginTop:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+        <div style={{fontSize:13,fontWeight:700}}>{viewDate===todayStr?"Today":fmtDayLabel(viewDate)}: power on for <span style={{color:purple}}>{fmtDur(dayTot.ms)}</span></div>
+        <input type="date" style={{...inp,width:170,padding:"6px 10px"}} value={viewDate} max={todayStr} onChange={e=>{setViewDate(e.target.value||todayStr);setAddP(null);setPmsg("");}}/>
+      </div>
+      {dayPeriods.length===0?<div style={{fontSize:12,color:"#8D8D8D",padding:"10px 0"}}>No power logged for this day.</div>
+      :<div style={{marginTop:6}}>{dayPeriods.map(p=>(<div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 0",borderBottom:"1px solid #F4F4F4",fontSize:13,flexWrap:"wrap"}}>
+        <div>On <b>{fmtClock(p.onAt)}</b>{ngDate(ms(p.onAt))!==viewDate?" ("+fmtDayLabel(ngDate(ms(p.onAt)))+")":""} - off <b>{p.offAt?fmtClock(p.offAt):"still on"}</b>{p.offAt&&ngDate(ms(p.offAt))!==viewDate?" ("+fmtDayLabel(ngDate(ms(p.offAt)))+")":""} <span style={{color:"#8D8D8D"}}>{fmtDur((p.offAt?ms(p.offAt):Date.now())-ms(p.onAt))}</span></div>
+        {canTouch(p)&&<div style={{display:"flex",gap:6}}><button style={ghost} onClick={()=>{setPmsg("");setPending(null);setAddP({id:p.id,date:ngDate(ms(p.onAt)),on:fmtClock(p.onAt),off:p.offAt?fmtClock(p.offAt):"",open:!p.offAt});}}>Change</button><button style={{...ghost,color:"#DA1E28"}} onClick={()=>delPeriod(p)}>Delete</button></div>}
+      </div>))}</div>}
+      {canWrite&&!addP&&<button style={{...ghost,marginTop:10}} onClick={()=>{setPmsg("");setPending(null);setAddP({date:viewDate,on:"",off:""});}}>+ Add a period you forgot to log</button>}
+      {addP&&<div style={{marginTop:10,padding:12,borderRadius:10,background:"#FAF7FF",border:"1px solid #E9DDFE"}}>
+        <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>{addP.id?"Change this period":"Add a period for "+(addP.date===todayStr?"today":fmtDayLabel(addP.date))}</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <Field label="Came on at"><input type="time" style={{...inp,width:140}} value={addP.on} onChange={e=>setAddP({...addP,on:e.target.value})}/></Field>
+          {!addP.open&&<Field label="Went off at"><input type="time" style={{...inp,width:140}} value={addP.off} onChange={e=>setAddP({...addP,off:e.target.value})}/></Field>}
+          <button disabled={busy} onClick={saveAdd} style={{...btn(purple),marginBottom:14}}>{busy?"Saving...":"Save"}</button>
+          <button onClick={()=>setAddP(null)} style={{...ghost,marginBottom:14}}>Cancel</button>
+        </div>
+        {!addP.open&&<div style={{fontSize:11,color:"#8D8D8D"}}>If it went off after midnight, just enter the morning time - it counts as the next day.</div>}
+      </div>}
+      {pmsg&&<div style={{...note("#FFF8E1","#7A4F00"),marginTop:10,marginBottom:0}}>{pmsg}</div>}
+    </div>}
+
+    {store&&canWrite&&<div style={card}>
+      <h3 style={{fontSize:15,fontWeight:700,margin:0}}>{editing?"Change NEPA meter reading":"NEPA meter reading"}</h3>
+      <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,marginBottom:12}}>Read the meter at about the same time every day. The last closing reading is the new opening, so you only type today's number.</div>
+      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr":"1fr 1fr 1fr",gap:12}}>
+        <Field label="Date"><input type="date" style={inp} value={mDate} max={todayStr} disabled={!!editing} onChange={e=>{setMDate(e.target.value||todayStr);setMsg("");}}/></Field>
+        <Field label="Opening">{carried!=null
+          ?(<><input style={{...inp,background:"#F4F4F4",color:"#525252"}} value={carried.toLocaleString()} disabled readOnly/><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>From {fmtDayLabel(prevLog.toDate)} closing - not editable</div></>)
+          :(<><input type="number" step="0.1" style={inp} placeholder="Meter reading" value={mOpen} onChange={e=>setMOpen(e.target.value)}/>{!editing&&<div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>First reading - enter the opening too</div>}</>)}</Field>
+        <Field label="Closing (reading now)"><input type="number" step="0.1" style={{...inp,fontWeight:700}} placeholder="Meter reading" value={mClose} onChange={e=>setMClose(e.target.value)}/></Field>
+      </div>
+      {span.length>1&&!editing&&!already&&<div style={note("#FFF8E1","#7A4F00")}>No meter reading since {fmtDayLabel(prevLog.toDate)}, so this one covers {span.length} days ({fmtDayLabel(fromDate)} to {fmtDayLabel(mDate)}).</div>}
+      {already&&<div style={note("#EDF5FF","#0043CE")}>The meter is already recorded for {mDate===todayStr?"today":fmtDayLabel(mDate)}. To correct it, tap Change in the list below.</div>}
+      <div style={{display:"flex",gap:18,flexWrap:"wrap",padding:"10px 14px",borderRadius:10,background:"#FAF7FF",border:"1px solid #E9DDFE",marginBottom:12,fontSize:13}}>
+        <div>Units used: <b style={{color:units!=null&&units<0?"#DA1E28":purple}}>{units!=null?units.toLocaleString():"-"}</b></div>
+        <div>Power on: {logSpan.count>0?<><b style={{color:purple}}>{fmtDur(logSpan.ms)}</b><span style={{color:"#8D8D8D"}}> (from the on/off log)</span></>:<span style={{color:"#8D8D8D"}}>not logged</span>}</div>
+      </div>
+      {logSpan.count===0&&<Field label="Hours of power (only if you did not use the on/off log)"><input type="number" step="0.5" style={{...inp,maxWidth:220}} placeholder="e.g. 14" value={mHours} onChange={e=>setMHours(e.target.value)}/></Field>}
+      <Field label="Notes"><input style={inp} placeholder="Optional" value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
       <div style={{marginBottom:14}}>
-        <div style={{fontSize:12,fontWeight:600,color:"#525252",marginBottom:6}}>Meter Photo</div>
-        {!preview?(<div onClick={()=>document.getElementById("nepa-period-photo").click()} style={{border:"2px dashed #D1C4E9",borderRadius:12,padding:"22px 16px",textAlign:"center",cursor:"pointer",background:"#F3E5F5"}}>
-          <Camera size={26} color="#8B5CF6" style={{marginBottom:4}}/><div style={{fontSize:12,fontWeight:600,color:"#8B5CF6"}}>Photo of NEPA meter</div></div>)
+        {!preview?(<div onClick={()=>document.getElementById("nepa-period-photo").click()} style={{border:"2px dashed #D1C4E9",borderRadius:12,padding:"16px",textAlign:"center",cursor:"pointer",background:"#F3E5F5"}}>
+          <Camera size={22} color={purple} style={{marginBottom:2}}/><div style={{fontSize:12,fontWeight:600,color:purple}}>Photo of the NEPA meter (optional)</div></div>)
         :(<div style={{position:"relative"}}><img src={preview} style={{width:"100%",borderRadius:12,maxHeight:200,objectFit:"cover"}}/><button onClick={()=>{setPreview("");setPhoto(null);}} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}><X size={12} color="#fff"/></button></div>)}
         <input id="nepa-period-photo" type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handlePhoto}/>
       </div>
-      {msg&&<div style={{marginBottom:10,padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#FFF8E1",color:msg.startsWith("Error")?"#DA1E28":"#F57F17",fontSize:12,fontWeight:500}}>{msg}</div>}
-      <button onClick={handleSave} disabled={saving} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:saving?"#C6C6C6":"#8B5CF6",color:"#fff",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer"}}>{saving?"Saving...":editId?"Update Log":"Save Log"}</button>
+      {msg&&<div style={note(msg.startsWith("Error")?"#FFF1F1":msg==="Saved."?"#DEFBE6":"#FFF8E1",msg.startsWith("Error")?"#DA1E28":msg==="Saved."?"#0E6027":"#7A4F00")}>{msg}</div>}
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={saveMeter} disabled={saving||!!already} style={{...btn(saving||already?"#C6C6C6":purple),flex:1,padding:"12px"}}>{saving?"Saving...":editing?"Save changes":"Save meter reading"}</button>
+        {editing&&<button onClick={()=>{resetMeter();setMsg("");}} style={ghost}>Cancel</button>}
+      </div>
     </div>}
+
+    <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
+      <div style={{padding:"14px 20px",borderBottom:"1px solid #E8ECF1"}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>NEPA meter history</h3><div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Units = closing minus opening. Power on = from the on/off log where it was used.</div></div>
+      {visible.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No NEPA meter readings yet</div>
+      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date",...(!isStoreStaff&&!store?["Store"]:[]),"Meter","Units","Power on","Photo",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+      <tbody>{shown.map(n=>{const u=nplUnits(n);const allowed=canWrite&&canEditEntry(n);return(<tr key={n.id} style={{background:editId===n.id?"#FAF7FF":"transparent"}}>
+        <td style={{...tc,whiteSpace:"nowrap"}}>{fmtDayLabel(n.toDate)}{n.fromDate!==n.toDate&&<div style={{fontSize:10,color:"#8D8D8D"}}>since {fmtDayLabel(n.fromDate)}</div>}</td>
+        {!isStoreStaff&&!store&&<td style={tc}>{n.storeLoc}</td>}
+        <td style={{...tc,whiteSpace:"nowrap"}}>{n.meterOpening!=null&&n.meterClosing!=null?n.meterOpening.toLocaleString()+" to "+n.meterClosing.toLocaleString():"-"}</td>
+        <td style={{...tc,fontWeight:700,color:u!=null&&u<0?"#DA1E28":purple}}>{u!=null?u.toLocaleString():"-"}</td>
+        <td style={tc}>{rowPower(n)}</td>
+        <td style={tc}>{n.photoUrl?<a href={n.photoUrl} target="_blank" rel="noreferrer" style={{color:purple,fontSize:12}}>View</a>:"-"}</td>
+        <td style={{...tc,whiteSpace:"nowrap"}}>{allowed&&<><button style={ghost} onClick={()=>startEdit(n)}>Change</button> <button style={{...ghost,color:"#DA1E28"}} onClick={()=>handleDelete(n.id)}>Delete</button></>}</td>
+      </tr>);})}</tbody></table></div>}
+      {visible.length>shown.length&&<div style={{padding:12,textAlign:"center"}}><button style={ghost} onClick={()=>setShowAll(true)}>Show all {visible.length}</button></div>}
+    </div>
   </div>);
 }
 
@@ -2134,7 +2306,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   const allDists=(dieselDistributions||[]).filter(d=>myStore?d.storeLoc===myStore:true);
   const allReadings=dieselReadings.filter(r=>myStore?r.storeLoc===myStore:true);
   const totalReceived=myDists.reduce((s,d)=>s+d.litres,0);
-  const totalConsumed=myReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  const totalConsumed=myReadings.reduce((s,r)=>s+(r.usedL||0),0);
   const totalHoursRun=myReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
   // Diesel in Tank = the latest recorded level per asset, summed. This is the
   // store's real balance (what's physically there). Ledger-style balances
@@ -2144,10 +2316,10 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   const tankTotal=tankRows.reduce((s,r)=>s+r.dieselLevelActual,0);
   const tankAsOf=tankRows.length?tankRows.map(r=>r.date).sort().slice(-1)[0]:null;
   // Per-generator breakdown
-  const genMap={};myReadings.forEach(r=>{if(!genMap[r.generatorId])genMap[r.generatorId]={hrs:0,consumed:0,readings:0};genMap[r.generatorId].hrs+=(r.hoursRun||0);genMap[r.generatorId].consumed+=(r.consumptionLitres||0);genMap[r.generatorId].readings++;});
+  const genMap={};myReadings.forEach(r=>{if(!genMap[r.generatorId])genMap[r.generatorId]={hrs:0,consumed:0,readings:0};genMap[r.generatorId].hrs+=(r.hoursRun||0);genMap[r.generatorId].consumed+=(r.usedL||0);genMap[r.generatorId].readings++;});
   const genBreakdown=Object.entries(genMap).map(([gid,d])=>{const g=generators.find(x=>x.id===gid);return{id:gid,name:g?.name||gid,...d,rate:d.hrs>0?(d.consumed/d.hrs):0};}).sort((a,b)=>b.consumed-a.consumed);
   // Daily chart data
-  const dayMap={};myReadings.forEach(r=>{if(!dayMap[r.date])dayMap[r.date]={consumed:0,hrs:0};dayMap[r.date].consumed+=(r.consumptionLitres||0);dayMap[r.date].hrs+=(r.hoursRun||0);});
+  const dayMap={};myReadings.forEach(r=>{if(!dayMap[r.date])dayMap[r.date]={consumed:0,hrs:0};dayMap[r.date].consumed+=(r.usedL||0);dayMap[r.date].hrs+=(r.hoursRun||0);});
   const chartData=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,d])=>({date:date.slice(5),consumed:Math.round(d.consumed*10)/10,hrs:Math.round(d.hrs*10)/10}));
 
   // Reports export functions
@@ -2156,12 +2328,12 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   const rGenOpts=(generators||[]).filter(g=>myGenIds.has(g.id));
   const rReadings=dieselReadings.filter(r=>(myStore?r.storeLoc===myStore:true)&&inR(r.date)&&(!rGen||r.generatorId===rGen)).sort((a,b)=>b.date.localeCompare(a.date));
   const rDists=(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&inR(d.date)).sort((a,b)=>b.date.localeCompare(a.date));
-  const rTotalConsumed=rReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  const rTotalConsumed=rReadings.reduce((s,r)=>s+(r.usedL||0),0);
   const rTotalReceived=rDists.reduce((s,d)=>s+d.litres,0);
   const rTotalHrs=rReadings.reduce((s,r)=>s+(r.hoursRun||0),0);
   const exportCSV=(type)=>{
     let csv="";
-    if(type==="readings"){csv="Date,Generator,Open Hrs,Close Hrs,Hours Run,Diesel Level (L),Added (L),Consumed (L),Rate (L/hr),NEPA Open,NEPA Close,Discrepancy\n";rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);csv+=`${r.date},${g?.name||r.generatorId},${r.genHoursOpening??""},${r.genHoursClosing??""},${r.hoursRun||""},${r.dieselLevelActual!=null?r.dieselLevelActual:""},${r.dieselAdded||""},${r.consumptionLitres||""},${r.consumptionRate!=null?r.consumptionRate.toFixed(2):""},${r.nepaMeterOpening??""},${r.nepaMeterClosing??""},${r.discrepancyFlag?"YES":"NO"}\n`;});}
+    if(type==="readings"){csv="Date,Generator,Open Hrs,Close Hrs,Hours Run,Diesel Level (L),Added (L),Consumed (L),Rate (L/hr),NEPA Open,NEPA Close,Discrepancy\n";rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);csv+=`${r.date},${g?.name||r.generatorId},${r.genHoursOpening??""},${r.genHoursClosing??""},${r.hoursRun||""},${r.dieselLevelActual!=null?r.dieselLevelActual:""},${r.dieselAdded||""},${r.usedL||""},${r.rateL!=null?r.rateL.toFixed(2):""},${r.nepaMeterOpening??""},${r.nepaMeterClosing??""},${r.discrepancyFlag?"YES":"NO"}\n`;});}
     else{csv="Date,Litres,Supplier,Notes,Status\n";rDists.forEach(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);csv+=`${d.date},${d.litres},${p?.supplier||""},${(d.notes||"").replace(/,/g," ")},${d.confirmed?"Confirmed":"Pending"}\n`;});}
     const blob=new Blob([csv],{type:"text/csv"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${myStore||"all"}_${type}_${rFrom}_to_${rTo}.csv`;a.click();URL.revokeObjectURL(url);
   };
@@ -2172,7 +2344,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
     if(type==="readings"){
       html+="<div class=\"summary\"><div><div>Total Consumed</div><div class=\"val\">"+rTotalConsumed.toFixed(1)+" L</div></div><div><div>Total Hours</div><div class=\"val\">"+rTotalHrs.toFixed(1)+" h</div></div><div><div>Readings</div><div class=\"val\">"+rReadings.length+"</div></div></div>";
       html+="<table><thead><tr><th>Date</th><th>Generator</th><th>Hours Run</th><th>Diesel Level</th><th>Consumed</th><th>NEPA</th><th>Source</th><th>Flag</th></tr></thead><tbody>";
-      rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);html+="<tr><td>"+r.date+"</td><td>"+(g?.name||r.generatorId)+"</td><td>"+(r.hoursRun?r.hoursRun.toFixed(1)+"h":"-")+"</td><td>"+(r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-")+"</td><td>"+(r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-")+"</td><td>"+(r.nepaHours?r.nepaHours+"h":"-")+"</td><td>"+(r.genSource||"manual")+"</td><td>"+(r.discrepancyFlag?"YES":"-")+"</td></tr>";});
+      rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);html+="<tr><td>"+r.date+"</td><td>"+(g?.name||r.generatorId)+"</td><td>"+(r.hoursRun?r.hoursRun.toFixed(1)+"h":"-")+"</td><td>"+(r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-")+"</td><td>"+(r.usedL?r.usedL.toFixed(1)+"L":"-")+"</td><td>"+(r.nepaHours?r.nepaHours+"h":"-")+"</td><td>"+(r.genSource||"manual")+"</td><td>"+(r.discrepancyFlag?"YES":"-")+"</td></tr>";});
       html+="</tbody></table>";
     }else{
       html+="<div class=\"summary\"><div><div>Total Received</div><div class=\"val\">"+rTotalReceived.toFixed(1)+" L</div></div><div><div>Deliveries</div><div class=\"val\">"+rDists.length+"</div></div></div>";
@@ -2205,7 +2377,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
       {rTab==="readings"?(<>
         {rReadings.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings in this period</div>
         :<table style={{width:"100%",borderCollapse:"collapse",minWidth:880}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Open Hrs","Close Hrs","Hours Run","Diesel Level (L)","Added (L)","Consumed (L)","Rate (L/hr)","NEPA Open","NEPA Close","Flag"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
-        <tbody>{rReadings.map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={{...tc,whiteSpace:"nowrap"}}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td><td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td><td style={tc}>{r.consumptionLitres!=null?r.consumptionLitres.toLocaleString():"-"}</td><td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td><td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td><td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
+        <tbody>{rReadings.map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={{...tc,whiteSpace:"nowrap"}}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td><td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={tc}>{r.dieselAdded?r.dieselAdded.toLocaleString():"-"}</td><td style={tc}>{r.usedL!=null?r.usedL.toLocaleString():"-"}</td><td style={tc}>{r.rateL!=null?r.rateL.toFixed(2):"-"}</td><td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td><td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
       </>):(<>
         {rDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
         :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Supplier","Notes","Status"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
@@ -2289,7 +2461,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
       <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Reading History</h4></div>
       {myReadings.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings in this period</div>
       :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Generator","Hours Run","Diesel Level","Consumed","NEPA","Source","Flag"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-      <tbody>{myReadings.sort((a,b)=>b.date.localeCompare(a.date)).map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.consumptionLitres?r.consumptionLitres.toFixed(1)+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
+      <tbody>{myReadings.sort((a,b)=>b.date.localeCompare(a.date)).map(r=>{const g=generators.find(x=>x.id===r.generatorId);return(<tr key={r.id}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600}}>{g?.name||r.generatorId}</td><td style={tc}>{r.hoursRun?r.hoursRun.toFixed(1)+"h":"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual+"L":"-"}</td><td style={tc}>{r.usedL?r.usedL.toFixed(1)+"L":"-"}</td><td style={tc}>{r.nepaHours?r.nepaHours+"h":"-"}</td><td style={tc}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:r.genSource==="photo"?"#D0E2FF":"#F4F4F4",color:r.genSource==="photo"?P:"#525252",fontWeight:600}}>{r.genSource==="photo"?"Photo":"Manual"}</span></td><td style={tc}>{r.discrepancyFlag?<span style={{color:"#DA1E28",fontWeight:700}}>!</span>:"-"}</td></tr>);})}</tbody></table>}
     </div>)}
     {/* Generators Tab */}
     {dashTab==="generators"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
@@ -2322,7 +2494,7 @@ const NAV=[
 // ============================================
 // DIESEL MANAGEMENT PAGE - Admin Purchase & Distribution (Phase 2)
 // ============================================
-function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles}){
+function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs}){
   // Store-staff scope: filter everything to their own store. Admin/Fleet Manager see all.
   const isStaff=user?.role==="Store Staff";
   // Purchase/delivery edits are a manager's job. Before 2026-10-05 the row buttons
@@ -2417,7 +2589,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     const dist=dieselDistributions.filter(d=>d.storeLoc===loc);
     const readings=dieselReadings.filter(r=>r.storeLoc===loc);
     const received=dist.reduce((s,d)=>s+d.litres,0);
-    const consumed=readings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+    const consumed=readings.reduce((s,r)=>s+(r.usedL||0),0);
     return{loc,received,consumed,balance:received-consumed,distCount:dist.length};
   }).filter(s=>s.received>0||s.consumed>0).sort((a,b)=>b.received-a.received);
   const handleAddPurchase=async()=>{
@@ -2460,7 +2632,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const tabs=scopeStore?["readings","compliance","transfers","distributions","stores","baselines","discrepancies"]:["overview","watchtower","readings","compliance","transfers","purchases","distributions","stores","baselines","discrepancies"];
   // Staff KPI values (their store only)
   const staffReceived=dieselDistributions.reduce((s,d)=>s+(d.litres||0),0);
-  const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.consumptionLitres||0),0);
+  const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.usedL||0),0);
   // Diesel in Tank = latest recorded level per asset, summed. This is the
   // store's real balance — a received-minus-consumed ledger misleads for
   // locally-buying stores (their purchases aren't admin distributions).
@@ -2573,7 +2745,10 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         if(r.discrepancyFlag)s.flags++;
         if(r.consumptionLitres!=null&&r.consumptionLitres>0){s.consumed+=r.consumptionLitres;if(r.consumptionLitres%10===0)s.round++;}
         s.added+=(r.dieselAdded||0);
-        if(r.hoursRun>0&&r.consumptionLitres>0)s.rates.push(r.consumptionLitres/r.hoursRun);
+        // Measured rate: app-saved consumption_litres is hours x the usual rate,
+        // so its rate never varies and every app-logging store looked like it
+        // was copying numbers (the 12-point CV test below).
+        if(r.hoursRun>0&&r.rateL>0)s.rates.push(r.rateL);
         if(r.date>=today30){s.recent++;if(r.genSource==="photo")s.recentPhoto++;}
       });
       (dieselDistributions||[]).forEach(d=>{const s=stores[d.storeLoc];if(s)s.sent=(s.sent||0)+(d.litres||0);});
@@ -2831,12 +3006,18 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const pageRows=rows.slice(curPage*rdPageSize,(curPage+1)*rdPageSize);
       const txOf=(r)=>txMap[r.generatorId+"|"+r.date]||0;
       const txNote=(r)=>(txLabelMap[r.generatorId+"|"+r.date]||[]).join("; ");
-      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Transferred Out (L)","Expected (L)","Batches","Rate (L/hr | L/batch)","NEPA Open","NEPA Close","Notes"];
+      // Grid power beside generator hours: hours from the power on/off log
+      // (else the reading's own NEPA hours), units from the store's NEPA
+      // meter reading for that day (Power (NEPA) tab).
+      const pwDay=powerHoursByDay(powerPeriods);const nplEnd={};(nepaPeriodLogs||[]).forEach(n=>{nplEnd[n.storeLoc+"|"+n.toDate]=n;});
+      const gridOf=(r)=>{const p=pwDay[r.storeLoc+"|"+r.date];const n=nplEnd[r.storeLoc+"|"+r.date];
+        return{hrs:p?Math.round(p.ms/36e4)/10:(r.nepaHours||null),units:n?nplUnits(n):((r.nepaMeterOpening!=null&&r.nepaMeterClosing!=null)?Math.round((r.nepaMeterClosing-r.nepaMeterOpening)*10)/10:null),since:n&&n.fromDate!==n.toDate?n.fromDate:null};};
+      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Transferred Out (L)","Expected (L)","Batches","Rate (L/hr | L/batch)","Power (h)","Grid Units","Notes"];
       const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1,background:"#F4F4F4"};
       const resetPage=()=>setRdPage(0);
       const exportCsv=()=>{
         const head=cols.join(",");
-        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",txOf(r)||"",expectedOf(r)??"",r.batchesProduced??"",r.consumptionRate!=null?r.consumptionRate.toFixed(2):"",r.nepaMeterOpening??"",r.nepaMeterClosing??"",[(r.notes||""),txNote(r)].filter(Boolean).join(" | ").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",txOf(r)||"",expectedOf(r)??"",r.batchesProduced??"",r.rateL!=null?r.rateL.toFixed(2):"",gridOf(r).hrs??"",gridOf(r).units??"",[(r.notes||""),txNote(r)].filter(Boolean).join(" | ").replace(/[",\n]/g," ")].join(",")).join("\n");
         const blob=new Blob([head+"\n"+body],{type:"text/csv"});
         const url=URL.createObjectURL(blob);const a=document.createElement("a");
         a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
@@ -2876,9 +3057,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={{...tc,color:txOf(r)>0?"#8A3FFC":"#8D8D8D",fontWeight:txOf(r)>0?600:400}} title={txNote(r)}>{txOf(r)>0?txOf(r).toLocaleString()+" L":"-"}</td>
             <td style={{...tc,color:"#8D8D8D"}}>{expectedOf(r)!=null?expectedOf(r).toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:r.batchesProduced!=null?600:400,color:r.batchesProduced!=null?"#8B5CF6":"#161616"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td>
-            <td style={tc}>{r.consumptionRate!=null?r.consumptionRate.toFixed(2):"-"}</td>
-            <td style={tc}>{r.nepaMeterOpening!=null?r.nepaMeterOpening.toLocaleString():"-"}</td>
-            <td style={tc}>{r.nepaMeterClosing!=null?r.nepaMeterClosing.toLocaleString():"-"}</td>
+            <td style={tc}>{r.rateL!=null?r.rateL.toFixed(2):"-"}</td>
+            {(()=>{const gr=gridOf(r);return(<><td style={{...tc,color:gr.hrs!=null?"#8B5CF6":"#A8A8A8"}}>{gr.hrs!=null?gr.hrs.toFixed(1):"-"}</td><td style={{...tc,color:gr.units!=null?"#8B5CF6":"#A8A8A8"}} title={gr.since?"Meter reading covers the days since "+gr.since:""}>{gr.units!=null?gr.units.toLocaleString()+(gr.since?"*":""):"-"}</td></>);})()}
             <td style={{...tc,whiteSpace:"nowrap"}}>{(r.notes||txOf(r)>0)?<button onClick={()=>setNoteRow({date:r.date,gen:genName(r.generatorId),store:r.storeLoc,notes:r.notes||"",transfers:txLabelMap[r.generatorId+"|"+r.date]||[]})} title="View notes" style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 9px",borderRadius:6,border:"1px solid "+(txOf(r)>0?"#E0D4FF":"#E0E0E0"),background:txOf(r)>0?"#F5F0FF":"#fff",fontSize:11,fontWeight:600,color:txOf(r)>0?"#8A3FFC":"#525252",cursor:"pointer"}}><FileText size={11}/>{txOf(r)>0?"Transfer":"Note"}</button>:<span style={{color:"#C6C6C6"}}>-</span>}</td>
           </tr>))}</tbody></table></div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 16px",borderTop:"1px solid #E8ECF1",flexWrap:"wrap"}}>
@@ -2973,17 +3153,26 @@ function FleetProAppInner(){
   const [docTypes,setDocTypes]=useState([]);const [vendorTypes,setVendorTypes]=useState([]);const [inspItems,setInspItems]=useState([]);
   const [users,setUsers]=useState([]);
   // Diesel module state
-  const [dieselReadings,setDieselReadings]=useState([]);
+  const [dieselReadingsRaw,setDieselReadings]=useState([]);
   const [dieselPurchases,setDieselPurchases]=useState([]);
   const [dieselDistributions,setDieselDistributions]=useState([]);
   const [genBaselines,setGenBaselines]=useState([]);
   const [nepaPeriodLogs,setNepaPeriodLogs]=useState([]);
   const [dieselTransfers,setDieselTransfers]=useState([]);
+  const dieselReadings=useMemo(()=>withTankUsed(dieselReadingsRaw,dieselTransfers),[dieselReadingsRaw,dieselTransfers]);
   const [dieselLocks,setDieselLocks]=useState([]);
   const [appSettings,setAppSettings]=useState({diesel_auto_lock_days:1,diesel_require_photo_backdated:true});
   const canEdit=user?.role!=="Viewer"&&user?.role!=="Store Staff";
   // Group list shown in the vehicle form, bulk-assign bar, Reports filter and Settings.
   const [docUploads,setDocUploads]=useState({fuel:false,wo:false,papers:false});
+  // Power on/off log (last 120 days). powerReady stays false until the
+  // 20261006_power_periods migration has been run, which hides the log.
+  const [powerPeriods,setPowerPeriods]=useState([]);
+  const [powerReady,setPowerReady]=useState(false);
+  useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
+    try{const rows=await db.getPowerPeriods(isoDaysAgo(120));if(live){setPowerPeriods(rows.map(toPW));setPowerReady(true);}}
+    catch(e){console.warn("Power on/off log not available:",e?.message);if(live)setPowerReady(false);}
+  })();return()=>{live=false;};},[user?.uid]);
   useEffect(()=>{let live=true;(async()=>{
     const probe=async(t,c)=>{const{error}=await supabase.from(t).select(c).limit(1);return !error;};
     const[fuel,wo,papers]=await Promise.all([probe("fuel_logs","receipt_path"),probe("work_orders","invoice_path"),probe("papers","doc_path")]);
@@ -3072,9 +3261,9 @@ function FleetProAppInner(){
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders}/>}/>
-        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers}/>}/>
+        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
-        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles}/>}/>
+        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={isStoreStaff?generators.filter(g=>g.loc===user?.store_location):generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog} dieselReadings={dieselReadings}/>}/>

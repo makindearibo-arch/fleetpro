@@ -293,4 +293,21 @@ export const db = {
   async addNepaPeriodLog(n) { return insertRow('nepa_period_logs', n); },
   async updateNepaPeriodLog(id, n) { return updateRow('nepa_period_logs', id, n); },
   async deleteNepaPeriodLog(id) { return deleteRow('nepa_period_logs', id); },
+
+  // Power on/off log (grid / NEPA). Periods that started since `sinceDate`
+  // (YYYY-MM-DD), plus any still-open one however old. Paged like fetchAll.
+  async getPowerPeriods(sinceDate) {
+    const PAGE = 1000; const all = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase.from('power_periods').select('*')
+        .or(`on_at.gte.${sinceDate},off_at.is.null`)
+        .order('on_at', { ascending: false }).order('id').range(from, from + PAGE - 1);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < PAGE) return all;
+    }
+  },
+  async addPowerPeriod(p) { return insertRow('power_periods', p); },
+  async updatePowerPeriod(id, p) { return updateRow('power_periods', id, p); },
+  async deletePowerPeriod(id) { return deleteRow('power_periods', id); },
 };

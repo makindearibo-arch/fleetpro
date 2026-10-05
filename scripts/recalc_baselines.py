@@ -13,9 +13,17 @@ Transfers out (recorded in diesel_transfers, including the back-filled
 historical ones) are no longer counted as generator consumption — this is
 what fixes the inflated baselines at Akure 1, Ado 1 and the bakeries.
 
+RECENT WINDOW (2026-10-06): a baseline is learned from the last 90 days of
+readings, not the whole history, so it follows how each generator runs NOW.
+Ondo CR burned ~7 L/hr through mid-2026 and ~3 L/hr since July; an all-history
+baseline (6.38) would let ~3 L per running hour go missing without a flag.
+A generator with fewer than 30 usable day-pairs in the window uses its latest
+30 instead. --all-history restores the old whole-history behaviour.
+
 Usage:
-  py scripts\recalc_baselines.py            # dry run (shows old vs new)
-  py scripts\recalc_baselines.py --apply     # upsert new baselines
+  py scripts\recalc_baselines.py                  # dry run (shows old vs new)
+  py scripts\recalc_baselines.py --apply           # upsert new baselines
+  py scripts\recalc_baselines.py --all-history     # learn from every reading
 
 After applying, run backfill_discrepancy_flags.py --apply to re-score
 history against the corrected baselines.
@@ -90,8 +98,13 @@ def connect():
     return Supabase(url, key)
 
 
-def compute(sb):
+RECENT_DAYS = 90       # learn from this many recent days...
+MIN_RECENT_PAIRS = 30  # ...or from the latest 30 day-pairs if the window has fewer
+
+
+def compute(sb, recent_days=RECENT_DAYS):
     """Work out every generator's new baseline WITHOUT writing anything.
+    recent_days=None learns from the whole history.
     Returns (updates, old_baselines_by_generator_id). Used by main() and by
     monthly_baseline_refresh.py, which vets the updates before writing them."""
     gens =sb.select_all("generators", "id,name,loc,asset_type")
@@ -146,10 +159,15 @@ def compute(sb):
                 # Guards: negative actual = an unlogged refill; >100 L/hr = a
                 # data error. Both excluded entirely.
                 if actual >= 0 and actual / hrs <= 100:
-                    pairs.append((actual, hrs))
+                    pairs.append((actual, hrs, cur_date))
             if lvl is not None:
                 prev = lvl
                 prev_date = cur_date
+        if recent_days:
+            cutoff = datetime.date.today() - datetime.timedelta(days=recent_days)
+            recent = [p for p in pairs if p[2] >= cutoff]
+            pairs = recent if len(recent) >= MIN_RECENT_PAIRS else pairs[-MIN_RECENT_PAIRS:]
+        pairs = [(a, h) for a, h, _ in pairs]
         rates = [a / h for a, h in pairs if a > 0 and 1 <= a / h <= 100]
         if not rates:
             continue
@@ -194,7 +212,7 @@ def write(sb, updates):
 
 def main(apply_mode):
     sb = connect()
-    updates, _ = compute(sb)
+    updates, _ = compute(sb, recent_days=None if "--all-history" in sys.argv else RECENT_DAYS)
     if not apply_mode:
         print(f"\nDRY RUN — {len(updates)} baselines would be upserted. Re-run with --apply.")
         return
