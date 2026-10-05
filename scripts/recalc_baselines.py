@@ -81,15 +81,20 @@ class Supabase:
             offset += page
 
 
-def main(apply_mode):
+def connect():
     load_env_file()
     url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         print("ERROR: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY required.")
         sys.exit(1)
-    sb = Supabase(url, key)
+    return Supabase(url, key)
 
-    gens = sb.select_all("generators", "id,name,loc,asset_type")
+
+def compute(sb):
+    """Work out every generator's new baseline WITHOUT writing anything.
+    Returns (updates, old_baselines_by_generator_id). Used by main() and by
+    monthly_baseline_refresh.py, which vets the updates before writing them."""
+    gens =sb.select_all("generators", "id,name,loc,asset_type")
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
     transfers = sb.select_all("diesel_transfers", "date,source_generator_id,litres")
     tr_map = {}
@@ -177,14 +182,23 @@ def main(apply_mode):
                         "min_rate": round(min(rates), 2) if rates else None,
                         "max_rate": round(max(rates), 2) if rates else None})
 
-    if not apply_mode:
-        print(f"\nDRY RUN — {len(updates)} baselines would be upserted. Re-run with --apply.")
-        return
+    return updates, baselines
 
+
+def write(sb, updates):
     for u in updates:
         sb._req("POST", "generator_baselines", params={"on_conflict": "generator_id"}, body=[u],
                 extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"})
     print(f"\nUpserted {len(updates)} baselines.")
+
+
+def main(apply_mode):
+    sb = connect()
+    updates, _ = compute(sb)
+    if not apply_mode:
+        print(f"\nDRY RUN — {len(updates)} baselines would be upserted. Re-run with --apply.")
+        return
+    write(sb, updates)
     print("Now run: py scripts\\backfill_discrepancy_flags.py --apply")
 
 

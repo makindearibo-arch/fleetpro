@@ -98,16 +98,25 @@ class Supabase:
                          extra_headers={"Prefer": "return=minimal"})
 
 
-def main(apply_mode):
+def connect():
     load_env_file()
     url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         print("ERROR: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY required.")
         sys.exit(1)
-    sb = Supabase(url, key)
+    return Supabase(url, key)
 
+
+def compute(sb, rates=None):
+    """Re-score every reading WITHOUT writing anything. Returns a list of
+    (reading_id, new_litres, new_flag, old_litres, old_flag, store, date) for the rows whose
+    stored values differ. `rates` ({generator_id: L/hr}) scores against
+    PROPOSED baselines instead of the stored ones, so a baseline change can be
+    previewed before it is written (monthly_baseline_refresh.py does this)."""
     gens = {g["id"]: g for g in sb.select_all("generators", "id,name,loc")}
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
+    for gid, rate in (rates or {}).items():
+        baselines[gid] = {**baselines.get(gid, {}), "generator_id": gid, "avg_litres_per_hour": rate}
     with_baseline = [gid for gid in gens if baselines.get(gid, {}).get("avg_litres_per_hour")]
     # Transfers out per (generator, date) — moved diesel is not generator consumption
     transfers = sb.select_all("diesel_transfers", "date,source_generator_id,litres")
@@ -161,7 +170,7 @@ def main(apply_mode):
                     old_litres = r.get("discrepancy_litres")
                     old_flag = bool(r.get("discrepancy_flag"))
                     if old_flag != flag or old_litres != new_litres:
-                        updates.append((r["id"], new_litres, flag))
+                        updates.append((r["id"], new_litres, flag, old_litres, old_flag, r.get("store_location"), r["date"]))
             if actual is not None:
                 prev_level = actual
         total_eval += g_eval
@@ -180,18 +189,28 @@ def main(apply_mode):
         pct = (s["flag"] / s["eval"] * 100) if s["eval"] else 0
         print(f"    {store:<26} evaluated={s['eval']:>4}  flagged={s['flag']:>4}  ({pct:.0f}%)")
 
-    if not apply_mode:
-        print("\nDRY RUN — no writes. Re-run with --apply to write flags.")
-        return
+    return updates
 
+
+def write(sb, updates):
+    total_change = len(updates)
     print(f"\n=== WRITING {total_change} updates ===")
     done = 0
-    for rid, litres, flag in updates:
+    for rid, litres, flag, *_ in updates:
         sb.patch("diesel_readings", rid, {"discrepancy_litres": litres, "discrepancy_flag": flag})
         done += 1
         if done % 100 == 0:
             print(f"  ...{done}/{total_change}")
     print(f"  Updated {done} readings.")
+
+
+def main(apply_mode):
+    sb = connect()
+    updates = compute(sb)
+    if not apply_mode:
+        print("\nDRY RUN — no writes. Re-run with --apply to write flags.")
+        return
+    write(sb, updates)
     print("\nDONE. The Discrepancies tab and Watchtower will now reflect history.")
 
 
