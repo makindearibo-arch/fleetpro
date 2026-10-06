@@ -324,4 +324,10 @@ export const db = {
   async getDieselLosses() { return fetchAll('diesel_losses', 'date', true); },
   async addDieselLoss(l) { return insertRow('diesel_losses', l); },
   async deleteDieselLoss(id) { return deleteRow('diesel_losses', id); },
+
+  // Cooking gas cylinders (bought -> fixed -> finished).
+  async getGasCylinders() { return fetchAll('gas_cylinders', 'purchase_date', false); },
+  async addGasCylinder(c) { return insertRow('gas_cylinders', c); },
+  async updateGasCylinder(id, c) { return updateRow('gas_cylinders', id, c); },
+  async deleteGasCylinder(id) { return deleteRow('gas_cylinders', id); },
 };
