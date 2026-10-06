@@ -310,4 +310,13 @@ export const db = {
   async addPowerPeriod(p) { return insertRow('power_periods', p); },
   async updatePowerPeriod(id, p) { return updateRow('power_periods', id, p); },
   async deletePowerPeriod(id) { return deleteRow('power_periods', id); },
+
+  // Daily stock: main tank / tanker gauge readings and tanker loadings.
+  async getStockChecks() { return fetchAll('diesel_stock_checks', 'date', true); },
+  async addStockCheck(c) { return insertRow('diesel_stock_checks', c); },
+  async updateStockCheck(id, c) { return updateRow('diesel_stock_checks', id, c); },
+  async deleteStockCheck(id) { return deleteRow('diesel_stock_checks', id); },
+  async getTankerLoads() { return fetchAll('tanker_loads', 'date', true); },
+  async addTankerLoad(l) { return insertRow('tanker_loads', l); },
+  async deleteTankerLoad(id) { return deleteRow('tanker_loads', id); },
 };

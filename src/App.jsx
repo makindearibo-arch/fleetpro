@@ -28,6 +28,8 @@ const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.
 const toDT=(r)=>({id:r.id,date:r.date,storeLoc:r.store_location,sourceGenId:r.source_generator_id,destType:r.dest_type||"vehicle",destId:r.dest_id,destLabel:r.dest_label||"",litres:Number(r.litres)||0,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const fromDT=(d)=>({date:d.date,store_location:d.storeLoc,source_generator_id:d.sourceGenId||null,dest_type:d.destType||"vehicle",dest_id:d.destId||null,dest_label:d.destLabel||"",litres:d.litres,notes:d.notes||"",recorded_by:d.recordedBy||null});
 const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate:r.to_date,totalHours:Number(r.total_hours)||0,meterOpening:r.meter_opening!=null?Number(r.meter_opening):null,meterClosing:r.meter_closing!=null?Number(r.meter_closing):null,photoUrl:r.photo_url||"",notes:r.notes||"",submittedBy:r.submitted_by,createdAt:r.created_at});
+const toSC=(r)=>({id:r.id,tank:r.tank,date:r.date,litres:Number(r.litres)||0,photoUrl:r.photo_url||"",notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
+const toTL=(r)=>({id:r.id,date:r.date,kind:r.kind||"load",litres:Number(r.litres)||0,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const toPW=(r)=>({id:r.id,storeLoc:r.store_location,onAt:r.on_at,offAt:r.off_at||null,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
 const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
@@ -139,21 +141,29 @@ const suggestDecimal=(open,close,maxHours)=>{for(const d of [10,100,1000]){const
 //   rows) uses its stored consumption and carries an ESTIMATED level forward,
 //   so the next measured drop does not count those litres a second time.
 // - An asset's first reading has nothing to measure from: stored figure.
+// levelEst = the tank level after the reading: the typed level, or the
+// carried estimate when none was typed (the daily stock sheet's closing).
 // rateL = usedL per hour run (per batch for ovens); null when used is negative
 // or the hours are impossible (negative, or over 48 h a day since the
 // previous reading). App applies this once to the readings it hands every page.
+// Transfers count from the day after the previous reading up to this one, so a
+// transfer logged on a day the store took no reading is not counted as "used"
+// (6 such transfers, 790 L, by Oct 2026); those before a tank's first reading
+// are skipped.
 const withTankUsed=(readings,transfers)=>{
-  const out={},inn={};
+  const ev={};
   (transfers||[]).forEach(t=>{const L=t.litres||0;
-    if(t.sourceGenId)out[t.sourceGenId+"|"+t.date]=(out[t.sourceGenId+"|"+t.date]||0)+L;
-    if(t.destType==="oven"&&t.destId)inn[t.destId+"|"+t.date]=(inn[t.destId+"|"+t.date]||0)+L;});
+    if(t.sourceGenId)(ev[t.sourceGenId]=ev[t.sourceGenId]||[]).push({date:t.date,d:-L});
+    if(t.destType==="oven"&&t.destId)(ev[t.destId]=ev[t.destId]||[]).push({date:t.date,d:L});});
+  Object.values(ev).forEach(a=>a.sort((x,y)=>(x.date||"").localeCompare(y.date||"")));
   const by={};(readings||[]).forEach(r=>{(by[r.generatorId]=by[r.generatorId]||[]).push(r);});
   const res=new Map();
   Object.values(by).forEach(arr=>{
     arr.sort((a,b)=>(a.date||"").localeCompare(b.date||"")||String(a.id).localeCompare(String(b.id)));
-    let est=null,prevDate=null;
-    arr.forEach(r=>{const k=r.generatorId+"|"+r.date;
-      const flow=(r.dieselAdded||0)+(inn[k]||0)-(out[k]||0);
+    let est=null,prevDate=null;const evs=ev[arr[0].generatorId]||[];let i=0;
+    arr.forEach(r=>{let tf=0;
+      while(i<evs.length&&evs[i].date<=r.date){if(prevDate!=null||evs[i].date===r.date)tf+=evs[i].d;i++;}
+      const flow=(r.dieselAdded||0)+tf;
       const lvl=r.dieselLevelActual;
       const usedL=(est!=null&&lvl!=null)?Math.round(est+flow-lvl):(r.consumptionLitres??null);
       est=lvl!=null?lvl:(est!=null?est+flow-(usedL||0):null);
@@ -161,7 +171,7 @@ const withTankUsed=(readings,transfers)=>{
       prevDate=r.date;
       const h=r.hoursRun;
       const rateL=(usedL==null||usedL<0)?null:r.batchesProduced>0?Math.round(usedL/r.batchesProduced*100)/100:(h>0&&h<=48*days)?Math.round(usedL/h*100)/100:null;
-      res.set(r,{usedL,rateL});});});
+      res.set(r,{usedL,rateL,levelEst:est==null?null:Math.round(est)});});});
   return (readings||[]).map(r=>({...r,...res.get(r)}));
 };
 // Grid (NEPA) power, from the power on/off log (power_periods). Times and
@@ -193,6 +203,80 @@ const atLocal=(date,hm)=>new Date(date+"T"+hm+":00+01:00").getTime();
 // equals the meter difference is treated as "no hours recorded".
 const nplUnits=n=>(n&&n.meterOpening!=null&&n.meterClosing!=null)?Math.round((n.meterClosing-n.meterOpening)*10)/10:null;
 const nplHours=n=>{const u=nplUnits(n);return(n&&n.totalHours&&!(u!=null&&Math.abs(n.totalHours-u)<0.05))?n.totalHours:null;};
+// DAILY STOCK. Diesel moves main tank -> distribution tanker -> store tanks.
+// depotLedger walks the main tank and the tanker day by day from the FIRST
+// main-tank reading. The MAIN tank is read in the MORNING, before any loading,
+// so a day's movements count after that day's reading. A TANKER check is what
+// is LEFT at the END of the day, after that day's loading and deliveries (a
+// check is naturally taken when the tanker gets back):
+//   main   = reading + bought (litres received) - loaded into tanker + returned
+//   tanker = assumed empty when tracking starts, + loaded - returned
+//            - delivered to stores; an end-of-day check replaces the running figure
+// Leftover diesel stays in the tanker (Makinde, 2026-10-06), so the tanker has
+// a running balance. STOCK RECONCILIATION rows are bookkeeping, not diesel
+// arriving, so they are skipped.
+const MAIN_TOL_L=300;   // one mark on the main tank's gauge is ~200 L
+const TANKER_TOL_L=100;
+const depotLedger=({checks,loads,purchases,deliveries,today})=>{
+  const main=(checks||[]).filter(c=>c.tank==="main").sort((a,b)=>a.date.localeCompare(b.date));
+  if(!main.length)return{start:null,days:[],mainNow:null,tankerNow:null};
+  const start=main[0].date;
+  const sumBy=(arr,f)=>{const m={};(arr||[]).forEach(x=>{if(x.date>=start)m[x.date]=(m[x.date]||0)+f(x);});return m;};
+  const bought=sumBy((purchases||[]).filter(p=>p.supplier!=="STOCK RECONCILIATION"),p=>p.litresReceived??p.litres);
+  const loaded=sumBy((loads||[]).filter(l=>l.kind!=="return"),l=>l.litres);
+  const returned=sumBy((loads||[]).filter(l=>l.kind==="return"),l=>l.litres);
+  const delivered=sumBy(deliveries,d=>d.litres);
+  const chk={};(checks||[]).forEach(c=>{chk[c.tank+"|"+c.date]=c;});
+  let mainBook=null,tankBook=null;const days=[];
+  for(const d of daysFromTo(start,today>start?today:start)){
+    const row={date:d,bought:bought[d]||0,loaded:loaded[d]||0,returned:returned[d]||0,delivered:delivered[d]||0};
+    const mc=chk["main|"+d],tc=chk["tanker|"+d];
+    row.mainExpected=mainBook==null?null:Math.round(mainBook);
+    if(mc){row.mainCheck=mc;row.mainDiff=mainBook!=null?Math.round(mc.litres-mainBook):null;mainBook=mc.litres;}
+    mainBook+=row.bought-row.loaded+row.returned;
+    if(tankBook==null)tankBook=0;
+    tankBook+=row.loaded-row.returned-row.delivered;
+    row.tankerExpected=Math.round(tankBook);   // end of day, before any check
+    if(tc){row.tankerCheck=tc;row.tankerDiff=Math.round(tc.litres-tankBook);tankBook=tc.litres;}
+    row.mainEnd=Math.round(mainBook);row.tankerEnd=Math.round(tankBook);
+    days.push(row);}
+  const last=days[days.length-1];
+  return{start,days,mainNow:last?last.mainEnd:null,tankerNow:last?last.tankerEnd:null};
+};
+// One day's stock for every store, from the readings staff already enter:
+// opening (each tank's previous level) + received (accepted deliveries)
+// - moved out of the store (to vehicles etc.; gen -> oven stays inside)
+// - used = closing. "Should have used" = hours run x baseline (generators).
+// A tank with no reading that day is carried at its last level.
+const storeStockDay=({readings,transfers,distributions,generators,baselines,stores,date})=>{
+  const bl={};(baselines||[]).forEach(b=>{bl[b.generator_id]=Number(b.avg_litres_per_hour)||null;});
+  const byA={};(readings||[]).forEach(r=>{(byA[r.generatorId]=byA[r.generatorId]||[]).push(r);});
+  Object.values(byA).forEach(a=>a.sort((x,y)=>x.date.localeCompare(y.date)));
+  return(stores||[]).map(st=>{
+    const assets=(generators||[]).filter(g=>g.loc===st);
+    const row={store:st,assets:assets.length,logged:0,opening:0,received:0,movedOut:0,used:0,closing:0,expected:0,sent:0,since:null,noOpening:false,known:false,estimated:false};
+    assets.forEach(g=>{
+      const arr=byA[g.id]||[];
+      const r=arr.find(x=>x.date===date);
+      const prev=[...arr].reverse().find(x=>x.date<date);
+      const prevLevel=prev?(prev.levelEst??prev.dieselLevelActual):null;   // typed level, or the carried estimate
+      if(r){row.logged++;
+        if(prevLevel!=null){row.known=true;row.opening+=prevLevel;if(nextDayStr(prev.date)<date&&(!row.since||prev.date<row.since))row.since=prev.date;}else row.noOpening=true;
+        if(r.dieselLevelActual==null)row.estimated=true;
+        row.received+=r.dieselAdded||0;row.used+=r.usedL||0;row.closing+=r.levelEst??r.dieselLevelActual??0;
+        const gap=prev?daysFromTo(prev.date,date).length-1:1;
+        if(g.assetType!=="oven"&&bl[g.id]&&r.hoursRun>0&&r.hoursRun<=48*gap)row.expected+=r.hoursRun*bl[g.id];
+      }else if(prevLevel!=null){row.known=true;row.opening+=prevLevel;row.closing+=prevLevel;}
+    });
+    const ids=new Set(assets.map(g=>g.id));
+    const from=row.since?nextDayStr(row.since):date;
+    (transfers||[]).forEach(t=>{if(ids.has(t.sourceGenId)&&t.destType!=="oven"&&t.date>=from&&t.date<=date)row.movedOut+=t.litres||0;});
+    (distributions||[]).forEach(d=>{if(d.storeLoc===st&&d.date>=from&&d.date<=date)row.sent+=d.litres||0;});
+    row.used=Math.round(row.used);row.expected=Math.round(row.expected);
+    row.over=row.expected>0?row.used-row.expected:null;
+    return row;
+  }).filter(r=>r.assets>0);
+};
 // Diesel usage per store over [from,to]. "Used" is usedL (withTankUsed) -- the
 // same figure the Diesel Cost tab and the readings table use, so every screen
 // agrees. "Received" is admin deliveries (as on Store Comparison). Transfers
@@ -321,7 +405,7 @@ function DocUpload({folder,value,onChange,accept}){
 // Change history (Settings, Super Admin only). Reads public.audit_log, which the
 // database fills from triggers on every stock-related insert/edit/delete -- the
 // app cannot skip or alter it. Shows who, when, and before -> after.
-const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off"};
+const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading"};
 const AUDIT_FIELDS={on_at:"power on",off_at:"power off",litres:"litres",litres_received:"received",price_per_litre:"price/L",supplier:"supplier",date:"date",store_location:"store",received_confirmed:"accepted",received_date:"accepted on",diesel_level_actual:"tank level",diesel_added:"added",consumption_litres:"used",discrepancy_litres:"discrepancy",discrepancy_flag:"flagged",gen_hours_opening:"meter open",gen_hours_closing:"meter close",avg_litres_per_hour:"baseline L/hr",role:"role",name:"name",email:"email",value:"value",notes:"notes",purchase_id:"from purchase",batches_produced:"batches",dest_label:"to",from_date:"from",to_date:"to"};
 const AUDIT_HIDE=new Set(["updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
 const auditVal=v=>v===null||v===undefined||v===""?"-":typeof v==="boolean"?(v?"yes":"no"):typeof v==="number"?v.toLocaleString():typeof v==="object"?JSON.stringify(v).slice(0,60):String(v).length>60?String(v).slice(0,57)+"...":String(v);
@@ -332,6 +416,8 @@ const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.lit
   if(t==="generator_baselines")return"generator "+(d.generator_id||"?");
   if(t==="profiles")return(d.name||"?")+(d.email?" ("+d.email+")":"");
   if(t==="app_settings")return d.key||"";
+  if(t==="diesel_stock_checks")return(d.tank==="tanker"?"Tanker":"Main tank")+" "+(d.date||"")+L;
+  if(t==="tanker_loads")return(d.kind==="return"?"Poured back into main tank ":"Loaded into tanker ")+(d.date||"")+L;
   if(t==="power_periods")return(d.store_location||"?")+" "+(d.on_at?new Date(d.on_at).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Africa/Lagos"}):"")+(d.off_at?" to "+fmtClock(d.off_at):" (still on)");
   if(t==="diesel_locks")return(d.store_location||"all stores")+" "+(d.from_date||"")+" to "+(d.to_date||"");
   return d.id||"";};
@@ -2494,7 +2580,166 @@ const NAV=[
 // ============================================
 // DIESEL MANAGEMENT PAGE - Admin Purchase & Distribution (Phase 2)
 // ============================================
-function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs}){
+// DAILY STOCK TAB (Diesel Management, fleet admins) -- main tank, tanker, stores
+// ============================================
+function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,deliveries,readings,transfers,generators,baselines,locations,canManage}){
+  const todayStr=ngDate(Date.now());
+  const yesterdayStr=ngDate(Date.now()-864e5);
+  const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
+  const btn=(bg,fg,border)=>({padding:"8px 14px",borderRadius:9,border:border||"none",background:bg,color:fg||"#fff",fontSize:12,fontWeight:600,cursor:"pointer"});
+  const L=v=>v==null?"-":Math.round(v).toLocaleString()+" L";
+  const ledger=depotLedger({checks,loads,purchases,deliveries,today:todayStr});
+  const [modal,setModal]=useState(null);   // {kind:"main"|"tanker"|"load", date, litres, sub, notes, photo, preview}
+  const [busy,setBusy]=useState(false);
+  const [msg,setMsg]=useState("");
+  const [day,setDay]=useState(()=>(readings||[]).some(r=>r.date===todayStr)?todayStr:yesterdayStr);
+  const [showAllDays,setShowAllDays]=useState(false);
+
+  // ---- status words for a difference
+  const diffWord=(diff,tol)=>diff==null?null:Math.abs(diff)<=tol?{t:"Matches",c:"#24A148",bg:"#DEFBE6"}:diff<0?{t:Math.abs(diff).toLocaleString()+" L missing",c:"#DA1E28",bg:"#FFF1F1"}:{t:diff.toLocaleString()+" L more than expected",c:"#B45309",bg:"#FFF8E1"};
+  const pill=(w)=>w?<span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:w.bg,color:w.c,whiteSpace:"nowrap"}}>{w.t}</span>:<span style={{color:"#A8A8A8"}}>-</span>;
+
+  // ---- latest checks
+  const lastMainRow=[...ledger.days].reverse().find(r=>r.mainCheck);
+  const lastTankRow=[...ledger.days].reverse().find(r=>r.tankerCheck);
+  // ---- store tanks right now: each tank's latest level
+  const latestLevel={};(readings||[]).forEach(r=>{if(r.dieselLevelActual==null)return;const p=latestLevel[r.generatorId];if(!p||r.date>p.date)latestLevel[r.generatorId]=r;});
+  const storeNow=Object.values(latestLevel).reduce((s,r)=>s+r.dieselLevelActual,0);
+  const storeNames=(locations||[]).filter(l=>(generators||[]).some(g=>g.loc===l));
+  const sheet=storeStockDay({readings,transfers,distributions:deliveries,generators,baselines,stores:storeNames,date:day});
+  const tot=sheet.reduce((a,r)=>({opening:a.opening+r.opening,received:a.received+r.received,movedOut:a.movedOut+r.movedOut,used:a.used+r.used,closing:a.closing+r.closing,expected:a.expected+r.expected,sent:a.sent+r.sent}),{opening:0,received:0,movedOut:0,used:0,closing:0,expected:0,sent:0});
+
+  // ---- forms
+  const openModal=(kind)=>{setMsg("");const date=todayStr;const ex=kind==="load"?null:(checks||[]).find(c=>c.tank===kind&&c.date===date);
+    setModal({kind,date,litres:ex?String(ex.litres):"",sub:"load",notes:ex?ex.notes:"",photo:null,preview:ex?ex.photoUrl:"",existingId:ex?ex.id:null});};
+  const setDate=(date)=>{const ex=modal.kind==="load"?null:(checks||[]).find(c=>c.tank===modal.kind&&c.date===date);
+    setModal({...modal,date,litres:ex?String(ex.litres):"",notes:ex?ex.notes:"",preview:ex?ex.photoUrl:"",photo:null,existingId:ex?ex.id:null});};
+  // what the ledger expects on the modal's morning (ignoring a reading already saved for that day)
+  const expectedFor=(kind,date)=>{const l=depotLedger({checks:(checks||[]).filter(c=>!(c.tank===kind&&c.date===date)),loads,purchases,deliveries,today:date});const row=l.days.find(r=>r.date===date);return row?(kind==="main"?row.mainExpected:row.tankerExpected):null;}; // main: that morning; tanker: end of that day
+  const save=async()=>{
+    const m=modal;const litres=parseFloat(m.litres);
+    if(!m.date){setMsg("Choose the date.");return;}
+    if(isNaN(litres)||litres<0||(m.kind==="load"&&litres<=0)){setMsg("Enter the litres.");return;}
+    if(m.kind==="main"&&litres>35000&&!confirm(`${litres.toLocaleString()} L is more than the main tank's gauge goes up to (33,000 L). Save anyway?`))return;
+    setBusy(true);setMsg("");
+    try{
+      if(m.kind==="load"){
+        const saved=await db.addTankerLoad({date:m.date,kind:m.sub,litres,notes:m.notes||""});
+        setLoads(prev=>[...prev,toTL(saved)]);
+      }else{
+        let photoUrl=m.preview&&!m.photo?m.preview:"";
+        if(m.photo){const up=await uploadMeterPhoto(m.photo,m.kind==="main"?"main-tank":"tanker","depot");if(up.error&&!confirmWithoutPhoto("gauge photo",up.error)){setBusy(false);return;}photoUrl=up.url||"";}
+        const body={tank:m.kind,date:m.date,litres,photo_url:photoUrl,notes:m.notes||""};
+        if(m.existingId){const saved=await db.updateStockCheck(m.existingId,body);setChecks(prev=>prev.map(c=>c.id===m.existingId?toSC(saved):c));}
+        else{const saved=await db.addStockCheck(body);setChecks(prev=>[...prev,toSC(saved)]);}
+      }
+      setModal(null);
+    }catch(e){setMsg(e.message||String(e));}
+    setBusy(false);
+  };
+  const delEntry=async(kind,x)=>{
+    if(!confirm("Delete this entry ("+(kind==="load"?(x.kind==="return"?"returned ":"loaded ")+x.litres.toLocaleString()+" L":(x.tank==="main"?"main tank ":"tanker ")+x.litres.toLocaleString()+" L")+" on "+fmtDayLabel(x.date)+")?"))return;
+    try{if(kind==="load"){await db.deleteTankerLoad(x.id);setLoads(prev=>prev.filter(y=>y.id!==x.id));}else{await db.deleteStockCheck(x.id);setChecks(prev=>prev.filter(y=>y.id!==x.id));}}
+    catch(e){alert(e.message||String(e));}
+  };
+
+  const rows=[...ledger.days].reverse();
+  const shownRows=showAllDays?rows:rows.slice(0,31);
+  const recent=[...(checks||[]).map(c=>({k:"check",x:c})),...(loads||[]).map(l=>({k:"load",x:l}))].sort((a,b)=>b.x.date.localeCompare(a.x.date)||String(b.x.createdAt).localeCompare(String(a.x.createdAt))).slice(0,15);
+
+  return(<div>
+    {!depotReady&&<div style={{padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082",color:"#7A4F00",fontSize:12,marginBottom:14}}>The main tank and tanker log needs a one-time database update: run <b>supabase/migrations/20261007_depot_stock.sql</b> in the Supabase SQL editor. The store stock sheet below already works.</div>}
+
+    {depotReady&&<>
+    <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:14}}>
+      <Kpi icon={Package} label="Main tank (should be)" value={L(ledger.mainNow)} sub={lastMainRow?<>Read {fmtDayLabel(lastMainRow.date)}: {L(lastMainRow.mainCheck.litres)} {lastMainRow.mainDiff==null?"(first reading)":pill(diffWord(lastMainRow.mainDiff,MAIN_TOL_L))}</>:"No reading yet"}/>
+      <Kpi icon={Truck} label="In the tanker (should be)" value={L(ledger.tankerNow)} sub={lastTankRow?<>Checked {fmtDayLabel(lastTankRow.date)}: {L(lastTankRow.tankerCheck.litres)} {pill(diffWord(lastTankRow.tankerDiff,TANKER_TOL_L))}</>:"Loaded minus delivered"}/>
+      <Kpi icon={Fuel} label="In store tanks" value={L(storeNow)} sub="Each tank's latest reading"/>
+      <Kpi icon={Droplet} label="All our diesel" value={L((ledger.mainNow||0)+(ledger.tankerNow||0)+storeNow)} sub="Main tank + tanker + stores"/>
+    </div>
+
+    <div style={card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Main tank and tanker, day by day</h3>
+          <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,maxWidth:620}}>Read the main tank's gauge every morning before any loading. The app checks it against yesterday's reading + diesel bought - loaded into the tanker. Differences under {MAIN_TOL_L} L are within the gauge's accuracy.{ledger.start&&<> Tracking started {fmtDayLabel(ledger.start)}, with the tanker taken as empty. A tanker check is what is left at the end of that day, after loading and deliveries.</>}</div></div>
+        {canManage&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <button onClick={()=>openModal("main")} style={btn(P)}>Record main tank reading</button>
+          <button onClick={()=>openModal("load")} style={btn("#D0E2FF",P,"1.5px solid "+P)}>Load tanker</button>
+          <button onClick={()=>openModal("tanker")} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Check tanker</button>
+        </div>}
+      </div>
+      {!ledger.start?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>Nothing yet. Record this morning's main tank reading to start.</div>
+      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:860}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Main tank reading","Should be","Check","Bought","Into tanker","Tanker to stores","Left in tanker","Tanker check"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+      <tbody>{shownRows.map(r=>(<tr key={r.date} style={{background:r.mainDiff!=null&&r.mainDiff<-MAIN_TOL_L?"#FFF8F8":"transparent"}}>
+        <td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{fmtDayLabel(r.date)}</td>
+        <td style={tc}>{r.mainCheck?<b>{L(r.mainCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not read</span>}{r.mainCheck?.photoUrl&&<a href={r.mainCheck.photoUrl} target="_blank" rel="noreferrer" style={{marginLeft:6,fontSize:11,color:P}}>photo</a>}</td>
+        <td style={{...tc,color:"#525252"}}>{L(r.mainExpected)}</td>
+        <td style={tc}>{r.mainCheck?pill(diffWord(r.mainDiff,MAIN_TOL_L)):"-"}</td>
+        <td style={tc}>{r.bought?L(r.bought):"-"}</td>
+        <td style={tc}>{r.loaded||r.returned?<>{r.loaded?L(r.loaded):""}{r.returned?<div style={{fontSize:11,color:"#8D8D8D"}}>{L(r.returned)} poured back</div>:null}</>:"-"}</td>
+        <td style={tc}>{r.delivered?L(r.delivered):"-"}</td>
+        <td style={{...tc,fontWeight:600,color:r.tankerEnd<0?"#DA1E28":"#161616"}}>{L(r.tankerEnd)}</td>
+        <td style={tc}>{r.tankerCheck?<>{L(r.tankerCheck.litres)} {pill(diffWord(r.tankerDiff,TANKER_TOL_L))}</>:"-"}</td>
+      </tr>))}</tbody></table>
+      {rows.length>shownRows.length&&<div style={{padding:10,textAlign:"center"}}><button onClick={()=>setShowAllDays(true)} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Show all {rows.length} days</button></div>}
+      {ledger.tankerNow<0&&<div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12}}>The tanker shows less than nothing: more was delivered to stores than was recorded as loaded. A loading is probably missing.</div>}
+      </div>}
+      {recent.length>0&&<details style={{marginTop:12}}><summary style={{fontSize:12,fontWeight:600,color:"#525252",cursor:"pointer"}}>Recent entries ({recent.length})</summary>
+        <div style={{marginTop:8}}>{recent.map(({k,x})=>(<div key={k+x.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #F4F4F4",fontSize:12}}>
+          <div><b>{fmtDayLabel(x.date)}</b> - {k==="load"?(x.kind==="return"?"poured back into main tank":"loaded into tanker"):(x.tank==="main"?"main tank read":"tanker checked")}: {x.litres.toLocaleString()} L{x.notes?<span style={{color:"#8D8D8D"}}> ({x.notes})</span>:null}</div>
+          {canManage&&<button onClick={()=>delEntry(k==="load"?"load":"check",x)} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>}
+        </div>))}</div></details>}
+    </div>
+    </>}
+
+    <div style={card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Store tanks on {day===todayStr?"today":fmtDayLabel(day)}</h3>
+          <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,maxWidth:620}}>Opening + received - moved out - used = closing, from the readings staff enter. "Should have used" is the hours the generator ran x its usual rate.</div></div>
+        <input type="date" value={day} max={todayStr} onChange={e=>setDay(e.target.value||todayStr)} style={{...inp,width:170,padding:"6px 10px"}}/>
+      </div>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Opening","+ Received","- Moved out","- Used","= Closing","Should have used","Difference","Note"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+      <tbody>{sheet.map(r=>{const bad=r.over!=null&&r.over>Math.max(25,0.2*r.expected);const notAcc=r.sent-r.received;
+        const note=r.logged===0?"No reading":r.noOpening?"First reading":r.estimated?"Tank level not typed - closing estimated":notAcc>0?Math.round(notAcc).toLocaleString()+" L sent, not accepted":bad?"Used more than it should":r.since?"Covers days since "+fmtDayLabel(r.since):"";
+        return(<tr key={r.store} style={{background:bad?"#FFF8F8":r.logged===0?"#FAFAFA":"transparent"}}>
+        <td style={{...tc,fontWeight:600,whiteSpace:"nowrap"}}>{r.store}</td>
+        <td style={tc}>{r.known?L(r.opening):"-"}</td>
+        <td style={tc}>{r.received?L(r.received):"-"}</td>
+        <td style={tc}>{r.movedOut?L(r.movedOut):"-"}</td>
+        <td style={{...tc,fontWeight:600}}>{r.logged?L(r.used):"-"}</td>
+        <td style={tc}>{r.known||r.logged?L(r.closing):"-"}</td>
+        <td style={{...tc,color:"#525252"}}>{r.expected?L(r.expected):"-"}</td>
+        <td style={{...tc,fontWeight:700,color:bad?"#DA1E28":"#525252"}}>{r.over!=null?(r.over>0?"+":"")+Math.round(r.over).toLocaleString()+" L":"-"}</td>
+        <td style={{...tc,fontSize:12,color:r.logged===0?"#8D8D8D":notAcc>0?"#B45309":bad?"#DA1E28":"#525252"}}>{note}</td>
+      </tr>);})}
+      <tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc}>All stores</td><td style={tc}>{L(tot.opening)}</td><td style={tc}>{L(tot.received)}</td><td style={tc}>{L(tot.movedOut)}</td><td style={tc}>{L(tot.used)}</td><td style={tc}>{L(tot.closing)}</td><td style={tc}>{L(tot.expected)}</td><td style={tc}>{(()=>{const o=sheet.reduce((a,r)=>a+(r.over||0),0);return(o>0?"+":"")+Math.round(o).toLocaleString()+" L";})()}</td><td style={{...tc,fontSize:12,fontWeight:400}}>{sheet.filter(r=>r.logged===0).length} without a reading</td></tr>
+      </tbody></table></div>
+    </div>
+
+    {modal&&<Modal title={modal.kind==="main"?"Main tank reading":modal.kind==="tanker"?"Check the tanker":"Load the tanker"} onClose={()=>setModal(null)}>
+      <Field label="Date"><input type="date" style={inp} value={modal.date} max={todayStr} onChange={e=>setDate(e.target.value)}/></Field>
+      {modal.kind==="load"&&<Field label="What happened"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{[["load","Loaded from the main tank into the tanker"],["return","Poured back from the tanker into the main tank"]].map(([v,t])=>(<button key={v} onClick={()=>setModal({...modal,sub:v})} style={btn(modal.sub===v?"#D0E2FF":"#fff",modal.sub===v?P:"#525252","1.5px solid "+(modal.sub===v?P:"#E0E0E0"))}>{t}</button>))}</div></Field>}
+      <Field label={modal.kind==="main"?"Litres on the gauge (morning, before loading)":modal.kind==="tanker"?"Litres left in the tanker (end of the day, after deliveries)":"Litres"}>
+        <div style={{display:"flex",gap:8}}><input type="number" step="1" min="0" style={{...inp,fontSize:18,fontWeight:700}} value={modal.litres} onChange={e=>setModal({...modal,litres:e.target.value})} placeholder="e.g. 21400"/>
+        {modal.kind==="tanker"&&<button onClick={()=>setModal({...modal,litres:"0"})} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Empty</button>}</div>
+      </Field>
+      {modal.kind!=="load"&&(()=>{const exp=expectedFor(modal.kind,modal.date);const v=parseFloat(modal.litres);const diff=(exp!=null&&!isNaN(v))?Math.round(v-exp):null;
+        return exp!=null?<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Should be about <b>{L(exp)}</b>{diff!=null&&<> - {pill(diffWord(diff,modal.kind==="main"?MAIN_TOL_L:TANKER_TOL_L))}</>}</div>
+          :<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>{modal.kind==="main"?"This is the first reading - tracking starts from it.":"No expected figure yet."}</div>;})()}
+      {modal.existingId&&<div style={{fontSize:12,color:"#0043CE",marginBottom:10}}>Already recorded for this date - saving will change it.</div>}
+      {modal.kind!=="load"&&<Field label="Photo of the gauge (optional)">
+        {modal.preview?<div style={{position:"relative"}}><img src={modal.preview} style={{width:"100%",maxHeight:180,objectFit:"cover",borderRadius:10}}/><button onClick={()=>setModal({...modal,preview:"",photo:null})} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer"}}><X size={12} color="#fff"/></button></div>
+        :<input type="file" accept="image/*" capture="environment" onChange={e=>{const f=e.target.files?.[0];if(!f)return;const rd=new FileReader();rd.onload=ev=>setModal(m=>({...m,photo:f,preview:ev.target.result}));rd.readAsDataURL(f);}}/>}
+      </Field>}
+      <Field label="Notes (optional)"><input style={inp} value={modal.notes} onChange={e=>setModal({...modal,notes:e.target.value})} placeholder={modal.kind==="load"?"e.g. for Akure and Ondo stores":"e.g. read by the driver at 7am"}/></Field>
+      {msg&&<div style={{padding:10,borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
+      <button disabled={busy} onClick={save} style={{...btn(busy?"#C6C6C6":P),width:"100%",padding:12,fontSize:14}}>{busy?"Saving...":"Save"}</button>
+    </Modal>}
+  </div>);
+}
+
+// ============================================
+function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs,stockChecks,setStockChecks,tankerLoads,setTankerLoads,depotReady}){
   // Store-staff scope: filter everything to their own store. Admin/Fleet Manager see all.
   const isStaff=user?.role==="Store Staff";
   // Purchase/delivery edits are a manager's job. Before 2026-10-05 the row buttons
@@ -2629,7 +2874,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     setDieselDistributions(dieselDistributions.map(d=>d.id===editDist.id?toDD(row):d));setEditDist(null);setMsg("Distribution updated!");setTimeout(()=>setMsg(""),3000);
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
-  const tabs=scopeStore?["readings","compliance","transfers","distributions","stores","baselines","discrepancies"]:["overview","watchtower","readings","compliance","transfers","purchases","distributions","stores","baselines","discrepancies"];
+  const tabs=scopeStore?["readings","compliance","transfers","distributions","stores","baselines","discrepancies"]:["overview","daily stock","watchtower","readings","compliance","transfers","purchases","distributions","stores","baselines","discrepancies"];
   // Staff KPI values (their store only)
   const staffReceived=dieselDistributions.reduce((s,d)=>s+(d.litres||0),0);
   const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.usedL||0),0);
@@ -2716,6 +2961,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         :dieselDistributions.slice(0,8).map(d=>(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #F4F4F4"}}><div><div style={{fontSize:13,fontWeight:600}}>{d.storeLoc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{d.date}{d.notes?" - "+d.notes:""}</div></div><div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</div></div>))}
       </div>
     </div>)}
+    {tab==="daily stock"&&!scopeStore&&<DailyStockTab checks={stockChecks||[]} setChecks={setStockChecks} loads={tankerLoads||[]} setLoads={setTankerLoads} depotReady={depotReady} purchases={dieselPurchases} deliveries={dieselDistributions} readings={dieselReadings} transfers={dieselTransfers} generators={generators} baselines={genBaselines} locations={locations} canManage={canManage}/>}
     {tab==="watchtower"&&!scopeStore&&(()=>{
       const today30=new Date(Date.now()-30*864e5).toISOString().split("T")[0];
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
@@ -2983,7 +3229,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       // holds the sheet's ACTUAL consumption, so it equals Used and the row
       // looked flagged against a hidden third number.) Ovens have no hours
       // model, so no expected.
-      const usedOf=(r)=>{const o=openMap[r.id];return(o!=null&&r.dieselLevelActual!=null)?Math.max(0,Math.round(o+(r.dieselAdded||0)-(txMap[r.generatorId+"|"+r.date]||0)-r.dieselLevelActual)):null;};
+      const usedOf=(r)=>r.usedL!=null?Math.round(r.usedL):null; // same tank figure as every report (withTankUsed)
       const rateOf=(r)=>{const b=genBaselines?.find(x=>x.generator_id===r.generatorId);return b?.avg_litres_per_hour??null;};
       const expectedOf=(r)=>{if(isOvenId(r.generatorId))return null;const rt=rateOf(r);return(rt!=null&&r.hoursRun)?Math.round(r.hoursRun*rt):null;};
       const rows=dieselReadings
@@ -3169,6 +3415,15 @@ function FleetProAppInner(){
   // 20261006_power_periods migration has been run, which hides the log.
   const [powerPeriods,setPowerPeriods]=useState([]);
   const [powerReady,setPowerReady]=useState(false);
+  // Main tank readings + tanker loadings (Daily stock tab). depotReady stays
+  // false until 20261007_depot_stock.sql has been run.
+  const [stockChecks,setStockChecks]=useState([]);
+  const [tankerLoads,setTankerLoads]=useState([]);
+  const [depotReady,setDepotReady]=useState(false);
+  useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
+    try{const[c,l]=await Promise.all([db.getStockChecks(),db.getTankerLoads()]);if(live){setStockChecks(c.map(toSC));setTankerLoads(l.map(toTL));setDepotReady(true);}}
+    catch(e){console.warn("Main tank / tanker log not available:",e?.message);if(live)setDepotReady(false);}
+  })();return()=>{live=false;};},[user?.uid]);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
     try{const rows=await db.getPowerPeriods(isoDaysAgo(120));if(live){setPowerPeriods(rows.map(toPW));setPowerReady(true);}}
     catch(e){console.warn("Power on/off log not available:",e?.message);if(live)setPowerReady(false);}
@@ -3263,7 +3518,7 @@ function FleetProAppInner(){
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user}/>}/>
-        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs}/>}/>
+        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={isStoreStaff?generators.filter(g=>g.loc===user?.store_location):generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog} dieselReadings={dieselReadings}/>}/>
