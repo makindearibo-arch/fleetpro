@@ -233,8 +233,10 @@ const depotLedger=({checks,loads,purchases,deliveries,today})=>{
     const mc=chk["main|"+d],tc=chk["tanker|"+d];
     row.mainExpected=mainBook==null?null:Math.round(mainBook);
     if(mc){row.mainCheck=mc;row.mainDiff=mainBook!=null?Math.round(mc.litres-mainBook):null;mainBook=mc.litres;}
+    row.mainOpen=Math.round(mainBook);          // the morning reading, or what it should be when not read
     mainBook+=row.bought-row.loaded+row.returned;
     if(tankBook==null)tankBook=0;
+    row.tankerOpen=Math.round(tankBook);
     tankBook+=row.loaded-row.returned-row.delivered;
     row.tankerExpected=Math.round(tankBook);   // end of day, before any check
     if(tc){row.tankerCheck=tc;row.tankerDiff=Math.round(tc.litres-tankBook);tankBook=tc.litres;}
@@ -276,6 +278,13 @@ const storeStockDay=({readings,transfers,distributions,generators,baselines,stor
     row.over=row.expected>0?row.used-row.expected:null;
     return row;
   }).filter(r=>r.assets>0);
+};
+// A CSV that Excel opens cleanly: UTF-8 BOM (so non-ASCII text survives),
+// cells quoted when they hold a comma, quote or line break.
+const downloadCsv=(filename,headers,rows)=>{
+  const q=v=>{if(v==null)return"";const t=String(v);return/[",\r\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;};
+  const csv="\uFEFF"+[headers,...rows].map(r=>r.map(q).join(",")).join("\r\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=filename;document.body.appendChild(a);a.click();a.remove();
 };
 // Diesel usage per store over [from,to]. "Used" is usedL (withTankUsed) -- the
 // same figure the Diesel Cost tab and the readings table use, so every screen
@@ -2593,7 +2602,10 @@ function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,del
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState("");
   const [day,setDay]=useState(()=>(readings||[]).some(r=>r.date===todayStr)?todayStr:yesterdayStr);
-  const [showAllDays,setShowAllDays]=useState(false);
+  // stock sheet range (Nigerian dates); default the last 14 days
+  const [from,setFrom]=useState(()=>ngDate(Date.now()-13*864e5));
+  const [to,setTo]=useState(todayStr);
+  const preset=(v)=>{setTo(todayStr);setFrom(v==="all"?(ledger.start||todayStr):v==="m"?todayStr.slice(0,8)+"01":ngDate(Date.now()-(v-1)*864e5));};
 
   // ---- status words for a difference
   const diffWord=(diff,tol)=>diff==null?null:Math.abs(diff)<=tol?{t:"Matches",c:"#24A148",bg:"#DEFBE6"}:diff<0?{t:Math.abs(diff).toLocaleString()+" L missing",c:"#DA1E28",bg:"#FFF1F1"}:{t:diff.toLocaleString()+" L more than expected",c:"#B45309",bg:"#FFF8E1"};
@@ -2607,6 +2619,11 @@ function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,del
   const storeNow=Object.values(latestLevel).reduce((s,r)=>s+r.dieselLevelActual,0);
   const storeNames=(locations||[]).filter(l=>(generators||[]).some(g=>g.loc===l));
   const sheet=storeStockDay({readings,transfers,distributions:deliveries,generators,baselines,stores:storeNames,date:day});
+  const noteOf=r=>{const bad=r.over!=null&&r.over>Math.max(25,0.2*r.expected);const notAcc=r.sent-r.received;
+    return r.logged===0?"No reading":r.noOpening?"First reading":r.estimated?"Tank level not typed - closing estimated":notAcc>0?Math.round(notAcc).toLocaleString()+" L sent, not accepted":bad?"Used more than it should":r.since?"Covers days since "+fmtDayLabel(r.since):"";};
+  const exportStores=()=>downloadCsv(`diesel-stock-stores_${day}.csv`,
+    ["Date","Store","Opening","Received","Moved out","Used","Closing","Should have used","Difference","Sent by admin","Note"],
+    sheet.map(r=>[day,r.store,r.known?Math.round(r.opening):"",Math.round(r.received),Math.round(r.movedOut),r.logged?Math.round(r.used):"",r.known||r.logged?Math.round(r.closing):"",r.expected||"",r.over??"",Math.round(r.sent)||"",noteOf(r)]));
   const tot=sheet.reduce((a,r)=>({opening:a.opening+r.opening,received:a.received+r.received,movedOut:a.movedOut+r.movedOut,used:a.used+r.used,closing:a.closing+r.closing,expected:a.expected+r.expected,sent:a.sent+r.sent}),{opening:0,received:0,movedOut:0,used:0,closing:0,expected:0,sent:0});
 
   // ---- forms
@@ -2643,8 +2660,23 @@ function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,del
     catch(e){alert(e.message||String(e));}
   };
 
-  const rows=[...ledger.days].reverse();
-  const shownRows=showAllDays?rows:rows.slice(0,31);
+  // ---- the main tank + tanker stock sheet for the chosen range (oldest first)
+  const sheetRows=ledger.days.filter(r=>r.date>=from&&r.date<=to);
+  const sumOf=k=>sheetRows.reduce((a,r)=>a+(r[k]||0),0);
+  const netIn=r=>r.loaded-r.returned;
+  // closing = first opening + in - out + the differences the checks found
+  const mainDiffSum=sheetRows.slice(1).reduce((a,r)=>a+(r.mainDiff||0),0);
+  const tankDiffSum=sheetRows.reduce((a,r)=>a+(r.tankerDiff||0),0);
+  const mainReads=sheetRows.filter(r=>r.mainCheck).length,tankReads=sheetRows.filter(r=>r.tankerCheck).length;
+  const signed=v=>(v>0?"+":v<0?"-":"")+Math.abs(Math.round(v)).toLocaleString()+" L";
+  const notesOn=d=>[...(checks||[]).filter(c=>c.date===d&&c.notes).map(c=>(c.tank==="main"?"Main tank: ":"Tanker: ")+c.notes),...(loads||[]).filter(l=>l.date===d&&l.notes).map(l=>(l.kind==="return"?"Poured back: ":"Loading: ")+l.notes)].join("; ");
+  const exportMain=()=>{
+    const f0=sheetRows[0]?.date||from,f1=sheetRows[sheetRows.length-1]?.date||to;   // the days actually covered
+    const head=["Date","Main tank opening","Opening is","Bought","Into tanker","Poured back","Main tank closing","Main tank should be (morning)","Main tank gauge reading","Main tank difference","Tanker opening","Loaded into tanker","Delivered to stores","Tanker should be (end of day)","Tanker found","Tanker difference","Tanker closing","Notes"];
+    const body=sheetRows.map(r=>[r.date,r.mainOpen,r.mainCheck?"gauge reading":"expected (not read)",r.bought,netIn(r),r.returned||"",r.mainEnd,r.mainExpected??"",r.mainCheck?r.mainCheck.litres:"",r.mainDiff??"",r.tankerOpen,netIn(r),r.delivered,r.tankerExpected,r.tankerCheck?r.tankerCheck.litres:"",r.tankerDiff??"",r.tankerEnd,notesOn(r.date)]);
+    if(sheetRows.length)body.push(["Period "+f0+" to "+f1,sheetRows[0].mainOpen,"",sumOf("bought"),sumOf("loaded")-sumOf("returned"),sumOf("returned")||"",sheetRows[sheetRows.length-1].mainEnd,"","",Math.round(mainDiffSum),sheetRows[0].tankerOpen,sumOf("loaded")-sumOf("returned"),sumOf("delivered"),"","",Math.round(tankDiffSum),sheetRows[sheetRows.length-1].tankerEnd,mainReads+" main tank reading"+(mainReads===1?"":"s")+", "+tankReads+" tanker check"+(tankReads===1?"":"s")]);
+    downloadCsv(`diesel-stock-main-tank-and-tanker_${f0}_to_${f1}.csv`,head,body);
+  };
   const recent=[...(checks||[]).map(c=>({k:"check",x:c})),...(loads||[]).map(l=>({k:"load",x:l}))].sort((a,b)=>b.x.date.localeCompare(a.x.date)||String(b.x.createdAt).localeCompare(String(a.x.createdAt))).slice(0,15);
 
   return(<div>
@@ -2660,7 +2692,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,del
 
     <div style={card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:10}}>
-        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Main tank and tanker, day by day</h3>
+        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Main tank and tanker stock sheet</h3>
           <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,maxWidth:620}}>Read the main tank's gauge every morning before any loading. The app checks it against yesterday's reading + diesel bought - loaded into the tanker. Differences under {MAIN_TOL_L} L are within the gauge's accuracy.{ledger.start&&<> Tracking started {fmtDayLabel(ledger.start)}, with the tanker taken as empty. A tanker check is what is left at the end of that day, after loading and deliveries.</>}</div></div>
         {canManage&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           <button onClick={()=>openModal("main")} style={btn(P)}>Record main tank reading</button>
@@ -2669,21 +2701,44 @@ function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,del
         </div>}
       </div>
       {!ledger.start?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>Nothing yet. Record this morning's main tank reading to start.</div>
-      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:860}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Main tank reading","Should be","Check","Bought","Into tanker","Tanker to stores","Left in tanker","Tanker check"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
-      <tbody>{shownRows.map(r=>(<tr key={r.date} style={{background:r.mainDiff!=null&&r.mainDiff<-MAIN_TOL_L?"#FFF8F8":"transparent"}}>
-        <td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{fmtDayLabel(r.date)}</td>
-        <td style={tc}>{r.mainCheck?<b>{L(r.mainCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not read</span>}{r.mainCheck?.photoUrl&&<a href={r.mainCheck.photoUrl} target="_blank" rel="noreferrer" style={{marginLeft:6,fontSize:11,color:P}}>photo</a>}</td>
-        <td style={{...tc,color:"#525252"}}>{L(r.mainExpected)}</td>
-        <td style={tc}>{r.mainCheck?pill(diffWord(r.mainDiff,MAIN_TOL_L)):"-"}</td>
-        <td style={tc}>{r.bought?L(r.bought):"-"}</td>
-        <td style={tc}>{r.loaded||r.returned?<>{r.loaded?L(r.loaded):""}{r.returned?<div style={{fontSize:11,color:"#8D8D8D"}}>{L(r.returned)} poured back</div>:null}</>:"-"}</td>
-        <td style={tc}>{r.delivered?L(r.delivered):"-"}</td>
-        <td style={{...tc,fontWeight:600,color:r.tankerEnd<0?"#DA1E28":"#161616"}}>{L(r.tankerEnd)}</td>
-        <td style={tc}>{r.tankerCheck?<>{L(r.tankerCheck.litres)} {pill(diffWord(r.tankerDiff,TANKER_TOL_L))}</>:"-"}</td>
-      </tr>))}</tbody></table>
-      {rows.length>shownRows.length&&<div style={{padding:10,textAlign:"center"}}><button onClick={()=>setShowAllDays(true)} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Show all {rows.length} days</button></div>}
+      :<>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        <span style={{fontSize:12,fontWeight:600,color:"#525252"}}>From</span><input type="date" value={from} max={to} onChange={e=>setFrom(e.target.value||ledger.start)} style={{...inp,width:160,padding:"6px 10px"}}/>
+        <span style={{fontSize:12,fontWeight:600,color:"#525252"}}>to</span><input type="date" value={to} min={from} max={todayStr} onChange={e=>setTo(e.target.value||todayStr)} style={{...inp,width:160,padding:"6px 10px"}}/>
+        {[["Last 7 days",7],["Last 30 days",30],["This month","m"],["All","all"]].map(([t,v])=>(<button key={t} onClick={()=>preset(v)} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>{t}</button>))}
+        <div style={{flex:1}}/>
+        <button onClick={exportMain} disabled={!sheetRows.length} style={btn("#fff",P,"1.5px solid "+P)}>Export to Excel</button>
+      </div>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:1000}}>
+        <thead>
+          <tr style={{background:"#E8ECF1"}}><th style={th}></th><th colSpan={5} style={{...th,textAlign:"center",borderLeft:"3px solid #fff"}}>MAIN TANK</th><th colSpan={5} style={{...th,textAlign:"center",borderLeft:"3px solid #fff"}}>TANKER</th></tr>
+          <tr style={{background:"#F4F4F4"}}>{["Date","Opening","+ Bought","- Into tanker","= Closing","Morning check","Opening","+ Loaded","- To stores","= Closing","End-of-day check"].map((h,i)=>(<th key={h+i} style={{...th,whiteSpace:"nowrap",borderLeft:i===1||i===6?"3px solid #fff":undefined}}>{h}</th>))}</tr>
+        </thead>
+        <tbody>{sheetRows.map(r=>{const into=netIn(r);const bad=(r.mainDiff!=null&&Math.abs(r.mainDiff)>MAIN_TOL_L)||(r.tankerDiff!=null&&Math.abs(r.tankerDiff)>TANKER_TOL_L);return(<tr key={r.date} style={{background:bad?"#FFF8F8":"transparent"}}>
+          <td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{fmtDayLabel(r.date)}</td>
+          <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{r.mainCheck?<b>{L(r.mainOpen)}</b>:<span style={{color:"#8D8D8D"}}>{L(r.mainOpen)}</span>}<div style={{fontSize:10,color:"#8D8D8D"}}>{r.mainCheck?"gauge reading":"not read - expected"}</div></td>
+          <td style={tc}>{r.bought?L(r.bought):"-"}</td>
+          <td style={tc}>{into?L(into):"-"}{r.returned?<div style={{fontSize:10,color:"#8D8D8D"}}>{L(r.returned)} poured back</div>:null}</td>
+          <td style={{...tc,fontWeight:700}}>{L(r.mainEnd)}</td>
+          <td style={tc}>{r.mainCheck?(r.mainDiff==null?<span style={{fontSize:11,color:"#8D8D8D"}}>first reading</span>:<>{pill(diffWord(r.mainDiff,MAIN_TOL_L))}<div style={{fontSize:10,color:"#8D8D8D"}}>should be {L(r.mainExpected)}</div></>):<span style={{color:"#A8A8A8"}}>-</span>}</td>
+          <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{L(r.tankerOpen)}</td>
+          <td style={tc}>{into?L(into):"-"}</td>
+          <td style={tc}>{r.delivered?L(r.delivered):"-"}</td>
+          <td style={{...tc,fontWeight:700,color:r.tankerEnd<0?"#DA1E28":"#161616"}}>{L(r.tankerEnd)}</td>
+          <td style={tc}>{r.tankerCheck?<>{pill(diffWord(r.tankerDiff,TANKER_TOL_L))}<div style={{fontSize:10,color:"#8D8D8D"}}>found {L(r.tankerCheck.litres)}, should be {L(r.tankerExpected)}</div></>:<span style={{color:"#A8A8A8"}}>-</span>}</td>
+        </tr>);})}</tbody>
+        {sheetRows.length>1&&<tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}>
+          <td style={{...tc,whiteSpace:"nowrap"}}>Whole period</td>
+          <td style={{...tc,borderLeft:"3px solid #fff"}}>{L(sheetRows[0].mainOpen)}</td><td style={tc}>{L(sumOf("bought"))}</td><td style={tc}>{L(sumOf("loaded")-sumOf("returned"))}</td><td style={tc}>{L(sheetRows[sheetRows.length-1].mainEnd)}</td>
+          <td style={{...tc,fontWeight:400,fontSize:12}}>{mainReads} reading{mainReads===1?"":"s"}{mainDiffSum?<>; gauge differences {signed(mainDiffSum)}</>:null}</td>
+          <td style={{...tc,borderLeft:"3px solid #fff"}}>{L(sheetRows[0].tankerOpen)}</td><td style={tc}>{L(sumOf("loaded")-sumOf("returned"))}</td><td style={tc}>{L(sumOf("delivered"))}</td><td style={tc}>{L(sheetRows[sheetRows.length-1].tankerEnd)}</td>
+          <td style={{...tc,fontWeight:400,fontSize:12}}>{tankReads} check{tankReads===1?"":"s"}{tankDiffSum?<>; differences {signed(tankDiffSum)}</>:null}</td>
+        </tr></tfoot>}
+      </table></div>
+      {sheetRows.length===0&&<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No days in this range. Tracking started {fmtDayLabel(ledger.start)}.</div>}
+      <div style={{fontSize:11,color:"#8D8D8D",marginTop:8}}>Each day: opening + in - out = closing, and a day's closing is the next day's opening. When a gauge reading or tanker check differs from what it should be, the difference is shown in that day's check, and the next opening starts from what was actually found.</div>
       {ledger.tankerNow<0&&<div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12}}>The tanker shows less than nothing: more was delivered to stores than was recorded as loaded. A loading is probably missing.</div>}
-      </div>}
+      </>}
       {recent.length>0&&<details style={{marginTop:12}}><summary style={{fontSize:12,fontWeight:600,color:"#525252",cursor:"pointer"}}>Recent entries ({recent.length})</summary>
         <div style={{marginTop:8}}>{recent.map(({k,x})=>(<div key={k+x.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #F4F4F4",fontSize:12}}>
           <div><b>{fmtDayLabel(x.date)}</b> - {k==="load"?(x.kind==="return"?"poured back into main tank":"loaded into tanker"):(x.tank==="main"?"main tank read":"tanker checked")}: {x.litres.toLocaleString()} L{x.notes?<span style={{color:"#8D8D8D"}}> ({x.notes})</span>:null}</div>
@@ -2696,11 +2751,11 @@ function DailyStockTab({checks,setChecks,loads,setLoads,depotReady,purchases,del
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:10}}>
         <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Store tanks on {day===todayStr?"today":fmtDayLabel(day)}</h3>
           <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,maxWidth:620}}>Opening + received - moved out - used = closing, from the readings staff enter. "Should have used" is the hours the generator ran x its usual rate.</div></div>
-        <input type="date" value={day} max={todayStr} onChange={e=>setDay(e.target.value||todayStr)} style={{...inp,width:170,padding:"6px 10px"}}/>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}><input type="date" value={day} max={todayStr} onChange={e=>setDay(e.target.value||todayStr)} style={{...inp,width:170,padding:"6px 10px"}}/><button onClick={exportStores} style={btn("#fff",P,"1.5px solid "+P)}>Export to Excel</button></div>
       </div>
       <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Opening","+ Received","- Moved out","- Used","= Closing","Should have used","Difference","Note"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
       <tbody>{sheet.map(r=>{const bad=r.over!=null&&r.over>Math.max(25,0.2*r.expected);const notAcc=r.sent-r.received;
-        const note=r.logged===0?"No reading":r.noOpening?"First reading":r.estimated?"Tank level not typed - closing estimated":notAcc>0?Math.round(notAcc).toLocaleString()+" L sent, not accepted":bad?"Used more than it should":r.since?"Covers days since "+fmtDayLabel(r.since):"";
+        const note=noteOf(r);
         return(<tr key={r.store} style={{background:bad?"#FFF8F8":r.logged===0?"#FAFAFA":"transparent"}}>
         <td style={{...tc,fontWeight:600,whiteSpace:"nowrap"}}>{r.store}</td>
         <td style={tc}>{r.known?L(r.opening):"-"}</td>
