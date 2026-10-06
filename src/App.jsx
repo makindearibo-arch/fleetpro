@@ -1065,7 +1065,7 @@ function VendorsPage({vendors,setVendors,vendorTypes,canEdit}){
   </div>);
 }
 
-function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,vehicleGroups}){
+function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,vehicleGroups,gasCylinders}){
   // The Dashboard's "Full report" link leaves a one-shot hint so this opens on
   // Diesel Usage with the same stores and dates. Read in the initialiser and
   // cleared in an effect (StrictMode calls initialisers twice in dev).
@@ -1075,6 +1075,7 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const [storeFilter,setStoreFilter]=useState(Array.isArray(hint?.stores)?hint.stores:[]);
   useEffect(()=>{try{sessionStorage.removeItem("fp.reports.open");}catch(e){}},[]);
   const dieselStores=useMemo(()=>[...new Set((dieselReadings||[]).map(r=>r.storeLoc).filter(Boolean))].sort(),[dieselReadings]);
+  const gasStores=useMemo(()=>[...new Set((gasCylinders||[]).map(c=>c.storeLoc).filter(Boolean))].sort(),[gasCylinders]);
   // Store scope for the diesel tabs. Like the vehicle Group, it only applies
   // where its control is visible -- an invisible filter would just look like
   // missing data on the other tabs.
@@ -1094,7 +1095,7 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const inGroupAsset=(assetId,isGen)=>!groupActive?true:(!isGen&&gvIds.has(assetId));
   const _rpNow=new Date();const _rpMonthStart=new Date(_rpNow.getFullYear(),_rpNow.getMonth(),1).toISOString().split("T")[0];
   const [dateFrom,setDateFrom]=useState(hint?.from||_rpMonthStart);const [dateTo,setDateTo]=useState(hint?.to||_rpNow.toISOString().split("T")[0]);const [fuelTypeFilter,setFuelTypeFilter]=useState("All");
-  const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselusage","Diesel Usage"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
+  const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselusage","Diesel Usage"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["gas","Cooking Gas"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
   // A row with no date is NOT in any date window. This used to return true,
   // so the 433 work orders with a blank `due` (imported history) passed every
   // date filter -- the Maintenance tab showed the same 432 Completed and the
@@ -1103,7 +1104,7 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const fFL=fuelLogs.filter(f=>inRange(f.date)&&inGroupAsset(f.asset,f.isGen));
   const gWO=workOrders.filter(w=>!groupActive||(!w.isGen&&gvNames.has(w.asset)));
   const fWO=gWO.filter(w=>inRange(w.due));
-  const storeScoped=storeFilter.length>0&&DIESEL_REPORTS.includes(report);
+  const storeScoped=storeFilter.length>0&&(DIESEL_REPORTS.includes(report)||report==="gas");   // the Stores picker is shown on these
   const inStores=s=>!storeScoped||storeFilter.includes(s);
   const fDRall=(dieselReadings||[]).filter(r=>inRange(r.date)&&inStores(r.storeLoc));
   const dieselExcluded=fDRall.filter(r=>(r.usedL||0)>IMPLAUSIBLE_READING_L);
@@ -1176,6 +1177,55 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
         {monthRows.length>0&&<ResponsiveContainer width="100%" height={180}><BarChart data={monthRows}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="m" fontSize={10}/><YAxis fontSize={11} tickFormatter={(v)=>v>=1e6?(v/1e6).toFixed(1)+"M":(v/1e3).toFixed(0)+"k"}/><Tooltip formatter={(v)=>fmt(v)}/><Bar dataKey="cost" name="Cost" fill="#8A3FFC" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>}
       </div>
     </div>);};
+  // ---- COOKING GAS (2026-10-13). Bought = purchase date in the period; lasted /
+  // ran out fast = cylinders that FINISHED in the period. A store's "usual" is
+  // learned from its whole history (gasUsualRate), as on the Cooking Gas page.
+  const renderGas=()=>{
+    const scoped=(gasCylinders||[]).filter(c=>inStores(c.storeLoc));
+    const bought=scoped.filter(c=>inRange(c.purchaseDate));
+    const finished=scoped.filter(c=>inRange(c.finishedDate));
+    const hist={};(gasCylinders||[]).forEach(c=>{(hist[c.storeLoc]=hist[c.storeLoc]||[]).push(c);});
+    const usualOf={};Object.entries(hist).forEach(([st,arr])=>{usualOf[st]=gasUsualRate(arr);});
+    const typKg=st=>{const m={};(hist[st]||[]).forEach(c=>{m[c.kg]=(m[c.kg]||0)+1;});const b=Object.entries(m).sort((a,b)=>b[1]-a[1])[0];return b?Number(b[0]):50;};
+    const isFast=c=>{const k=gasCheck(c,usualOf[c.storeLoc]);return!!(k&&k.fast);};
+    const stores=[...new Set([...bought,...finished].map(c=>c.storeLoc))].sort();
+    const list=stores.map(st=>{const b=bought.filter(c=>c.storeLoc===st),f=finished.filter(c=>c.storeLoc===st);const days=f.map(gasDays).filter(Boolean);const dsum=days.reduce((a,x)=>a+x,0);
+      const using=(hist[st]||[]).find(c=>c.fixedDate&&!c.finishedDate);
+      return{st,n:b.length,kg:b.reduce((a,c)=>a+c.kg,0),cost:b.reduce((a,c)=>a+(c.cost||0),0),fin:f.length,avgDays:days.length?dsum/days.length:null,kgDay:dsum>0?f.reduce((a,c)=>a+c.kg,0)/dsum:null,u:usualOf[st],tk:typKg(st),fast:f.filter(isFast).length,using};})
+      .sort((a,b)=>b.kg-a.kg||a.st.localeCompare(b.st));
+    const totKg=bought.reduce((a,c)=>a+c.kg,0),totCost=bought.reduce((a,c)=>a+(c.cost||0),0);
+    const allDays=finished.map(gasDays).filter(Boolean);const avgDays=allDays.length?allDays.reduce((a,x)=>a+x,0)/allDays.length:null;
+    const fastN=finished.filter(isFast).length;
+    const monthly={};bought.forEach(c=>{const k=c.purchaseDate.slice(0,7);monthly[k]=(monthly[k]||0)+c.kg;});
+    const chartData=Object.keys(monthly).sort().map(k=>({name:MON3[+k.slice(5,7)-1]+" "+k.slice(2,4),kg:monthly[k]}));
+    const headers=["Store","Cylinders bought","Kg bought","Cost","Finished","Avg days lasted","Kg a day","Usually lasts","Ran out fast","In use now"];
+    const rows=list.map(s=>[s.st,s.n,s.kg.toLocaleString(),s.cost?fmt(s.cost):"-",s.fin,s.avgDays!=null?s.avgDays.toFixed(1):"-",s.kgDay!=null?s.kgDay.toFixed(1):"-",s.u?"~"+Math.max(1,Math.round(s.tk/s.u))+" days / "+s.tk+" kg":"not known yet",s.fast||"-",s.using?"since "+s.using.fixedDate:"-"]);
+    const cyl=[...new Map([...bought,...finished].map(c=>[c.id,c])).values()].sort((a,b)=>a.storeLoc.localeCompare(b.storeLoc)||(a.fixedDate||a.purchaseDate).localeCompare(b.fixedDate||b.purchaseDate));
+    const cHeaders=["Store","Bought","Kg","Cost","Fixed","Finished","Days lasted","Kg a day","Check"];
+    const cRows=cyl.map(c=>{const d=gasDays(c),k=gasCheck(c,usualOf[c.storeLoc]);return[c.storeLoc,c.purchaseDate,c.kg,c.cost!=null?fmt(c.cost):"-",c.fixedDate||"spare",c.finishedDate||(c.fixedDate?"in use":"-"),d??"-",d?(c.kg/d).toFixed(1):"-",!c.fixedDate?"spare":!c.finishedDate?"in use":k?(k.fast?"ran out fast (usually ~"+k.expected+" days)":"normal"):"-"];});
+    const exBtn=(onClick,label)=>(<button onClick={onClick} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>{label}</button>);
+    if(!list.length)return(<div style={{...card,padding:28,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No cooking gas bought or finished in this period{storeScoped?" at the chosen stores":""}. Stores record their cylinders on the Cooking Gas page.</div>);
+    return(<div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}>
+        <Kpi icon={Flame} label="Gas Bought" value={totKg.toLocaleString()+" kg"} sub={bought.length+" cylinder"+(bought.length===1?"":"s")}/>
+        <Kpi icon={DollarSign} label="Gas Cost" value={totCost?fmt(totCost):"-"} sub={bought.some(c=>c.cost==null)?"some cylinders have no cost":""}/>
+        <Kpi icon={Clock} label="Avg Days a Cylinder Lasted" value={avgDays!=null?avgDays.toFixed(1):"-"} sub={allDays.length+" finished in period"}/>
+        <Kpi icon={AlertTriangle} label="Ran Out Fast" value={fastN} sub="under 70% of the store's usual" accent={fastN?"#DA1E28":undefined}/>
+      </div>
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Cooking Gas by Store</h4><div style={{display:"flex",gap:6}}>{exBtn(()=>csvExport(headers,rows,"cooking-gas-by-store"),"CSV")}{exBtn(()=>pdfExport("Cooking Gas Report",headers,rows),"PDF")}</div></div>
+        {chartData.length>1&&<ResponsiveContainer width="100%" height={200}><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke="#F4F4F4"/><XAxis dataKey="name" fontSize={10}/><YAxis fontSize={11}/><Tooltip formatter={(v)=>v.toLocaleString()+" kg"}/><Bar dataKey="kg" name="Kg bought" fill="#E8590C" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>}
+        <div style={{overflow:"auto",marginTop:12}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{headers.map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>
+          {list.map((s,i)=>(<tr key={s.st} style={{background:s.fast?"#FFF8F8":"transparent"}}>{rows[i].map((v,j)=>(<td key={j} style={{...tc,fontWeight:j===0?700:400,color:j===8&&s.fast?"#DA1E28":"#161616"}}>{v}</td>))}</tr>))}
+        </tbody></table></div>
+      </div>
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Cylinders in this period</h4><div style={{display:"flex",gap:6}}>{exBtn(()=>csvExport(cHeaders,cRows,"cooking-gas-cylinders"),"CSV")}{exBtn(()=>pdfExport("Cooking Gas Cylinders",cHeaders,cRows),"PDF")}</div></div>
+        <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}><thead><tr style={{background:"#F4F4F4"}}>{cHeaders.map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>
+          {cyl.map((c,i)=>{const f=isFast(c);return(<tr key={c.id} style={{background:f?"#FFF8F8":"transparent"}}>{cRows[i].map((v,j)=>(<td key={j} style={{...tc,whiteSpace:"nowrap",fontWeight:j===0?600:400,color:j===8&&f?"#DA1E28":"#161616"}}>{v}</td>))}</tr>);})}
+        </tbody></table></div>
+      </div>
+    </div>);};
   const renderStoreCompare=()=>{
     const byStore={};
     fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{readings:0,hrs:0,litres:0,flags:0,evaluated:0,photo:0};s.readings++;s.hrs+=(r.hoursRun||0);s.litres+=(r.usedL||0);if(r.discrepancyLitres!=null)s.evaluated++;if(r.discrepancyFlag)s.flags++;if(r.genSource==="photo")s.photo++;});
@@ -1213,9 +1263,9 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
       <div style={{display:"flex",gap:6}}>{tabs.map(([id,label])=>(<button key={id} onClick={()=>setReport(id)} style={{padding:"7px 16px",borderRadius:7,border:report===id?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:report===id?"#D0E2FF":"#fff",color:report===id?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{label}</button>))}</div>
-      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{report==="fuel"&&<div style={{display:"flex",gap:4}}>{["All","Diesel","Petrol"].map(ft=>(<button key={ft} onClick={()=>setFuelTypeFilter(ft)} style={{padding:"5px 12px",borderRadius:6,border:fuelTypeFilter===ft?"1.5px solid "+P:"1.5px solid #E0E0E0",background:fuelTypeFilter===ft?"#D0E2FF":"#fff",color:fuelTypeFilter===ft?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{ft}</button>))}</div>}{DIESEL_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Stores:</span><StoreMultiSelect stores={dieselStores} value={storeFilter} onChange={setStoreFilter}/></>)}{GROUPABLE_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Group:</span><select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{...inp,width:160,padding:"6px 10px",fontSize:12}}><option value="All">All vehicles</option>{(vehicleGroups||[]).map(g=>(<option key={g} value={g}>{g}</option>))}<option value="__none">(No group)</option></select></>)}<span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Date Range:</span><input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/><span style={{color:"#8D8D8D"}}>to</span><input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/></div>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{report==="fuel"&&<div style={{display:"flex",gap:4}}>{["All","Diesel","Petrol"].map(ft=>(<button key={ft} onClick={()=>setFuelTypeFilter(ft)} style={{padding:"5px 12px",borderRadius:6,border:fuelTypeFilter===ft?"1.5px solid "+P:"1.5px solid #E0E0E0",background:fuelTypeFilter===ft?"#D0E2FF":"#fff",color:fuelTypeFilter===ft?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{ft}</button>))}</div>}{(DIESEL_REPORTS.includes(report)||report==="gas")&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Stores:</span><StoreMultiSelect stores={report==="gas"?gasStores:dieselStores} value={storeFilter} onChange={setStoreFilter}/></>)}{GROUPABLE_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Group:</span><select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{...inp,width:160,padding:"6px 10px",fontSize:12}}><option value="All">All vehicles</option>{(vehicleGroups||[]).map(g=>(<option key={g} value={g}>{g}</option>))}<option value="__none">(No group)</option></select></>)}<span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Date Range:</span><input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/><span style={{color:"#8D8D8D"}}>to</span><input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/></div>
     </div>
-    {DIESEL_REPORTS.includes(report)&&dieselExcluded.length>0&&<div style={{marginBottom:12}}><ImplausibleReadingsNote items={dieselExcluded}/></div>}{report==="fleet"&&renderFleet()}{report==="fuel"&&renderFuel()}{report==="dieselusage"&&renderDieselUsage()}{report==="dieselcost"&&renderDieselCost()}{report==="storecompare"&&renderStoreCompare()}{report==="maintenance"&&renderMaint()}{report==="driver"&&renderDriver()}
+    {DIESEL_REPORTS.includes(report)&&dieselExcluded.length>0&&<div style={{marginBottom:12}}><ImplausibleReadingsNote items={dieselExcluded}/></div>}{report==="fleet"&&renderFleet()}{report==="fuel"&&renderFuel()}{report==="dieselusage"&&renderDieselUsage()}{report==="dieselcost"&&renderDieselCost()}{report==="storecompare"&&renderStoreCompare()}{report==="gas"&&renderGas()}{report==="maintenance"&&renderMaint()}{report==="driver"&&renderDriver()}
   </div>);
 }
 
@@ -3977,7 +4027,7 @@ function FleetProAppInner(){
         <Route path="/service" element={<ServicePage vehicles={vehicles} svcReminders={svcReminders} setSvcReminders={setSvcReminders} canEdit={canEdit}/>}/>
         <Route path="/inspections" element={<InspectionPage vehicles={vehicles} drivers={drivers} inspections={inspections} setInspections={setInspections} canEdit={canEdit} inspItems={inspItems} setInspItems={setInspItems}/>}/>
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
-        <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers}/>}/>
+        <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
         <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady}/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks}/>}/>
