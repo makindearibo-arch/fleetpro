@@ -51,16 +51,44 @@ const fromDD2=(d)=>({purchase_id:d.purchaseId||null,date:d.date,store_location:d
 // count there -- added to that day's reading (same back-fill as a delivery).
 // The sending store's tank went down when it was sent (a transfer out).
 const isIncoming=(t,store)=>t.destType==="store"&&!!store&&t.destStore===store;
-async function acceptStoreTransfer(t,user,setDieselTransfers,dieselReadings,setDieselReadings,generators){
-  const row=await db.updateDieselTransfer(t.id,{received_confirmed:true,received_date:ngDate(Date.now()),received_by:user?.uid||null});
+// The tanks a store actually uses: assets with a reading in the last 30 days
+// (Ikare CR and Okitipupa CR keep an idle second generator on file). Generators
+// first. Where two or more are in use (Ondo / Owo / Oye Bakery: generator +
+// oven), the receiving store says which tank a transfer went into on Accept.
+const activeTanks=(store,generators,readings)=>{const all=(generators||[]).filter(g=>g.loc===store);const cut=ngDate(Date.now()-30*864e5);
+  const used=new Set((readings||[]).filter(r=>r.storeLoc===store&&r.date>=cut).map(r=>r.generatorId));const act=all.filter(g=>used.has(g.id));
+  return(act.length?act:all).slice().sort((a,b)=>(a.assetType==="oven")-(b.assetType==="oven"));};
+const defaultTankOf=(store,generators)=>((generators||[]).find(g=>g.loc===store&&g.assetType!=="oven")||(generators||[]).find(g=>g.loc===store)||{}).id||null;
+// the tank an incoming store transfer is counted on: the one the receiver chose, else the store's main tank
+const transferTankOf=(t,generators)=>(t.destId&&(generators||[]).some(g=>g.id===t.destId&&g.loc===t.destStore))?t.destId:defaultTankOf(t.destStore,generators);
+async function acceptStoreTransfer(t,user,setDieselTransfers,dieselReadings,setDieselReadings,generators,tank){
+  const body={received_confirmed:true,received_date:ngDate(Date.now()),received_by:user?.uid||null};
+  if(tank&&tank!==t.destId)body.dest_id=tank;   // the database only allows this together with accepting
+  const row=await db.updateDieselTransfer(t.id,body);
   if(setDieselTransfers)setDieselTransfers(prev=>prev.map(x=>x.id===t.id?toDT(row):x));
-  await applyAcceptToReading({storeLoc:t.destStore,date:t.date,litres:t.litres},dieselReadings,setDieselReadings,generators);
+  await applyAcceptToReading({storeLoc:t.destStore,date:t.date,litres:t.litres},dieselReadings,setDieselReadings,generators,tank||transferTankOf(t,generators));
 }
-async function applyAcceptToReading(dist,dieselReadings,setDieselReadings,generators){
+// Accept for a store transfer. With one tank in use it accepts at once; with
+// two or more it first asks which tank the diesel went into (generator first).
+function AcceptTransferButton({t,tanks,onAccept,small}){
+  const [open,setOpen]=useState(false);const [busy,setBusy]=useState(false);
+  const go=async(tank)=>{setBusy(true);try{await onAccept(t,tank);}finally{setBusy(false);setOpen(false);}};
+  const b={padding:small?"3px 10px":"6px 14px",borderRadius:7,border:"1.5px solid #24A148",background:"#24A148",color:"#fff",fontSize:small?10:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"};
+  if((tanks||[]).length<2)return <button type="button" disabled={busy} onClick={()=>go(null)} style={b}>{busy?"Saving...":"Accept"}</button>;
+  if(!open)return <button type="button" onClick={()=>setOpen(true)} style={b}>Accept</button>;
+  return(<div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+    <span style={{fontSize:10,fontWeight:700,color:"#525252"}}>Which tank did it go into?</span>
+    <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end"}}>{tanks.map((g,i)=>(<button key={g.id} type="button" disabled={busy} onClick={()=>go(g.id)} style={{...b,background:i===0?"#24A148":"#fff",color:i===0?"#fff":"#24A148"}}>{g.name}</button>))}
+      <button type="button" onClick={()=>setOpen(false)} style={{...b,background:"#fff",color:"#8D8D8D",border:"1.5px solid #E0E0E0"}}>Cancel</button></div>
+  </div>);
+}
+async function applyAcceptToReading(dist,dieselReadings,setDieselReadings,generators,targetGenId){
   try{
     const rs=(dieselReadings||[]).filter(r=>r.storeLoc===dist.storeLoc&&r.date===dist.date);
     if(!rs.length)return;
-    const target=rs.find(r=>((generators||[]).find(g=>g.id===r.generatorId)?.assetType)!=="oven")||rs[0];
+    // a store transfer goes on the reading of the tank it went into (none that day: nothing to back-fill)
+    const target=targetGenId?rs.find(r=>r.generatorId===targetGenId):(rs.find(r=>((generators||[]).find(g=>g.id===r.generatorId)?.assetType)!=="oven")||rs[0]);
+    if(!target)return;
     const newAdded=(target.dieselAdded||0)+(dist.litres||0);
     const theo=target.consumptionLitres;
     let disc=target.discrepancyLitres!=null?target.discrepancyLitres-(dist.litres||0):null;
@@ -1593,8 +1621,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       // oven-only stores (no generator asset).
       const storeForAdd=g?.loc||userStore||"";
       const storeHasGenAsset=(generators||[]).some(x=>x.loc===storeForAdd&&x.assetType!=="oven");
-      const added=(g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0)
-        +(dieselTransfers||[]).filter(t=>isIncoming(t,storeForAdd)&&t.date===entryDate&&t.confirmed).reduce((s,t)=>s+(t.litres||0),0);   // accepted diesel from another store counts like a delivery
+      const added=((g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0))
+        +(dieselTransfers||[]).filter(t=>isIncoming(t,storeForAdd)&&t.date===entryDate&&t.confirmed&&transferTankOf(t,generators)===selGen).reduce((s,t)=>s+(t.litres||0),0);   // accepted diesel from another store, on the tank it went into
       const isOven=g?.assetType==="oven";
       // Hours of grid power: from the on/off log when the store used it that day.
       const pwSave=powerReady?powerOnDay(powerPeriods,g?.loc||userStore||"",entryDate):{count:0};
@@ -1805,7 +1833,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   // diesel sent from another store to this one on the entry date (accepted = counts, like a delivery)
   const dayIncoming=storeTransfersReady?(dieselTransfers||[]).filter(t=>isIncoming(t,storeForEntry)&&t.date===entryDate):[];
   const pendingIncoming=dayIncoming.filter(t=>!t.confirmed);
-  const autoAdded=distsCountHere?dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0)+dayIncoming.filter(t=>t.confirmed).reduce((s,t)=>s+(t.litres||0),0):0;
+  const tanksHere=activeTanks(storeForEntry,generators,dieselReadings);
+  const autoAdded=(distsCountHere?dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0):0)+dayIncoming.filter(t=>t.confirmed&&selectedGen&&transferTankOf(t,generators)===selectedGen.id).reduce((s,t)=>s+(t.litres||0),0);
   const pendingDists=dayDists.filter(d=>!d.confirmed);
 
 
@@ -1982,8 +2011,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
               </div>
               {dayIncoming.map(t=>(<div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 12px",borderTop:"1px solid #F0F2F5"}}>
                   <div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:"#FF832B"}}>{t.litres.toLocaleString()} L</div><div style={{fontSize:10,color:"#8D8D8D"}}>From {t.storeLoc} (moved between stores){t.notes?" - "+t.notes:""}</div></div>
-                  {t.confirmed?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted</span>
-                    :<button type="button" onClick={async()=>{try{await acceptStoreTransfer(t,user,setDieselTransfers,dieselReadings,setDieselReadings,generators);}catch(e){alert("Error: "+e.message);}}} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
+                  {t.confirmed?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted{tanksHere.length>1?" - into "+(((generators||[]).find(x=>x.id===transferTankOf(t,generators))||{}).name||"the main tank"):""}</span>
+                    :<AcceptTransferButton t={t} tanks={tanksHere} onAccept={async(tt,tank)=>{try{await acceptStoreTransfer(tt,user,setDieselTransfers,dieselReadings,setDieselReadings,generators,tank);}catch(e){alert("Error: "+e.message);}}}/>}
                 </div>))}
               {dayDists.length===0&&dayIncoming.length===0
                 ?<div style={{padding:"10px 12px",fontSize:11,color:"#8D8D8D",borderTop:"1px solid #E8ECF1"}}>No admin delivery recorded for this date. Diesel you receive from admin is added here automatically once you accept it.</div>
@@ -1998,7 +2027,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                       :<button type="button" onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));await applyAcceptToReading(d,dieselReadings,setDieselReadings,generators);}catch(e){alert("Error: "+e.message);}}} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
                   </div>);})}
               {!distsCountHere&&dayDists.length>0&&<div style={{padding:"8px 12px",background:"#F4F4F4",borderTop:"1px solid #E8ECF1",fontSize:11,color:"#525252"}}>Deliveries go into the main tank and are counted on the <b>generator's</b> reading — this oven records 0 added.</div>}
-              {distsCountHere&&pendingIncoming.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingIncoming.reduce((s,t)=>s+(t.litres||0),0).toLocaleString()} L sent from another store but not yet accepted - tap <b>Accept</b> to include it in today's reading.</div>}
+              {pendingIncoming.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingIncoming.reduce((s,t)=>s+(t.litres||0),0).toLocaleString()} L sent from another store but not yet accepted - tap <b>Accept</b> to include it in today's reading.</div>}
               {distsCountHere&&pendingDists.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingDists.reduce((s,d)=>s+(d.litres||0),0).toLocaleString()} L delivered but not yet accepted — tap <b>Accept</b> to include it in today's reading.</div>}
             </div>
             {dieselLevel&&selectedGen.tank>0&&(()=>{
@@ -2061,7 +2090,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     {pageTab==="nepa"&&<NepaPeriodSection user={user} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} locations={locations} appSettings={appSettings} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady}/>}
 
     {/* Transfer Diesel Tab */}
-    {pageTab==="transfer"&&<TransferSection storeTransfersReady={storeTransfersReady} onAccept={t=>acceptStoreTransfer(t,user,setDieselTransfers,dieselReadings,setDieselReadings,generators).catch(e=>alert("Error: "+e.message))} user={user} generators={generators} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} locations={locations} appSettings={appSettings} dieselLocks={dieselLocks}/>}
+    {pageTab==="transfer"&&<TransferSection storeTransfersReady={storeTransfersReady} tanksFor={st=>activeTanks(st,generators,dieselReadings)} onAccept={(t,tank)=>acceptStoreTransfer(t,user,setDieselTransfers,dieselReadings,setDieselReadings,generators,tank).catch(e=>alert("Error: "+e.message))} user={user} generators={generators} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} locations={locations} appSettings={appSettings} dieselLocks={dieselLocks}/>}
   </div>);
 }
 
@@ -2070,7 +2099,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 // Tracks diesel moved OUT of a store tank/generator into a vehicle or
 // the bakery oven, so it stops being counted as generator consumption.
 // ============================================
-function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTransfers,locations,appSettings,dieselLocks,storeTransfersReady,onAccept}){
+function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTransfers,locations,appSettings,dieselLocks,storeTransfersReady,onAccept,tanksFor}){
   const isStoreStaff=user?.role==="Store Staff";
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
   const userStore=user?.store_location||"";
@@ -2156,7 +2185,7 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
         <td style={{...tc,whiteSpace:"nowrap"}}>{t.date}</td>
         <td style={tc}>{t.storeLoc}</td>
         <td style={tc}>{t.sourceGenId?genName(t.sourceGenId):"Store tank"}</td>
-        <td style={{...tc,fontWeight:600}}>{t.destType==="store"&&<div style={{fontSize:10,fontWeight:700,marginBottom:2,color:t.confirmed?"#24A148":"#B45309",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>{t.confirmed?"Accepted by "+t.destStore:isStoreStaff&&isIncoming(t,userStore)?"Sent to you by "+t.storeLoc+" - waiting for you to accept":"Waiting for "+t.destStore+" to accept"}{!t.confirmed&&isStoreStaff&&isIncoming(t,userStore)&&onAccept&&<button onClick={()=>onAccept(t)} style={{padding:"3px 10px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:10,fontWeight:700,cursor:"pointer"}}>Accept</button>}</div>}<span style={{display:"inline-flex",alignItems:"center",gap:6}}>{t.destLabel||genName(t.destId)||"-"}<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:t.destType==="vehicle"?"#D0E2FF":t.destType==="oven"?"#EDE7F6":"#F4F4F4",color:t.destType==="vehicle"?P:t.destType==="oven"?"#8B5CF6":"#525252"}}>{(t.destType||"other").toUpperCase()}</span></span></td>
+        <td style={{...tc,fontWeight:600}}>{t.destType==="store"&&<div style={{fontSize:10,fontWeight:700,marginBottom:2,color:t.confirmed?"#24A148":"#B45309",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>{t.confirmed?"Accepted by "+t.destStore+(tanksFor&&tanksFor(t.destStore).length>1?" (into "+(genName(transferTankOf(t,generators))||"main tank")+")":""):isStoreStaff&&isIncoming(t,userStore)?"Sent to you by "+t.storeLoc+" - waiting for you to accept":"Waiting for "+t.destStore+" to accept"}{!t.confirmed&&isStoreStaff&&isIncoming(t,userStore)&&onAccept&&<AcceptTransferButton small t={t} tanks={tanksFor?tanksFor(t.destStore):[]} onAccept={onAccept}/>}</div>}<span style={{display:"inline-flex",alignItems:"center",gap:6}}>{t.destLabel||genName(t.destId)||"-"}<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:t.destType==="vehicle"?"#D0E2FF":t.destType==="oven"?"#EDE7F6":"#F4F4F4",color:t.destType==="vehicle"?P:t.destType==="oven"?"#8B5CF6":"#525252"}}>{(t.destType||"other").toUpperCase()}</span></span></td>
         <td style={{...tc,fontWeight:700,color:"#FF832B"}}>{t.litres.toLocaleString()} L</td>
         <td style={{...tc,fontSize:11,color:"#8D8D8D",maxWidth:180}}>{t.notes||""}</td>
         <td style={tc}>{isAdmin&&<button onClick={()=>handleDelete(t.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button>}</td>
@@ -2550,8 +2579,8 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   // Recent deliveries the store hasn't accepted yet — surfaced as a top-of-page
   // alert so staff know diesel arrived (independent of the tab/date filter).
   // Scoped to the last 30 days so old un-accepted imports don't spam the banner.
-  const acceptDelivery=async(d)=>{
-    if(d.isTransfer){try{await acceptStoreTransfer(d,user,setDieselTransfers,dieselReadings,setDieselReadings,generators);}catch(e){alert("Error: "+e.message);}return;}
+  const acceptDelivery=async(d,tank)=>{
+    if(d.isTransfer){try{await acceptStoreTransfer(d,user,setDieselTransfers,dieselReadings,setDieselReadings,generators,tank);}catch(e){alert("Error: "+e.message);}return;}
     try{
       const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});
       setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));
@@ -2583,7 +2612,8 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
               <div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L <span style={{fontWeight:500,color:"#8D8D8D",fontSize:11}}>· {d.date}</span></div>
               <div style={{fontSize:10,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.isTransfer?"From "+d.storeLoc+" (moved between stores)":p?p.supplier:"Admin delivery"}{d.notes?" \u2014 "+d.notes:""}</div>
             </div>
-            <button onClick={()=>acceptDelivery(d)} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>
+            {d.isTransfer?<AcceptTransferButton t={d} tanks={activeTanks(d.destStore,generators,dieselReadings)} onAccept={(tt,tank)=>acceptDelivery(tt,tank)}/>
+              :<button onClick={()=>acceptDelivery(d)} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
           </div>);})}
           {pendingRecent.length>6&&<div style={{padding:"8px 16px",borderTop:"1px solid #D0E2FF",fontSize:11,color:"#525252"}}>+{pendingRecent.length-6} more in the Supply tab below</div>}
         </div>
@@ -3313,7 +3343,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={{...tc,whiteSpace:"nowrap"}}>{t.date}</td>
             <td style={{...tc,fontWeight:600}}>{t.storeLoc}</td>
             <td style={tc}>{t.sourceGenId?nameOf(t.sourceGenId):"Store tank"}</td>
-            <td style={tc}>{t.destType==="store"&&<div style={{fontSize:10,fontWeight:700,marginBottom:2,color:t.confirmed?"#24A148":"#B45309"}}>{t.confirmed?"Accepted by "+t.destStore+(t.receivedDate?" on "+t.receivedDate:""):"Waiting for "+t.destStore+" to accept"}</div>}<span style={{display:"inline-flex",alignItems:"center",gap:6}}>{t.destLabel||nameOf(t.destId)||"-"}<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:t.destType==="vehicle"?"#D0E2FF":t.destType==="oven"?"#EDE7F6":"#F4F4F4",color:t.destType==="vehicle"?P:t.destType==="oven"?"#8B5CF6":"#525252"}}>{(t.destType||"other").toUpperCase()}</span></span></td>
+            <td style={tc}>{t.destType==="store"&&<div style={{fontSize:10,fontWeight:700,marginBottom:2,color:t.confirmed?"#24A148":"#B45309"}}>{t.confirmed?"Accepted by "+t.destStore+(t.receivedDate?" on "+t.receivedDate:"")+(activeTanks(t.destStore,generators,dieselReadings).length>1?" - into "+nameOf(transferTankOf(t,generators)):""):"Waiting for "+t.destStore+" to accept"}</div>}<span style={{display:"inline-flex",alignItems:"center",gap:6}}>{t.destLabel||nameOf(t.destId)||"-"}<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:t.destType==="vehicle"?"#D0E2FF":t.destType==="oven"?"#EDE7F6":"#F4F4F4",color:t.destType==="vehicle"?P:t.destType==="oven"?"#8B5CF6":"#525252"}}>{(t.destType||"other").toUpperCase()}</span></span></td>
             <td style={{...tc,fontWeight:700,color:"#FF832B"}}>{t.litres.toLocaleString()} L</td>
             <td style={{...tc,fontSize:11,color:"#8D8D8D",maxWidth:200}}>{t.notes||""}</td>
             <td style={tc}>{canManage&&<button onClick={async()=>{if(!confirm("Delete this transfer?"))return;try{await db.deleteDieselTransfer(t.id);setDieselTransfers(prev=>prev.filter(x=>x.id!==t.id));}catch(e){alert("Error: "+e.message);}}} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button>}</td>
