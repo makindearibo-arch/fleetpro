@@ -319,4 +319,9 @@ export const db = {
   async getTankerLoads() { return fetchAll('tanker_loads', 'date', true); },
   async addTankerLoad(l) { return insertRow('tanker_loads', l); },
   async deleteTankerLoad(id) { return deleteRow('tanker_loads', id); },
+
+  // Accepted diesel losses (Super Admin only -- the database enforces it).
+  async getDieselLosses() { return fetchAll('diesel_losses', 'date', true); },
+  async addDieselLoss(l) { return insertRow('diesel_losses', l); },
+  async deleteDieselLoss(id) { return deleteRow('diesel_losses', id); },
 };
