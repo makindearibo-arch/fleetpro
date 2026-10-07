@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
-import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, ChevronDown, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Flame, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin, Paperclip, Upload } from "lucide-react";
+import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, ChevronDown, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, Lock, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Flame, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin, Paperclip, Upload } from "lucide-react";
 import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
 import LiveMapPage from "./LiveMapPage.jsx";
@@ -83,21 +83,40 @@ function AcceptTransferButton({t,tanks,onAccept,small}){
       <button type="button" onClick={()=>setOpen(false)} style={{...b,background:"#fff",color:"#8D8D8D",border:"1.5px solid #E0E0E0"}}>Cancel</button></div>
   </div>);
 }
-async function applyAcceptToReading(dist,dieselReadings,setDieselReadings,generators,targetGenId){
+// A store's saved reading counts the deliveries it ACCEPTED (diesel_added). When
+// that changes -- the store accepts one after saving, or a manager later corrects
+// or deletes an accepted delivery -- shift that day's reading by the difference
+// (2026-10-07). Before this, only accepting did: Akure 6's 30 Sep delivery was
+// corrected 1,000 -> 580 L but its reading still said 1,000 L received.
+// Generators: the stored gap moves the other way and the flag is re-judged with
+// handleSave's rule (over 20% of the expected burn AND at least 25 L). Ovens:
+// what was used = tank drop + added, so it moves with it (L/batch too).
+async function shiftReadingAdded({storeLoc,date,delta,targetGenId},dieselReadings,setDieselReadings,generators){
+  if(!delta)return null;
   try{
-    const rs=(dieselReadings||[]).filter(r=>r.storeLoc===dist.storeLoc&&r.date===dist.date);
-    if(!rs.length)return;
-    // a store transfer goes on the reading of the tank it went into (none that day: nothing to back-fill)
-    const target=targetGenId?rs.find(r=>r.generatorId===targetGenId):(rs.find(r=>((generators||[]).find(g=>g.id===r.generatorId)?.assetType)!=="oven")||rs[0]);
-    if(!target)return;
-    const newAdded=(target.dieselAdded||0)+(dist.litres||0);
-    const theo=target.consumptionLitres;
-    let disc=target.discrepancyLitres!=null?target.discrepancyLitres-(dist.litres||0):null;
-    let flag=target.discrepancyFlag||false;
-    if(disc!=null&&theo!=null&&theo>0)flag=(Math.abs(disc)/theo*100>20)&&theo>=25;
-    const row=await db.updateDieselReading(target.id,{diesel_added:newAdded,discrepancy_litres:disc!=null?Math.round(disc):null,discrepancy_flag:!!flag});
+    const rs=(dieselReadings||[]).filter(r=>r.storeLoc===storeLoc&&r.date===date);
+    if(!rs.length)return null;
+    const isOven=r=>((generators||[]).find(g=>g.id===r.generatorId)?.assetType)==="oven";
+    // a store transfer goes on the reading of the tank it went into (none that day: nothing to back-fill);
+    // an admin delivery goes on the generator's
+    const target=targetGenId?rs.find(r=>r.generatorId===targetGenId):(rs.find(r=>!isOven(r))||rs[0]);
+    if(!target)return null;
+    const oldAdded=target.dieselAdded||0;const newAdded=Math.max(0,oldAdded+delta);const d=newAdded-oldAdded;
+    if(!d)return null;
+    const body={diesel_added:newAdded};
+    if(isOven(target)){
+      if(target.consumptionLitres!=null){const c=Math.max(0,Math.round(target.consumptionLitres+d));body.consumption_litres=c;if(target.batchesProduced>0)body.consumption_rate=Math.round(c/target.batchesProduced*100)/100;}
+    }else if(target.discrepancyLitres!=null){
+      const disc=Math.round(target.discrepancyLitres-d);const theo=target.consumptionLitres;
+      body.discrepancy_litres=disc;body.discrepancy_flag=!!(theo>0&&Math.abs(disc)/theo*100>20&&Math.abs(disc)>=25);
+    }
+    const row=await db.updateDieselReading(target.id,body);
     if(row&&setDieselReadings)setDieselReadings(prev=>prev.map(r=>r.id===target.id?toDR(row):r));
-  }catch(e){console.error("applyAcceptToReading:",e);}
+    return row;
+  }catch(e){console.error("shiftReadingAdded:",e);return null;}
+}
+async function applyAcceptToReading(dist,dieselReadings,setDieselReadings,generators,targetGenId){
+  return shiftReadingAdded({storeLoc:dist.storeLoc,date:dist.date,delta:dist.litres||0,targetGenId},dieselReadings,setDieselReadings,generators);
 }
 // Vehicle groups. The canonical list lives in app_settings.vehicle_groups
 // (jsonb array) so it needs no migration; these are the seed defaults, merged
@@ -297,6 +316,67 @@ const depotLedger=({checks,loads,purchases,deliveries,losses,today})=>{
   const mainVar=lastMain?outstanding(lastMain.mainDiff,since("lostMain",lastMain.date,true)):null;
   const tankerVar=lastTanker?outstanding(lastTanker.tankerDiff,since("lostTanker",lastTanker.date,false)):null;
   return{start,days,mainNow:last?last.mainEnd:null,tankerNow:last?last.tankerEnd:null,lastMain,lastTanker,mainVar,tankerVar};
+};
+// COUNTED DAYS ARE LOCKED (2026-10-07, Makinde): once a count is recorded,
+// anything that would change the figure it was checked against can only be
+// changed by the Super Admin. Same rule as the database (fp_guard_stock_lock,
+// 20261013_stock_lock.sql) -- this copy only hides buttons and explains. The main
+// tank is counted in the MORNING, so it covers main-tank purchases and tanker
+// loadings dated BEFORE its day; a tanker check is the END of its day, so it
+// covers loadings and tanker deliveries up to and including it; deliveries from
+// before tracking started (the first main count) set the opening stock. Straight-
+// to-store purchases and deliveries never touch either tank and stay open.
+const stockLock=(checks)=>{
+  const ds=t=>(checks||[]).filter(c=>c.tank===t).map(c=>c.date).sort();
+  const m=ds("main"),k=ds("tanker");
+  const first=m[0]||null,lastMain=m[m.length-1]||null,lastTank=k[k.length-1]||null;
+  return{first,lastMain,lastTank,
+    purchase:p=>!!(p&&p.destination!=="direct"&&lastMain&&p.date<lastMain),
+    delivery:d=>!!(d&&d.source!=="direct"&&((first&&d.date<first)||(lastTank&&d.date<=lastTank))),
+    load:l=>!!(l&&((lastMain&&l.date<lastMain)||(lastTank&&l.date<=lastTank))),
+    why:"Locked - this stock has already been counted. Only the Super Admin can change it."};
+};
+// The change history (audit_log, Super Admin only) turned into "changed after the
+// count": every add / change / delete made AFTER a count was recorded to a record
+// that count depends on (same coverage as stockLock). Acceptance, notes, prices
+// and photos change no litres and are left out. Newest first.
+const STOCK_AUDIT_TABLES=["diesel_distributions","diesel_purchases","tanker_loads","diesel_stock_checks"];
+const changesAfterCounts=(audit,checks)=>{
+  const mains=(checks||[]).filter(c=>c.tank==="main"),tanks=(checks||[]).filter(c=>c.tank==="tanker");
+  const first=mains.map(c=>c.date).sort()[0];
+  if(!first)return[];
+  const KEYS={diesel_distributions:["date","litres","source","store_location","purchase_id"],diesel_purchases:["date","litres","litres_received","destination"],tanker_loads:["date","litres","kind"],diesel_stock_checks:["date","litres","tank"]};
+  const Lt=v=>v==null?"?":Math.round(Number(v)).toLocaleString()+" L";
+  const day=d=>d?fmtDayLabel(d):"?";
+  const rec=x=>x.litres_received??x.litres;
+  const out=[];
+  (audit||[]).forEach(a=>{
+    const t=a.table_name,o=a.old_data||null,n=a.new_data||null,keys=KEYS[t];
+    if(!keys||(!o&&!n))return;
+    if(o&&n&&keys.every(k=>String(o[k]??"")===String(n[k]??"")))return;
+    const at=new Date(a.at).getTime();const hits=new Map();
+    const hit=c=>{if(c&&new Date(c.createdAt).getTime()<at)hits.set(c.tank+"|"+c.date,c);};
+    if(t==="diesel_stock_checks"){if(!o)return;hit({tank:o.tank,date:o.date,createdAt:o.created_at});}
+    else[o,n].filter(Boolean).forEach(v=>{const d=v.date;
+      if(t==="diesel_distributions"){if(v.source==="direct")return;if(d<first)mains.forEach(hit);else tanks.filter(c=>c.date>=d).forEach(hit);}
+      else if(t==="diesel_purchases"){if(v.destination==="direct")return;mains.filter(c=>c.date>d).forEach(hit);}
+      else{mains.filter(c=>c.date>d).forEach(hit);tanks.filter(c=>c.date>=d).forEach(hit);}});
+    if(!hits.size)return;
+    const v=n||o;const ch=(k,f)=>o&&n&&String(o[k]??"")!==String(n[k]??"")?f(o[k])+" \u2192 "+f(n[k]):null;
+    let text;
+    if(t==="diesel_distributions"){const head="Delivery to "+v.store_location+" on "+day(v.date);
+      text=!o?head+" added ("+Lt(n.litres)+")":!n?head+" ("+Lt(o.litres)+") deleted":head+": "+[ch("litres",Lt),ch("date",day),ch("store_location",x=>x),ch("source",x=>x||"tanker")].filter(Boolean).join(", ");}
+    else if(t==="diesel_purchases"){const head="Purchase from "+(v.supplier||"?")+" on "+day(v.date);
+      text=!o?head+" added ("+Lt(rec(n))+")":!n?head+" ("+Lt(rec(o))+") deleted":head+": "+[rec(o)!==rec(n)?Lt(rec(o))+" \u2192 "+Lt(rec(n)):null,ch("date",day),ch("destination",x=>x==="direct"?"straight to stores":"main tank")].filter(Boolean).join(", ");}
+    else if(t==="tanker_loads"){const head=(v.kind==="return"?"Poured back into the main tank":"Tanker loading")+" on "+day(v.date);
+      text=!o?head+" added ("+Lt(n.litres)+")":!n?head+" ("+Lt(o.litres)+") deleted":head+": "+[ch("litres",Lt),ch("date",day)].filter(Boolean).join(", ");}
+    else{const head=(o.tank==="main"?"Main tank count":"Tanker check")+" for "+day(o.date);
+      text=!n?head+" ("+Lt(o.litres)+") deleted":head+": "+[ch("litres",Lt),ch("date",day)].filter(Boolean).join(", ");}
+    const note=n&&n.notes&&/\[\d{4}-\d\d-\d\d/.test(n.notes)&&n.notes!==(o&&o.notes)?n.notes:"";
+    out.push({at:a.at,who:a.user_name||(a.user_role==="backend"?"Database fix (no login)":"Unknown"),role:a.user_role,text,note,
+      counts:[...hits.values()].sort((x,y)=>x.date.localeCompare(y.date)||x.tank.localeCompare(y.tank))});
+  });
+  return out.sort((x,y)=>String(y.at).localeCompare(String(x.at)));
 };
 // Each purchase's litres: received - delivered - accepted losses = left on the
 // books. A shortfall found by the LATEST main-tank count and the LATEST tanker
@@ -2931,13 +3011,22 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
 // ============================================
 // DAILY STOCK TAB (Diesel Management, fleet admins) -- main tank, tanker, stores
 // ============================================
-function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purchases,deliveries,readings,transfers,generators,baselines,locations,canManage}){
+function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purchases,deliveries,readings,transfers,generators,baselines,locations,canManage,isSuper}){
   const todayStr=ngDate(Date.now());
   const yesterdayStr=ngDate(Date.now()-864e5);
   const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
   const btn=(bg,fg,border)=>({padding:"8px 14px",borderRadius:9,border:border||"none",background:bg,color:fg||"#fff",fontSize:12,fontWeight:600,cursor:"pointer"});
   const L=v=>v==null?"-":Math.round(v).toLocaleString()+" L";
   const ledger=depotLedger({checks,loads,purchases,deliveries,losses,today:todayStr});
+  const lock=stockLock(checks);
+  // changes made after a count to what it covers (Super Admin: the change history)
+  const [audit,setAudit]=useState([]);
+  useEffect(()=>{if(!isSuper||!ledger.start)return;let live=true;
+    db.getStockAudit(ledger.start+"T00:00:00+01:00").then(r=>{if(live)setAudit(r);}).catch(e=>console.warn("Stock change history:",e?.message));
+    return()=>{live=false;};},[isSuper,ledger.start,checks,loads,purchases,deliveries]);
+  const afterCount=useMemo(()=>changesAfterCounts(audit,checks),[audit,checks]);
+  const changedCount=(tank,date)=>afterCount.filter(c=>c.counts.some(k=>k.tank===tank&&k.date===date)).length;
+  const countLabel=k=>(k.tank==="main"?"main tank count of ":"tanker check of ")+fmtDayLabel(k.date);
   const [modal,setModal]=useState(null);   // {kind:"main"|"tanker"|"load", date, litres, sub, notes, photo, preview}
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState("");
@@ -3062,14 +3151,14 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
           <td style={tc}>{into?L(into):"-"}{r.returned?<div style={{fontSize:10,color:"#8D8D8D"}}>{L(r.returned)} poured back</div>:null}</td>
           {anyLoss&&<td style={{...tc,color:"#B45309"}}>{r.lostMain?L(r.lostMain):"-"}</td>}
           <td style={{...tc,fontWeight:700}}>{L(r.mainEnd)}</td>
-          <td style={tc}>{r.mainCheck?<b>{L(r.mainCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not counted</span>}{r.mainCheck?.photoUrl&&<a href={r.mainCheck.photoUrl} target="_blank" rel="noreferrer" style={{marginLeft:6,fontSize:11,color:P}}>photo</a>}</td>
+          <td style={tc}>{r.mainCheck?<b>{L(r.mainCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not counted</span>}{r.mainCheck?.photoUrl&&<a href={r.mainCheck.photoUrl} target="_blank" rel="noreferrer" style={{marginLeft:6,fontSize:11,color:P}}>photo</a>}{r.mainCheck&&changedCount("main",r.date)>0&&<div style={{fontSize:10,fontWeight:700,color:"#B45309",whiteSpace:"nowrap"}}>changed after count</div>}</td>
           <td style={tc}>{r.mainCheck?pill(diffWord(r.mainDiff,MAIN_TOL_L)):<span style={{color:"#A8A8A8"}}>-</span>}</td>
           <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{L(r.tankerOpen)}</td>
           <td style={tc}>{into?L(into):"-"}</td>
           <td style={tc}>{r.delivered?L(r.delivered):"-"}</td>
           {anyLoss&&<td style={{...tc,color:"#B45309"}}>{r.lostTanker?L(r.lostTanker):"-"}</td>}
           <td style={{...tc,fontWeight:700,color:r.tankerEnd<0?"#DA1E28":"#161616"}}>{L(r.tankerEnd)}</td>
-          <td style={tc}>{r.tankerCheck?<b>{L(r.tankerCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not checked</span>}</td>
+          <td style={tc}>{r.tankerCheck?<b>{L(r.tankerCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not checked</span>}{r.tankerCheck&&changedCount("tanker",r.date)>0&&<div style={{fontSize:10,fontWeight:700,color:"#B45309",whiteSpace:"nowrap"}}>changed after count</div>}</td>
           <td style={tc}>{r.tankerCheck?pill(diffWord(r.tankerDiff,TANKER_TOL_L)):<span style={{color:"#A8A8A8"}}>-</span>}</td>
         </tr>);})}</tbody>
         {sheetRows.length>1&&<tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}>
@@ -3082,12 +3171,22 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
       </table></div>
       {sheetRows.length===0&&<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No days in this range. Tracking started {fmtDayLabel(ledger.start)}.</div>}
       <div style={{fontSize:11,color:"#8D8D8D",marginTop:8}}>Opening and closing are the books: diesel bought into the main tank minus what has been delivered, so each closing is the next day's opening. "Counted" is the gauge reading (main tank, morning) or the tanker check (end of day); the variance is counted minus the books. A shortfall stays until the count is corrected or the Super Admin accepts the loss. The whole-period variance is the latest count in the period.</div>
+      <div style={{fontSize:11,color:"#525252",marginTop:6,display:"flex",gap:5,alignItems:"flex-start"}}><Lock size={12} style={{flexShrink:0,marginTop:1}}/><span>Counted days are locked: once a count is recorded, only the Super Admin can change it, or the purchases, tanker loadings and deliveries it already covers. Record the day's purchases, loadings and deliveries before the next count.</span></div>
+      {isSuper&&afterCount.length>0&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082"}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#7A4F00"}}>Changed after the count ({afterCount.length})</div>
+        <div style={{fontSize:11,color:"#7A4F00",marginBottom:6}}>These records were added, changed or deleted after a count that depends on them had been recorded, so they moved the books for a day that was already counted. From the change history - only you see this.</div>
+        {afterCount.slice(0,30).map((c,i)=>(<div key={i} style={{fontSize:12,padding:"6px 0",borderTop:"1px solid #FFE082"}}>
+          <b>{c.text}</b>
+          <div style={{fontSize:11,color:"#525252"}}>{fmtDayLabel(ngDate(c.at))} {fmtClock(c.at)} - {c.who}{c.role&&c.role!=="backend"?" ("+c.role+")":""} - affects the {c.counts.map(countLabel).join(", ")}</div>
+          {c.note&&<div style={{fontSize:11,color:"#8D8D8D"}}>{c.note}</div>}
+        </div>))}
+      </div>}
       {ledger.tankerNow<0&&<div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12}}>The tanker shows less than nothing: more was delivered to stores than was recorded as loaded. A loading is probably missing.</div>}
       </>}
       {recent.length>0&&<details style={{marginTop:12}}><summary style={{fontSize:12,fontWeight:600,color:"#525252",cursor:"pointer"}}>Recent entries ({recent.length})</summary>
         <div style={{marginTop:8}}>{recent.map(({k,x})=>(<div key={k+x.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #F4F4F4",fontSize:12}}>
           <div><b>{fmtDayLabel(x.date)}</b> - {k==="load"?(x.kind==="return"?"poured back into main tank":"loaded into tanker"):(x.tank==="main"?"main tank read":"tanker checked")}: {x.litres.toLocaleString()} L{x.notes?<span style={{color:"#8D8D8D"}}> ({x.notes})</span>:null}</div>
-          {canManage&&<button onClick={()=>delEntry(k==="load"?"load":"check",x)} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>}
+          {canManage&&(isSuper||(k==="load"&&!lock.load(x))?<button onClick={()=>delEntry(k==="load"?"load":"check",x)} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>:<span title={lock.why} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:"#8D8D8D"}}><Lock size={11}/>Counted</span>)}
         </div>))}</div></details>}
     </div>
     </>}
@@ -3131,13 +3230,14 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
       <Field label="Date"><input type="date" style={inp} value={modal.date} max={todayStr} onChange={e=>setDate(e.target.value)}/></Field>
       {modal.kind==="load"&&<Field label="What happened"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{[["load","Loaded from the main tank into the tanker"],["return","Poured back from the tanker into the main tank"]].map(([v,t])=>(<button key={v} onClick={()=>setModal({...modal,sub:v})} style={btn(modal.sub===v?"#D0E2FF":"#fff",modal.sub===v?P:"#525252","1.5px solid "+(modal.sub===v?P:"#E0E0E0"))}>{t}</button>))}</div></Field>}
       <Field label={modal.kind==="main"?"Litres on the gauge (morning, before loading)":modal.kind==="tanker"?"Litres left in the tanker (end of the day, after deliveries)":"Litres"}>
-        <div style={{display:"flex",gap:8}}><input type="number" step="1" min="0" style={{...inp,fontSize:18,fontWeight:700}} value={modal.litres} onChange={e=>setModal({...modal,litres:e.target.value})} placeholder="e.g. 21400"/>
+        <div style={{display:"flex",gap:8}}><input type="number" step="1" min="0" disabled={!!modal.existingId&&!isSuper} style={{...inp,fontSize:18,fontWeight:700}} value={modal.litres} onChange={e=>setModal({...modal,litres:e.target.value})} placeholder="e.g. 21400"/>
         {modal.kind==="tanker"&&<button onClick={()=>setModal({...modal,litres:"0"})} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Empty</button>}</div>
       </Field>
       {modal.kind!=="load"&&(()=>{const exp=expectedFor(modal.kind,modal.date);const v=parseFloat(modal.litres);const diff=(exp!=null&&!isNaN(v))?Math.round(v-exp):null;
         return exp!=null?<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Should be about <b>{L(exp)}</b>{diff!=null&&<> - {pill(diffWord(diff,modal.kind==="main"?MAIN_TOL_L:TANKER_TOL_L))}</>}</div>
           :<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>{modal.kind==="main"?"This is the first reading - tracking starts from it.":"No expected figure yet."}</div>;})()}
-      {modal.existingId&&<div style={{fontSize:12,color:"#0043CE",marginBottom:10}}>Already recorded for this date - saving will change it.</div>}
+      {modal.existingId&&(isSuper?<div style={{fontSize:12,color:"#0043CE",marginBottom:10}}>Already recorded for this date - saving will change it.</div>
+        :<div style={{fontSize:12,color:"#525252",marginBottom:10,display:"flex",gap:5,alignItems:"flex-start"}}><Lock size={12} style={{flexShrink:0,marginTop:1}}/><span>Already counted for this date. Only the Super Admin can change the litres - you can still add a photo or a note.</span></div>)}
       {modal.kind!=="load"&&<Field label="Photo of the gauge (optional)">
         {modal.preview?<div style={{position:"relative"}}><img src={modal.preview} style={{width:"100%",maxHeight:180,objectFit:"cover",borderRadius:10}}/><button onClick={()=>setModal({...modal,preview:"",photo:null})} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer"}}><X size={12} color="#fff"/></button></div>
         :<input type="file" accept="image/*" capture="environment" onChange={e=>{const f=e.target.files?.[0];if(!f)return;const rd=new FileReader();rd.onload=ev=>setModal(m=>({...m,photo:f,preview:ev.target.result}));rd.readAsDataURL(f);}}/>}
@@ -3150,13 +3250,16 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
 }
 
 // ============================================
-function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs,stockChecks,setStockChecks,tankerLoads,setTankerLoads,depotReady,routesReady,losses,setLosses,lossesReady}){
+function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,setDieselReadings,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs,stockChecks,setStockChecks,tankerLoads,setTankerLoads,depotReady,routesReady,losses,setLosses,lossesReady}){
   // Store-staff scope: filter everything to their own store. Admin/Fleet Manager see all.
   const isStaff=user?.role==="Store Staff";
   // Purchase/delivery edits are a manager's job. Before 2026-10-05 the row buttons
   // had no role check (Viewers could delete purchases, staff could shrink their own
   // deliveries); the database now refuses those too (20261005_access_rules.sql).
   const canManage=user?.role==="Super Admin"||user?.role==="Fleet Manager";
+  // counted days: only the Super Admin changes what a count already covers (stockLock)
+  const lock=stockLock(stockChecks);const superUser=user?.role==="Super Admin";
+  const lockTag=<span title={lock.why} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:"#8D8D8D",whiteSpace:"nowrap"}}><Lock size={11}/>Counted</span>;
   const scopeStore=isStaff?(user?.store_location||""):null;
   const generators=scopeStore?(_gens||[]).filter(g=>g.loc===scopeStore):_gens;
   const dieselReadings=scopeStore?_dr.filter(r=>r.storeLoc===scopeStore):_dr;
@@ -3311,14 +3414,26 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     if(!confirm("Delete this purchase?"))return;
     try{await db.deleteDieselPurchase(id);setDieselPurchases(dieselPurchases.filter(p=>p.id!==id));}catch(e){alert("Error: "+e.message);}
   };
+  // Fix 2: a delivery the store already ACCEPTED is in its reading for that day
+  // (diesel_added) -- deleting or correcting it moves that reading too.
   const handleDeleteDistribution=async(id)=>{
-    if(!confirm("Delete this distribution?"))return;
-    try{await db.deleteDieselDistribution(id);setDieselDistributions(dieselDistributions.filter(d=>d.id!==id));}catch(e){alert("Error: "+e.message);}
+    const d=dieselDistributions.find(x=>x.id===id);
+    if(!confirm("Delete this distribution?"+(d&&d.confirmed?"\n\n"+d.storeLoc+" already accepted it - their reading for "+fmtDayLabel(d.date)+" will be reduced by "+(d.litres||0).toLocaleString()+" L.":"")))return;
+    try{await db.deleteDieselDistribution(id);setDieselDistributions(dieselDistributions.filter(x=>x.id!==id));
+      if(d&&d.confirmed)await shiftReadingAdded({storeLoc:d.storeLoc,date:d.date,delta:-(d.litres||0)},_dr,setDieselReadings,_gens);
+    }catch(e){alert("Error: "+e.message);}
   };
   const handleEditDistribution=async()=>{
     if(!editDist)return;setSaving(true);setMsg("");
+    const before=dieselDistributions.find(x=>x.id===editDist.id);
     try{const row=await db.updateDieselDistribution(editDist.id,{date:editDist.date,store_location:editDist.storeLoc,litres:parseFloat(editDist.litres),notes:editDist.notes||""});
-    setDieselDistributions(dieselDistributions.map(d=>d.id===editDist.id?toDD(row):d));setEditDist(null);setMsg("Distribution updated!");setTimeout(()=>setMsg(""),3000);
+    const after=toDD(row);
+    setDieselDistributions(dieselDistributions.map(d=>d.id===editDist.id?after:d));setEditDist(null);setMsg("Distribution updated!");setTimeout(()=>setMsg(""),3000);
+    if(before&&before.confirmed){
+      if(before.storeLoc===after.storeLoc&&before.date===after.date)await shiftReadingAdded({storeLoc:after.storeLoc,date:after.date,delta:(after.litres||0)-(before.litres||0)},_dr,setDieselReadings,_gens);
+      else{await shiftReadingAdded({storeLoc:before.storeLoc,date:before.date,delta:-(before.litres||0)},_dr,setDieselReadings,_gens);
+        await shiftReadingAdded({storeLoc:after.storeLoc,date:after.date,delta:after.litres||0},_dr,setDieselReadings,_gens);}
+    }
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
   const tabs=scopeStore?["readings","compliance","transfers","distributions","stores","baselines","discrepancies"]:["overview","daily stock","watchtower","readings","compliance","transfers","purchases","distributions","stores","baselines","discrepancies"];
@@ -3420,7 +3535,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         :dieselDistributions.slice(0,8).map(d=>(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #F4F4F4"}}><div><div style={{fontSize:13,fontWeight:600}}>{d.storeLoc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{d.date}{d.notes?" - "+d.notes:""}</div></div><div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</div></div>))}
       </div>
     </div>)}
-    {tab==="daily stock"&&!scopeStore&&<DailyStockTab checks={stockChecks||[]} setChecks={setStockChecks} loads={tankerLoads||[]} setLoads={setTankerLoads} losses={losses||[]} depotReady={depotReady} purchases={dieselPurchases} deliveries={dieselDistributions} readings={dieselReadings} transfers={dieselTransfers} generators={generators} baselines={genBaselines} locations={locations} canManage={canManage}/>}
+    {tab==="daily stock"&&!scopeStore&&<DailyStockTab checks={stockChecks||[]} setChecks={setStockChecks} loads={tankerLoads||[]} setLoads={setTankerLoads} losses={losses||[]} depotReady={depotReady} purchases={dieselPurchases} deliveries={dieselDistributions} readings={dieselReadings} transfers={dieselTransfers} generators={generators} baselines={genBaselines} locations={locations} canManage={canManage} isSuper={superUser}/>}
     {tab==="watchtower"&&!scopeStore&&(()=>{
       const today30=new Date(Date.now()-30*864e5).toISOString().split("T")[0];
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
@@ -3594,8 +3709,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     })()}
     {tab==="purchases"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:880}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Paid (L)","Received (L)","Excess","Price/L","Total Cost","Distributed","Remaining",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>{dieselPurchases.length===0?<tr><td colSpan={10} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No purchases recorded yet</td></tr>:dieselPurchases.map(p=>{const adj=isAdj(p);const dist=purchaseDistributed(p.id);const recv=receivedOf(p);const rem=recv-dist;const exc=recv-p.litres;
       if(adj)return(<tr key={p.id} style={{background:"#FFF8F0"}}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}><span style={{display:"inline-flex",alignItems:"center",gap:6}}>Stock reconciliation<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:"#FFE8D6",color:"#FF832B"}}>ADJUSTMENT</span></span></td><td style={{...tc,color:"#8D8D8D"}} colSpan={4}>{p.notes||"Physical stock take baseline"}</td><td style={tc}>—</td><td style={{...tc,fontWeight:600,color:p.litres>=0?"#24A148":"#DA1E28"}}>{p.litres>=0?"+":""}{p.litres.toLocaleString()} L</td><td style={tc}>—</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}} title="Stock reconciliations are permanent. To correct one, record a new stock take.">permanent</td></tr>);
-      return(<tr key={p.id}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}{isDirect(p)&&<div style={{fontSize:10,fontWeight:600,color:"#FF832B"}}>straight to stores</div>}</td><td style={tc}>{p.litres.toLocaleString()}</td><td style={tc}>{p.litresReceived!=null?recv.toLocaleString():<span style={{color:"#8D8D8D"}}>{recv.toLocaleString()}</span>}</td><td style={tc}>{exc>0?<span style={{color:"#24A148",fontWeight:600}}>+{exc.toLocaleString()}</span>:exc<0?<span style={{color:"#DA1E28",fontWeight:600}}>{exc.toLocaleString()}</span>:"—"}</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span>{lossBadges(p)}</td><td style={tc}>{canManage&&<div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistSource(isDirect(p)?"direct":"tanker");setDistPurchaseId(p.id);setDistAuto(false);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),litresReceived:p.litresReceived!=null?String(p.litresReceived):"",pricePerL:p.pricePerL?String(p.pricePerL):""})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button><button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div>}</td></tr>);})}</tbody></table></div>)}
-    {tab==="distributions"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","Litres","Source Purchase","Notes","Status","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselDistributions.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No distributions recorded yet</td></tr>:dieselDistributions.map(d=>{const p=dieselPurchases.find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:600}}>{d.storeLoc}</td><td style={{...tc,fontWeight:600,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier+" ("+p.date+")":"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{canManage&&<div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div>}</td></tr>);})}</tbody></table></div>)}
+      return(<tr key={p.id}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}{isDirect(p)&&<div style={{fontSize:10,fontWeight:600,color:"#FF832B"}}>straight to stores</div>}</td><td style={tc}>{p.litres.toLocaleString()}</td><td style={tc}>{p.litresReceived!=null?recv.toLocaleString():<span style={{color:"#8D8D8D"}}>{recv.toLocaleString()}</span>}</td><td style={tc}>{exc>0?<span style={{color:"#24A148",fontWeight:600}}>+{exc.toLocaleString()}</span>:exc<0?<span style={{color:"#DA1E28",fontWeight:600}}>{exc.toLocaleString()}</span>:"—"}</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span>{lossBadges(p)}</td><td style={tc}>{canManage&&<div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{setDistSource(isDirect(p)?"direct":"tanker");setDistPurchaseId(p.id);setDistAuto(false);setDf({date:today,storeLoc:"",litres:String(rem),notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),litresReceived:p.litresReceived!=null?String(p.litresReceived):"",pricePerL:p.pricePerL?String(p.pricePerL):"",locked:!superUser&&lock.purchase(p)})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button>{!superUser&&lock.purchase(p)?lockTag:<button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button>}</div>}</td></tr>);})}</tbody></table></div>)}
+    {tab==="distributions"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","Litres","Source Purchase","Notes","Status","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselDistributions.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No distributions recorded yet</td></tr>:dieselDistributions.map(d=>{const p=dieselPurchases.find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:600}}>{d.storeLoc}</td><td style={{...tc,fontWeight:600,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier+" ("+p.date+")":"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{canManage&&(!superUser&&lock.delivery(d)?lockTag:<div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div>)}</td></tr>);})}</tbody></table></div>)}
     {tab==="stores"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Received (L)","Consumed (L)","Balance (L)","Distributions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{storeStats.length===0?<tr><td colSpan={5} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No store data yet</td></tr>:storeStats.map(s=>(<tr key={s.loc}><td style={{...tc,fontWeight:600}}>{s.loc}</td><td style={{...tc,color:P,fontWeight:600}}>{s.received.toLocaleString()} L</td><td style={tc}>{s.consumed.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:s.balance>=0?"#24A148":"#DA1E28"}}>{s.balance.toLocaleString()} L</span></td><td style={tc}>{s.distCount}</td></tr>))}</tbody></table></div>)}
     {tab==="baselines"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Generator Baselines</h4><div style={{fontSize:11,color:"#8D8D8D"}}>Auto-learned from staff readings</div></div>
@@ -3797,11 +3912,12 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         <button onClick={saveLoss} disabled={saving} style={{padding:"9px 20px",borderRadius:8,border:"none",background:saving?"#C6C6C6":"#DA1E28",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>{saving?"Saving...":"Accept loss"}</button></div>
     </Modal>)}
         {editPurchase&&(<Modal title="Edit Purchase" onClose={()=>{setEditPurchase(null);setMsg("");}}>
-      <Field label="Date *"><input style={inp} type="date" value={editPurchase.date} onChange={e=>setEditPurchase({...editPurchase,date:e.target.value})}/></Field>
+      {editPurchase.locked&&<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",color:"#525252",fontSize:12,marginBottom:10,display:"flex",gap:6,alignItems:"center"}}><Lock size={13}/>The main tank has been counted since this purchase, so its date and litres are locked - only the Super Admin can change them. You can still correct the supplier and price.</div>}
+      <Field label="Date *"><input style={inp} type="date" disabled={!!editPurchase.locked} value={editPurchase.date} onChange={e=>setEditPurchase({...editPurchase,date:e.target.value})}/></Field>
       <Field label="Supplier *"><input style={inp} value={editPurchase.supplier} onChange={e=>setEditPurchase({...editPurchase,supplier:e.target.value})}/></Field>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <Field label="Paid Litres * (invoice)"><input style={inp} type="number" value={editPurchase.litres} onChange={e=>setEditPurchase({...editPurchase,litres:e.target.value})}/></Field>
-        <Field label="Received Litres (actual)"><input style={inp} type="number" placeholder={editPurchase.litres||"= paid"} value={editPurchase.litresReceived} onChange={e=>setEditPurchase({...editPurchase,litresReceived:e.target.value})}/></Field>
+        <Field label="Paid Litres * (invoice)"><input style={inp} type="number" disabled={!!editPurchase.locked} value={editPurchase.litres} onChange={e=>setEditPurchase({...editPurchase,litres:e.target.value})}/></Field>
+        <Field label="Received Litres (actual)"><input style={inp} type="number" disabled={!!editPurchase.locked} placeholder={editPurchase.litres||"= paid"} value={editPurchase.litresReceived} onChange={e=>setEditPurchase({...editPurchase,litresReceived:e.target.value})}/></Field>
       </div>
       {editPurchase.litresReceived&&parseFloat(editPurchase.litresReceived)!==parseFloat(editPurchase.litres)&&<div style={{padding:"6px 12px",borderRadius:6,background:"#E8F5E9",marginBottom:10,fontSize:12,color:"#24A148",fontWeight:600}}>Excess: {(parseFloat(editPurchase.litresReceived||0)-parseFloat(editPurchase.litres||0)).toLocaleString()} L free diesel</div>}
       <Field label="Price per Litre"><input style={inp} type="number" placeholder="0 = unknown" value={editPurchase.pricePerL} onChange={e=>setEditPurchase({...editPurchase,pricePerL:e.target.value})}/></Field>
@@ -4016,7 +4132,7 @@ function FleetProAppInner(){
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady}/>}/>
-        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
+        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={isStoreStaff?generators.filter(g=>g.loc===user?.store_location):generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog} dieselReadings={dieselReadings}/>}/>

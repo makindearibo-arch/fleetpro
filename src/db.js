@@ -277,6 +277,21 @@ export const db = {
     return data || [];
   },
 
+  // Change history of the records the main tank / tanker counts depend on, since
+  // tracking started -- for "changed after the count" on Daily stock. Paged.
+  async getStockAudit(sinceIso) {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from('audit_log').select('*')
+        .in('table_name', ['diesel_distributions', 'diesel_purchases', 'tanker_loads', 'diesel_stock_checks'])
+        .gte('at', sinceIso).order('id').range(from, from + 999);
+      if (error) throw error;
+      out.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return out;
+  },
+
   // Diesel Locks (manual admin locks on date ranges)
   async getDieselLocks() { return fetchAll('diesel_locks', 'from_date', false); },
   async addDieselLock(l) { return insertRow('diesel_locks', l); },
