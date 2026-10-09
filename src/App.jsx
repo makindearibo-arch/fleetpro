@@ -31,7 +31,9 @@ const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate
 const toSC=(r)=>({id:r.id,tank:r.tank,date:r.date,litres:Number(r.litres)||0,photoUrl:r.photo_url||"",notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const toTL=(r)=>({id:r.id,date:r.date,kind:r.kind||"load",litres:Number(r.litres)||0,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const toLOSS=(r)=>({id:r.id,purchaseId:r.purchase_id,date:r.date,location:r.location||"main",litres:Number(r.litres)||0,reason:r.reason||"",recordedBy:r.recorded_by,createdAt:r.created_at});
-const toGAS=(r)=>({id:r.id,storeLoc:r.store_location,purchaseDate:r.purchase_date,kg:Number(r.kg)||0,cost:r.cost!=null?Number(r.cost):null,fixedDate:r.fixed_date||null,finishedDate:r.finished_date||null,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
+const toGAS=(r)=>({id:r.id,storeLoc:r.store_location,purchaseDate:r.purchase_date,kg:Number(r.kg)||0,cost:r.cost!=null?Number(r.cost):null,fixedDate:r.fixed_date||null,finishedDate:r.finished_date||null,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at,
+  purchaseId:r.purchase_id||null,received:r.received_confirmed!==false,receivedDate:r.received_date||null,receivedBy:r.received_by||null});   // received: false only for gas sent but not yet accepted
+const toGP=(r)=>({id:r.id,date:r.date,supplier:r.supplier||"",cylinders:Number(r.cylinders)||0,kgEach:Number(r.kg_each)||0,cost:r.cost!=null?Number(r.cost):null,notes:r.notes||"",createdAt:r.created_at});
 const toPW=(r)=>({id:r.id,storeLoc:r.store_location,onAt:r.on_at,offAt:r.off_at||null,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
 const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
@@ -579,9 +581,9 @@ function DocUpload({folder,value,onChange,accept}){
 // Change history (Settings, Super Admin only). Reads public.audit_log, which the
 // database fills from triggers on every stock-related insert/edit/delete -- the
 // app cannot skip or alter it. Shows who, when, and before -> after.
-const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",gas_cylinders:"Cooking gas",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading",diesel_losses:"Accepted losses"};
+const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",gas_cylinders:"Cooking gas",gas_purchases:"Gas purchases",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading",diesel_losses:"Accepted losses"};
 const AUDIT_FIELDS={on_at:"power on",off_at:"power off",litres:"litres",litres_received:"received",price_per_litre:"price/L",supplier:"supplier",date:"date",store_location:"store",received_confirmed:"accepted",received_date:"accepted on",diesel_level_actual:"tank level",diesel_added:"added",consumption_litres:"used",discrepancy_litres:"discrepancy",discrepancy_flag:"flagged",gen_hours_opening:"meter open",gen_hours_closing:"meter close",avg_litres_per_hour:"baseline L/hr",role:"role",name:"name",email:"email",value:"value",notes:"notes",purchase_id:"from purchase",batches_produced:"batches",dest_label:"to",from_date:"from",to_date:"to"};
-const AUDIT_HIDE=new Set(["updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
+const AUDIT_HIDE=new Set(["purchase_id","updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
 const auditVal=v=>v===null||v===undefined||v===""?"-":typeof v==="boolean"?(v?"yes":"no"):typeof v==="number"?v.toLocaleString():typeof v==="object"?JSON.stringify(v).slice(0,60):String(v).length>60?String(v).slice(0,57)+"...":String(v);
 const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.litres).toLocaleString()+" L":"";
   if(t==="diesel_purchases")return(d.supplier||"?")+" "+(d.date||"")+L;
@@ -593,7 +595,8 @@ const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.lit
   if(t==="diesel_stock_checks")return(d.tank==="tanker"?"Tanker":"Main tank")+" "+(d.date||"")+L;
   if(t==="diesel_losses")return"Loss accepted "+(d.date||"")+L+" ("+(d.location==="tanker"?"tanker":"main tank")+"): "+(d.reason||"");
   if(t==="tanker_loads")return(d.kind==="return"?"Poured back into main tank ":"Loaded into tanker ")+(d.date||"")+L;
-  if(t==="gas_cylinders")return(d.store_location||"?")+" "+(d.kg?d.kg+" kg ":"")+"bought "+(d.purchase_date||"")+(d.finished_date?", finished "+d.finished_date:d.fixed_date?", fixed "+d.fixed_date:"");
+  if(t==="gas_cylinders")return(d.store_location||"?")+" "+(d.kg?d.kg+" kg ":"")+(d.purchase_id?"sent ":"bought ")+(d.purchase_date||"")+(d.received_confirmed===false?" (not accepted yet)":"")+(d.finished_date?", finished "+d.finished_date:d.fixed_date?", fixed "+d.fixed_date:"");
+  if(t==="gas_purchases")return"Gas from "+(d.supplier||"?")+" "+(d.date||"")+" - "+(d.cylinders||"?")+" x "+(d.kg_each||"?")+" kg";
   if(t==="power_periods")return(d.store_location||"?")+" "+(d.on_at?new Date(d.on_at).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Africa/Lagos"}):"")+(d.off_at?" to "+fmtClock(d.off_at):" (still on)");
   if(t==="diesel_locks")return(d.store_location||"all stores")+" "+(d.from_date||"")+" to "+(d.to_date||"");
   return d.id||"";};
@@ -750,6 +753,8 @@ function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,die
   if(missed.length)attention.push({icon:Clock,color:"#FF832B",text:`${missed.length} store${missed.length>1?"s":""} didn't log diesel yesterday: ${missed.slice(0,4).join(", ")}${missed.length>4?" +"+(missed.length-4)+" more":""}`,page:"diesel-mgmt"});
   const unconf=(dieselDistributions||[]).filter(d=>!d.confirmed&&d.date<=d3).length;
   if(unconf)attention.push({icon:Send,color:"#FF832B",text:`${unconf} diesel deliver${unconf>1?"ies":"y"} not yet confirmed by stores`,page:"diesel-mgmt"});
+  const gasWaiting=(gasCylinders||[]).filter(c=>c.received===false&&c.purchaseDate<=d3);
+  if(gasWaiting.length)attention.push({icon:Flame,color:"#FF832B",text:`${gasWaiting.length} gas cylinder${gasWaiting.length>1?"s":""} sent but not accepted for 3+ days: ${[...new Set(gasWaiting.map(c=>c.storeLoc))].slice(0,4).join(", ")}`,page:"gas"});
   gasFastSince(gasCylinders,d7).slice(0,3).forEach(g=>attention.push({icon:Flame,color:"#E8590C",text:`${g.store}: cooking gas ran out in ${g.days} day${g.days===1?"":"s"} (usually ~${g.expected})`,page:"gas"}));
   const unconfT=(dieselTransfers||[]).filter(t=>t.destType==="store"&&!t.confirmed&&t.date<=d3).length;
   if(unconfT)attention.push({icon:Send,color:"#FF832B",text:`${unconfT} diesel transfer${unconfT>1?"s":""} between stores not yet accepted`,page:"diesel-mgmt"});
@@ -2837,10 +2842,14 @@ const NAV=[
 // ============================================
 // COOKING GAS PAGE -- one row per cylinder: bought -> fixed -> finished
 // ============================================
-function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
+function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurchases,setGasPurchases,supplyReady}){
   const isStoreStaff=user?.role==="Store Staff";
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
   const canWrite=isStoreStaff||isAdmin;
+  // From 20261014 gas comes in ONLY through the fleet manager (Makinde): purchases
+  // -> send cylinders to stores -> the store accepts. Stores no longer add
+  // cylinders; before that migration runs they still can (supplyReady false).
+  const staffLocked=isStoreStaff&&supplyReady;
   const userStore=user?.store_location||"";
   const todayStr=ngDate(Date.now());
   const [store,setStore]=useState(isStoreStaff?userStore:"");
@@ -2858,32 +2867,59 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
   const ofStore=st=>all.filter(c=>c.storeLoc===st);
   const startOf=c=>c.fixedDate||c.purchaseDate;
   const inUse=arr=>arr.filter(c=>c.fixedDate&&!c.finishedDate).sort((a,b)=>a.fixedDate.localeCompare(b.fixedDate));
-  const spares=arr=>arr.filter(c=>!c.fixedDate).sort((a,b)=>a.purchaseDate.localeCompare(b.purchaseDate));
+  const spares=arr=>arr.filter(c=>c.received!==false&&!c.fixedDate).sort((a,b)=>a.purchaseDate.localeCompare(b.purchaseDate));
+  const waiting=arr=>arr.filter(c=>c.received===false).sort((a,b)=>a.purchaseDate.localeCompare(b.purchaseDate));
   const daysSoFar=c=>daysFromTo(c.fixedDate,todayStr).length-1;
   const typicalKg=arr=>{const m={};arr.forEach(c=>{m[c.kg]=(m[c.kg]||0)+1;});const best=Object.entries(m).sort((a,b)=>b[1]-a[1])[0];return best?Number(best[0]):50;};
   const usualTxt=(u,kg)=>u?<>about <b>{Math.max(1,Math.round(kg/u))} days</b> for {kg} kg ({Math.round(u*10)/10} kg a day)</>:"not known yet - needs 2 finished cylinders";
-  const statusOf=(c,u)=>{if(!c.fixedDate)return pill("Spare - not fixed yet","#525252","#F4F4F4");if(!c.finishedDate)return pill("In use - "+daysSoFar(c)+" day"+(daysSoFar(c)===1?"":"s")+" so far","#0043CE","#EDF5FF");
+  const statusOf=(c,u)=>{if(c.received===false)return pill("Sent - not accepted yet","#B45309","#FFF8E1");if(!c.fixedDate)return pill("Spare - not fixed yet","#525252","#F4F4F4");if(!c.finishedDate)return pill("In use - "+daysSoFar(c)+" day"+(daysSoFar(c)===1?"":"s")+" so far","#0043CE","#EDF5FF");
     const k=gasCheck(c,u);if(!k)return pill("Finished","#525252","#F4F4F4");return k.fast?pill("Ran out fast - usually ~"+k.expected+" days","#DA1E28","#FFF1F1"):pill("Normal (usually ~"+k.expected+" days)","#24A148","#DEFBE6");};
 
   // ---- saving
   const local=row=>setGasCylinders(prev=>prev.some(c=>c.id===row.id)?prev.map(c=>c.id===row.id?row:c):[row,...prev]);
   const run=async(fn)=>{setBusy(true);setMsg("");try{await fn();setModal(null);}catch(e){setMsg(e.message||String(e));}setBusy(false);};
   const finishThese=async(ids,date)=>{for(const id of ids){const c=all.find(x=>x.id===id);if(!c)continue;if(date<c.fixedDate)throw new Error("The cylinder fixed on "+fmtDayLabel(c.fixedDate)+" cannot run out before that.");local(toGAS(await db.updateGasCylinder(id,{finished_date:date})));}};
+  // ---- gas bought by the fleet manager, and what is left at the depot (bought - sent)
+  const purch=(gasPurchases||[]).map(p=>{const sent=all.filter(c=>c.purchaseId===p.id);return{...p,sentList:sent,sent:sent.length,left:p.cylinders-sent.length,waitingN:sent.filter(c=>c.received===false).length};});
+  const withLeft=purch.filter(p=>p.left>0).sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt).localeCompare(String(b.createdAt)));   // oldest first (FIFO)
+  const perCyl=p=>p.cost!=null&&p.cylinders?Math.round(p.cost/p.cylinders):null;
+  const openPurchase=(p)=>{setMsg("");setModal(p?{mode:"purchase",id:p.id,date:p.date,supplier:p.supplier,cylinders:String(p.cylinders),kgEach:String(p.kgEach),cost:p.cost!=null?String(p.cost):"",notes:p.notes,sentN:p.sent}
+    :{mode:"purchase",date:todayStr,supplier:"",cylinders:"",kgEach:"50",cost:"",notes:"",sentN:0});};
+  const openSend=(st,pid)=>{setMsg("");const p=pid?withLeft.find(x=>x.id===pid):withLeft[0];setModal({mode:"send",store:st||"",n:"1",purchaseId:p?p.id:"",date:todayStr,notes:""});};
+  const accept=async(list)=>{setBusy(true);setMsg("");
+    try{for(const c of list)local(toGAS(await db.updateGasCylinder(c.id,{received_confirmed:true,received_date:todayStr,received_by:user?.uid||null})));}
+    catch(e){alert(e.message||String(e));}setBusy(false);};
+  const delPurchase=async(p)=>{if(p.sent){alert("Some cylinders from this purchase were already sent to stores - delete those first.");return;}
+    if(!confirm("Delete this gas purchase ("+p.cylinders+" x "+p.kgEach+" kg from "+(p.supplier||"?")+", "+fmtDayLabel(p.date)+")?"))return;
+    try{await db.deleteGasPurchase(p.id);setGasPurchases(prev=>prev.filter(x=>x.id!==p.id));}catch(e){alert(e.message||String(e));}};
   const openNew=()=>{setMsg("");const arr=ofStore(store);const u=inUse(arr);setModal({mode:"new",purchaseDate:todayStr,kg:String(typicalKg(arr)),cost:"",useNow:true,fixedDate:todayStr,finishIds:u.length===1?[u[0].id]:[],notes:""});};
   const openFinish=()=>{setMsg("");const arr=ofStore(store);const u=inUse(arr);const sp=spares(arr);setModal({mode:"finish",id:u.length===1?u[0].id:"",date:todayStr,fixSpare:sp.length>0,spareId:sp[0]?.id||""});};
   const openFix=()=>{setMsg("");const arr=ofStore(store);const u=inUse(arr);const sp=spares(arr);setModal({mode:"fix",spareId:sp[0]?.id||"",date:todayStr,finishIds:u.length===1?[u[0].id]:[]});};
   const openEdit=c=>{setMsg("");setModal({mode:"edit",id:c.id,purchaseDate:c.purchaseDate,kg:String(c.kg),cost:c.cost!=null?String(c.cost):"",fixedDate:c.fixedDate||"",finishedDate:c.finishedDate||"",notes:c.notes||""});};
   const saveModal=()=>{const m=modal;
+    if(m.mode==="purchase")return run(async()=>{const n=parseInt(m.cylinders,10),kg=parseFloat(m.kgEach);
+      if(!m.date)throw new Error("Enter the date.");if(!(n>0))throw new Error("Enter how many cylinders.");if(!(kg>0))throw new Error("Enter the kg of each cylinder.");
+      if(m.id&&n<m.sentN)throw new Error(m.sentN+" cylinders from this purchase were already sent - it cannot be fewer than that.");
+      const body={date:m.date,supplier:(m.supplier||"").trim(),cylinders:n,kg_each:kg,cost:m.cost===""?null:parseFloat(m.cost),notes:m.notes||""};
+      const row=toGP(m.id?await db.updateGasPurchase(m.id,body):await db.addGasPurchase(body));
+      setGasPurchases(prev=>m.id?prev.map(p=>p.id===m.id?row:p):[row,...prev]);});
+    if(m.mode==="send")return run(async()=>{const n=parseInt(m.n,10);const p=purch.find(x=>x.id===m.purchaseId);
+      if(!m.store)throw new Error("Choose the store.");if(!p)throw new Error("Choose the purchase the gas comes from.");if(!(n>0))throw new Error("Enter how many cylinders.");
+      if(n>p.left)throw new Error("Only "+p.left+" cylinder"+(p.left===1?"":"s")+" of that purchase "+(p.left===1?"is":"are")+" left to send.");
+      if(m.date<p.date)throw new Error("The gas cannot be sent before it was bought ("+fmtDayLabel(p.date)+").");
+      for(let i=0;i<n;i++)local(toGAS(await db.addGasCylinder({store_location:m.store,purchase_date:m.date,kg:p.kgEach,cost:perCyl(p),purchase_id:p.id,received_confirmed:false,notes:m.notes||""})));});
     if(m.mode==="new")return run(async()=>{const kg=parseFloat(m.kg);if(!(kg>0))throw new Error("Enter the kg.");
       if(m.useNow&&m.fixedDate<m.purchaseDate)throw new Error("It cannot be fixed before it was bought.");
       if(m.useNow&&m.finishIds.length)await finishThese(m.finishIds,m.fixedDate);
-      local(toGAS(await db.addGasCylinder({store_location:store,purchase_date:m.purchaseDate,kg,cost:m.cost===""?null:parseFloat(m.cost),fixed_date:m.useNow?m.fixedDate:null,notes:m.notes||""})));});
+      local(toGAS(await db.addGasCylinder({store_location:store,purchase_date:m.purchaseDate,kg,cost:m.cost===""?null:parseFloat(m.cost),fixed_date:m.useNow?m.fixedDate:null,notes:m.notes||"",...(supplyReady?{received_confirmed:true}:{})})));});
     if(m.mode==="finish")return run(async()=>{if(!m.id)throw new Error("Choose the cylinder that ran out.");await finishThese([m.id],m.date);
       if(m.fixSpare&&m.spareId){const sp=all.find(x=>x.id===m.spareId);if(m.date<sp.purchaseDate)throw new Error("That spare was bought after this date.");local(toGAS(await db.updateGasCylinder(m.spareId,{fixed_date:m.date})));}});
     if(m.mode==="fix")return run(async()=>{if(!m.spareId)throw new Error("Choose the spare cylinder.");const sp=all.find(x=>x.id===m.spareId);if(m.date<sp.purchaseDate)throw new Error("That spare was bought after this date.");
       if(m.finishIds.length)await finishThese(m.finishIds,m.date);local(toGAS(await db.updateGasCylinder(m.spareId,{fixed_date:m.date})));});
     if(m.mode==="edit")return run(async()=>{const kg=parseFloat(m.kg);if(!(kg>0))throw new Error("Enter the kg.");if(m.finishedDate&&!m.fixedDate)throw new Error("A cylinder must be fixed before it can run out.");
-      local(toGAS(await db.updateGasCylinder(m.id,{purchase_date:m.purchaseDate,kg,cost:m.cost===""?null:parseFloat(m.cost),fixed_date:m.fixedDate||null,finished_date:m.finishedDate||null,notes:m.notes||""})));});
+      const c0=all.find(c=>c.id===m.id);if(m.fixedDate&&c0&&c0.received===false)throw new Error("Accept this cylinder first - it was sent but has not been accepted yet.");
+      local(toGAS(await db.updateGasCylinder(m.id,staffLocked?{fixed_date:m.fixedDate||null,finished_date:m.finishedDate||null,notes:m.notes||""}
+        :{purchase_date:m.purchaseDate,kg,cost:m.cost===""?null:parseFloat(m.cost),fixed_date:m.fixedDate||null,finished_date:m.finishedDate||null,notes:m.notes||""})));});
   };
   const del=async(c)=>{if(!confirm("Delete this "+c.kg+" kg cylinder (bought "+fmtDayLabel(c.purchaseDate)+")?"))return;try{await db.deleteGasCylinder(c.id);setGasCylinders(prev=>prev.filter(x=>x.id!==c.id));setModal(null);}catch(e){alert(e.message||String(e));}};
 
@@ -2891,6 +2927,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
 
   // ---- one store
   const storeView=()=>{const arr=ofStore(store);const u=gasUsualRate(arr);const using=inUse(arr);const sp=spares(arr);const tk=typicalKg(arr);
+    const wait=waiting(arr);const mine=isStoreStaff&&store===userStore;
     const rows=arr.slice().sort((a,b)=>startOf(b).localeCompare(startOf(a))||String(b.createdAt).localeCompare(String(a.createdAt)));
     const exportStore=()=>downloadCsv(`cooking-gas_${store.replace(/\s+/g,"-")}_${todayStr}.csv`,["Store","Bought","Kg","Cost (NGN)","Fixed","Finished","Days lasted","Kg a day","Check","Notes"],
       rows.map(c=>{const d=gasDays(c),k=gasCheck(c,u);return[store,c.purchaseDate,c.kg,c.cost??"",c.fixedDate||"",c.finishedDate||(c.fixedDate?"still in use":""),d??(c.fixedDate?daysSoFar(c)+" so far":""),d?Math.round(c.kg/d*10)/10:"",!c.fixedDate?"spare":!c.finishedDate?"in use":k?(k.fast?"ran out fast (usually ~"+k.expected+" days)":"normal"):"",c.notes];}));
@@ -2899,7 +2936,8 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
           <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Cooking gas - {store}</h3><div style={{fontSize:12,color:"#525252",marginTop:4}}>Usually lasts {usualTxt(u,tk)}</div></div>
           {canWrite&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            <button onClick={openNew} style={btn(orange)}>+ New cylinder</button>
+            {isAdmin&&supplyReady&&<button onClick={()=>openSend(store)} disabled={!withLeft.length} title={withLeft.length?"":"No gas left at the depot - record a gas purchase first"} style={btn(withLeft.length?orange:"#C6C6C6")}>Send gas here</button>}
+            {!staffLocked&&<button onClick={openNew} style={supplyReady?btn("#fff","#525252","1.5px solid #E0E0E0"):btn(orange)}>{supplyReady?"+ Cylinder already here":"+ New cylinder"}</button>}
             {using.length>0&&<button onClick={openFinish} style={btn("#fff",orange,"1.5px solid "+orange)}>Gas finished</button>}
             {sp.length>0&&<button onClick={openFix} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Fix a spare</button>}
           </div>}
@@ -2908,12 +2946,25 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
           {using.length?using.map(c=>(<div key={c.id} style={{padding:"10px 14px",borderRadius:10,background:"#EDF5FF",border:"1px solid #A6C8FF",fontSize:13}}><b>In use:</b> {kgTxt(c.kg)}, fixed {fmtDayLabel(c.fixedDate)} - <b>{daysSoFar(c)} day{daysSoFar(c)===1?"":"s"}</b> so far{u&&daysSoFar(c)>c.kg/u?<span style={{color:"#24A148"}}> (already past the usual {Math.round(c.kg/u)})</span>:null}</div>))
             :<div style={{padding:"10px 14px",borderRadius:10,background:"#F4F4F4",fontSize:13,color:"#525252"}}>No cylinder in use.</div>}
           <div style={{padding:"10px 14px",borderRadius:10,background:"#F4F4F4",fontSize:13}}><b>Spares:</b> {sp.length?sp.length+" ("+sp.reduce((a,c)=>a+c.kg,0).toLocaleString()+" kg) not fixed yet":"none"}</div>
+          {wait.length>0&&<div style={{padding:"10px 14px",borderRadius:10,background:"#FFF8E1",border:"1px solid #FFE082",fontSize:13}}><b>Sent, not accepted:</b> {wait.length} ({wait.reduce((a,c)=>a+c.kg,0).toLocaleString()} kg)</div>}
         </div>
       </div>
+      {wait.length>0&&<div style={{...card,background:"#FFF8E1",border:"1px solid #FFE082"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:6}}>
+          <b style={{fontSize:14,color:"#7A4F00"}}>{mine?"Gas sent to you - accept it when it arrives":"Waiting for "+store+" to accept"}</b>
+          {mine&&wait.length>1&&<button disabled={busy} onClick={()=>accept(wait)} style={btn("#24A148")}>{busy?"Saving...":"Accept all "+wait.length}</button>}
+        </div>
+        {wait.map(c=>(<div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"6px 0",borderTop:"1px solid #FFE082",fontSize:13}}>
+          <span><b>{kgTxt(c.kg)}</b> cylinder sent {fmtDayLabel(c.purchaseDate)}{c.notes?<span style={{color:"#8D8D8D"}}> - {c.notes}</span>:null}</span>
+          {mine&&<button disabled={busy} onClick={()=>accept([c])} style={btn("#24A148")}>Accept</button>}
+        </div>))}
+        <div style={{fontSize:11,color:"#7A4F00",marginTop:6}}>{mine?"Only accept a cylinder that has actually arrived. Once accepted it is one of your spares - use \"Fix a spare\" when you start using it.":"The store accepts each cylinder when it arrives."}</div>
+      </div>}
       <div style={{...card,padding:0,overflow:"hidden"}}>
         <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #E8ECF1"}}><b style={{fontSize:14}}>Cylinders</b><button onClick={exportStore} disabled={!rows.length} style={btn("#fff",P,"1.5px solid "+P)}>Export to Excel</button></div>
-        {rows.length===0?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No gas recorded yet. Use "+ New cylinder" to start - for the cylinder already in use, enter when it was bought and fixed.</div>
-        :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}><thead><tr style={{background:"#F4F4F4"}}>{["Bought","Kg","Cost","Fixed","Finished","Lasted","Kg a day","Check",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+        {rows.length===0?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>{staffLocked?"No gas yet. When the fleet manager sends gas, accept it here, then use \"Fix a spare\" when you start using it."
+          :supplyReady?"No gas recorded yet. Use \"Send gas here\" for gas you bought, or \"+ Cylinder already here\" for a cylinder the store already has (enter when it was bought and fixed).":"No gas recorded yet. Use \"+ New cylinder\" to start - for the cylinder already in use, enter when it was bought and fixed."}</div>
+        :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}><thead><tr style={{background:"#F4F4F4"}}>{[supplyReady?"Arrived":"Bought","Kg","Cost","Fixed","Finished","Lasted","Kg a day","Check",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
         <tbody>{rows.map(c=>{const d=gasDays(c);const k=gasCheck(c,u);return(<tr key={c.id} style={{background:k&&k.fast?"#FFF8F8":"transparent"}}>
           <td style={{...tc,whiteSpace:"nowrap"}}>{fmtDayLabel(c.purchaseDate)}</td><td style={{...tc,fontWeight:600}}>{kgTxt(c.kg)}</td><td style={tc}>{c.cost!=null?fmt(c.cost):"-"}</td>
           <td style={{...tc,whiteSpace:"nowrap"}}>{c.fixedDate?fmtDayLabel(c.fixedDate):"-"}</td><td style={{...tc,whiteSpace:"nowrap"}}>{c.finishedDate?fmtDayLabel(c.finishedDate):c.fixedDate?<span style={{color:"#0043CE"}}>still in use</span>:"-"}</td>
@@ -2925,11 +2976,47 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
     </>);};
 
   // ---- all stores (admins)
+  const purchasesCard=()=>{if(!supplyReady)return null;
+    const inR=d=>d&&d>=from&&d<=to;
+    const shown=purch.filter(p=>inR(p.date)||p.left>0||p.waitingN>0).sort((a,b)=>b.date.localeCompare(a.date)||String(b.createdAt).localeCompare(String(a.createdAt)));
+    const bySize={};withLeft.forEach(p=>{bySize[p.kgEach]=(bySize[p.kgEach]||0)+p.left;});
+    const depotTxt=Object.entries(bySize).sort((a,b)=>Number(b[0])-Number(a[0])).map(([kg,n])=>n+" x "+Number(kg).toLocaleString()+" kg").join(", ");
+    const waitAll=waiting(all);const waitStores=[...new Set(waitAll.map(c=>c.storeLoc))];
+    const sentTo=p=>{const m={};p.sentList.forEach(c=>{const k=c.storeLoc;m[k]=m[k]||{n:0,w:0};m[k].n++;if(c.received===false)m[k].w++;});
+      return Object.entries(m).map(([st,v])=>st+(v.n>1?" x"+v.n:"")+(v.w?" ("+v.w+" not accepted)":"")).join(", ");};
+    return(<div style={card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+        <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Gas bought and sent to stores</h3>
+          <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,maxWidth:620}}>The fleet manager records the gas bought, then sends cylinders to stores. A store accepts each cylinder when it arrives; until then it cannot use it.</div></div>
+        {isAdmin&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <button onClick={()=>openPurchase(null)} style={btn(orange)}>+ Gas purchase</button>
+          <button onClick={()=>openSend("")} disabled={!withLeft.length} style={btn(withLeft.length?"#FFF4EC":"#F4F4F4",withLeft.length?orange:"#A8A8A8","1.5px solid "+(withLeft.length?orange:"#E0E0E0"))}>Send to a store</button>
+        </div>}
+      </div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:12}}>
+        <div style={{padding:"10px 14px",borderRadius:10,background:"#F4F4F4",fontSize:13}}><b>At the depot (bought, not sent):</b> {depotTxt||"none"}</div>
+        <div style={{padding:"10px 14px",borderRadius:10,background:waitAll.length?"#FFF8E1":"#F4F4F4",fontSize:13}}><b>Sent, not accepted yet:</b> {waitAll.length?waitAll.length+" - "+waitStores.slice(0,4).join(", ")+(waitStores.length>4?" +"+(waitStores.length-4)+" more":""):"none"}</div>
+      </div>
+      {shown.length>0&&<div style={{overflowX:"auto",marginTop:12}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Cylinders","Cost","Per cylinder","Sent to","Left at depot",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+      <tbody>{shown.map(p=>(<tr key={p.id}>
+        <td style={{...tc,whiteSpace:"nowrap"}}>{fmtDayLabel(p.date)}</td><td style={{...tc,fontWeight:600}}>{p.supplier||"-"}{p.notes?<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>{p.notes}</div>:null}</td>
+        <td style={tc}>{p.cylinders} x {kgTxt(p.kgEach)}</td><td style={tc}>{p.cost!=null?fmt(p.cost):"-"}</td>
+        <td style={tc}>{perCyl(p)!=null?fmt(perCyl(p)):"-"}{perCyl(p)!=null&&p.kgEach?<div style={{fontSize:10,color:"#8D8D8D"}}>{fmt(Math.round(p.cost/(p.cylinders*p.kgEach)))}/kg</div>:null}</td>
+        <td style={{...tc,fontSize:12}}>{p.sent?sentTo(p):<span style={{color:"#A8A8A8"}}>not sent yet</span>}</td>
+        <td style={{...tc,fontWeight:700,color:p.left?"#161616":"#A8A8A8"}}>{p.left||"-"}</td>
+        <td style={tc}>{isAdmin&&<div style={{display:"flex",gap:4}}>
+          {p.left>0&&<button onClick={()=>openSend("",p.id)} style={btn("#FFF4EC",orange,"1px solid "+orange)}>Send</button>}
+          <button onClick={()=>openPurchase(p)} style={btn("#fff","#525252","1px solid #E0E0E0")}>Change</button>
+          {!p.sent&&<button onClick={()=>delPurchase(p)} style={btn("#fff","#DA1E28","1px solid #E0E0E0")}>Delete</button>}
+        </div>}</td>
+      </tr>))}</tbody></table></div>}
+      {!purch.length&&<div style={{padding:"14px 0 2px",color:"#8D8D8D",fontSize:13}}>No gas purchases recorded yet.</div>}
+    </div>);};
   const allView=()=>{const stores=[...new Set([...(locations||[]),...all.map(c=>c.storeLoc)])].filter(st=>ofStore(st).length).sort();
     const inR=d=>d&&d>=from&&d<=to;
     const rows=stores.map(st=>{const arr=ofStore(st);const u=gasUsualRate(arr);const bought=arr.filter(c=>inR(c.purchaseDate));const fin=arr.filter(c=>inR(c.finishedDate));
       const last=arr.filter(c=>c.finishedDate).sort((a,b)=>b.finishedDate.localeCompare(a.finishedDate))[0];
-      return{st,u,tk:typicalKg(arr),using:inUse(arr),sp:spares(arr),boughtN:bought.length,boughtKg:bought.reduce((a,c)=>a+c.kg,0),cost:bought.reduce((a,c)=>a+(c.cost||0),0),fast:fin.filter(c=>{const k=gasCheck(c,u);return k&&k.fast;}).length,last,lastK:last?gasCheck(last,u):null};});
+      return{st,u,tk:typicalKg(arr),using:inUse(arr),sp:spares(arr),wait:waiting(arr),boughtN:bought.length,boughtKg:bought.reduce((a,c)=>a+c.kg,0),cost:bought.reduce((a,c)=>a+(c.cost||0),0),fast:fin.filter(c=>{const k=gasCheck(c,u);return k&&k.fast;}).length,last,lastK:last?gasCheck(last,u):null};});
     const exportAll=()=>downloadCsv(`cooking-gas_all-stores_${from}_to_${to}.csv`,["Store","In use since","Days so far","Spares","Cylinders bought","Kg bought","Cost (NGN)","Usual days per cylinder","Usual kg a day","Last finished","Last lasted (days)","Ran out fast in period"],
       rows.map(r=>[r.st,r.using[0]?.fixedDate||"",r.using[0]?daysSoFar(r.using[0]):"",r.sp.length,r.boughtN,r.boughtKg,r.cost||"",r.u?Math.round(r.tk/r.u):"",r.u?Math.round(r.u*10)/10:"",r.last?.finishedDate||"",r.last?gasDays(r.last):"",r.fast]));
     return(<div style={{...card,padding:0,overflow:"hidden"}}>
@@ -2940,11 +3027,12 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
         <div style={{flex:1}}/><button onClick={exportAll} disabled={!rows.length} style={btn("#fff",P,"1.5px solid "+P)}>Export to Excel</button>
       </div>
       {rows.length===0?<div style={{padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No cooking gas recorded at any store yet. Choose a store above to add its cylinders.</div>
-      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","In use","Spares","Bought in period","Cost","Usually lasts","Last cylinder","Ran out fast"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","In use","Spares","Not accepted",supplyReady?"Received in period":"Bought in period","Cost","Usually lasts","Last cylinder","Ran out fast"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
       <tbody>{rows.map(r=>(<tr key={r.st} onClick={()=>setStore(r.st)} style={{cursor:"pointer",background:r.fast?"#FFF8F8":"transparent"}}>
         <td style={{...tc,fontWeight:700}}>{r.st}</td>
         <td style={tc}>{r.using.length?<>{fmtDayLabel(r.using[0].fixedDate)} <span style={{color:"#8D8D8D"}}>({daysSoFar(r.using[0])} days)</span></>:<span style={{color:"#A8A8A8"}}>none</span>}</td>
         <td style={tc}>{r.sp.length||"-"}</td>
+        <td style={{...tc,color:r.wait.length?"#B45309":"#A8A8A8",fontWeight:r.wait.length?700:400}}>{r.wait.length||"-"}</td>
         <td style={tc}>{r.boughtN?r.boughtN+" ("+r.boughtKg.toLocaleString()+" kg)":"-"}</td>
         <td style={tc}>{r.cost?fmt(r.cost):"-"}</td>
         <td style={tc}>{r.u?"~"+Math.round(r.tk/r.u)+" days / "+r.tk+" kg":<span style={{color:"#A8A8A8"}}>not known yet</span>}</td>
@@ -2963,9 +3051,34 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
       <h2 style={{fontSize:20,fontWeight:800,margin:0,display:"flex",alignItems:"center",gap:8}}><Flame size={20} color={orange}/>Cooking Gas</h2>
       {!isStoreStaff&&<select value={store} onChange={e=>setStore(e.target.value)} style={{...inp,width:220,padding:"6px 10px"}}><option value="">All stores</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select>}
     </div>
-    <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14,maxWidth:760}}>Gas can only be measured when a cylinder runs out, so record each cylinder: when it was bought, when it was fixed (started being used) and when it finished. The app works out how long cylinders usually last at each store and flags one that runs out much faster.</div>
-    {store?storeView():allView()}
-    {m&&<Modal title={m.mode==="new"?"New gas cylinder":m.mode==="finish"?"Gas finished":m.mode==="fix"?"Fix a spare cylinder":"Change cylinder"} onClose={()=>setModal(null)}>
+    <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14,maxWidth:760}}>{supplyReady?"The fleet manager records the gas bought and sends cylinders to stores; each store accepts what arrives, then records when a cylinder is fixed (started being used) and when it finishes. The app works out how long cylinders usually last at each store and flags one that runs out much faster."
+      :"Gas can only be measured when a cylinder runs out, so record each cylinder: when it was bought, when it was fixed (started being used) and when it finished. The app works out how long cylinders usually last at each store and flags one that runs out much faster."}</div>
+    {store?storeView():<>{isAdmin&&purchasesCard()}{allView()}</>}
+    {m&&<Modal title={m.mode==="purchase"?(m.id?"Change gas purchase":"Gas purchase"):m.mode==="send"?"Send gas to a store":m.mode==="new"?(supplyReady?"Cylinder already at the store":"New gas cylinder"):m.mode==="finish"?"Gas finished":m.mode==="fix"?"Fix a spare cylinder":"Change cylinder"} onClose={()=>setModal(null)}>
+      {m.mode==="purchase"&&<>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Field label="Bought on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
+          <Field label="Supplier"><input style={inp} value={m.supplier} placeholder="e.g. gas plant name" onChange={e=>setModal({...m,supplier:e.target.value})}/></Field>
+          <Field label="How many cylinders"><input type="number" min="1" step="1" style={{...inp,fontWeight:700}} value={m.cylinders} placeholder="e.g. 4" onChange={e=>setModal({...m,cylinders:e.target.value})}/></Field>
+          <Field label="Kg each"><input type="number" style={{...inp,fontWeight:700}} value={m.kgEach} onChange={e=>setModal({...m,kgEach:e.target.value})}/></Field>
+          <Field label="Total cost (optional)"><input type="number" style={inp} value={m.cost} placeholder="e.g. 380000" onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
+        </div>
+        {(()=>{const n=parseInt(m.cylinders,10),kg=parseFloat(m.kgEach),c=parseFloat(m.cost);return n>0&&kg>0?<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>{(n*kg).toLocaleString()} kg in all{c>0?<> - <b>{fmt(Math.round(c/n))}</b> a cylinder ({fmt(Math.round(c/(n*kg)))}/kg)</>:null}</div>:null;})()}
+        {m.id&&m.sentN>0&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>{m.sentN} cylinder{m.sentN===1?" was":"s were"} already sent from this purchase. Changing the cost does not change what was charged to those stores.</div>}
+        <Field label="Notes (optional)"><input style={inp} value={m.notes} onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
+      </>}
+      {m.mode==="send"&&(()=>{const p=purch.find(x=>x.id===m.purchaseId);return<>
+        <Field label="Store"><select style={inp} value={m.store} onChange={e=>setModal({...m,store:e.target.value})}><option value="">Choose the store...</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Field label="How many cylinders"><input type="number" min="1" step="1" style={{...inp,fontWeight:700}} value={m.n} onChange={e=>setModal({...m,n:e.target.value})}/></Field>
+          <Field label="Sent on"><input type="date" style={inp} value={m.date} min={p?p.date:undefined} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
+        </div>
+        <Field label="From which purchase"><select style={inp} value={m.purchaseId} onChange={e=>setModal({...m,purchaseId:e.target.value})}><option value="">Choose...</option>{withLeft.map(x=>(<option key={x.id} value={x.id}>{fmtDayLabel(x.date)} {x.supplier||""} - {x.left} x {x.kgEach} kg left</option>))}</select></Field>
+        {p&&<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Each cylinder: <b>{kgTxt(p.kgEach)}</b>{perCyl(p)!=null?<>, {fmt(perCyl(p))} charged to the store</>:null}. {p.left} left at the depot from this purchase.</div>}
+        <Field label="Notes (optional)"><input style={inp} value={m.notes} placeholder="e.g. driver's name" onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
+        <div style={{fontSize:11,color:"#8D8D8D",marginBottom:10}}>The store sees it under Cooking Gas and accepts it when it arrives.</div>
+      </>;})()}
+      {m.mode==="new"&&supplyReady&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>For a cylinder the store already has (e.g. the one in use when you start). Gas you buy from now on: record it under "Gas purchase" and send it to the store.</div>}
       {m.mode==="new"&&<>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Field label="Bought on"><input type="date" style={inp} value={m.purchaseDate} max={todayStr} onChange={e=>setModal({...m,purchaseDate:e.target.value,fixedDate:m.fixedDate===m.purchaseDate?e.target.value:m.fixedDate})}/></Field>
@@ -2981,17 +3094,25 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
         {usingNow.length===1&&<div style={{fontSize:13,marginBottom:12}}>The {kgTxt(usingNow[0].kg)} cylinder fixed on <b>{fmtDayLabel(usingNow[0].fixedDate)}</b> ran out.</div>}
         <Field label="Ran out on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
         {spareNow.length>0&&<label style={{display:"flex",gap:8,alignItems:"center",fontSize:13,marginBottom:12,cursor:"pointer"}}><input type="checkbox" checked={m.fixSpare} onChange={e=>setModal({...m,fixSpare:e.target.checked})}/>Fix a spare the same day:
-          <select style={{...inp,width:"auto",padding:"4px 8px"}} value={m.spareId} onChange={e=>setModal({...m,spareId:e.target.value})}>{spareNow.map(c=>(<option key={c.id} value={c.id}>{kgTxt(c.kg)} bought {fmtDayLabel(c.purchaseDate)}</option>))}</select></label>}
-        {spareNow.length===0&&<div style={{fontSize:12,color:"#8D8D8D",marginBottom:12}}>No spare in stock. When a new one is fixed, use "+ New cylinder".</div>}
+          <select style={{...inp,width:"auto",padding:"4px 8px"}} value={m.spareId} onChange={e=>setModal({...m,spareId:e.target.value})}>{spareNow.map(c=>(<option key={c.id} value={c.id}>{kgTxt(c.kg)} {supplyReady?"arrived":"bought"} {fmtDayLabel(c.purchaseDate)}</option>))}</select></label>}
+        {spareNow.length===0&&<div style={{fontSize:12,color:"#8D8D8D",marginBottom:12}}>{staffLocked?"No spare in stock. When the fleet manager sends gas, accept it and then fix it with \"Fix a spare\".":"No spare in stock. When a new one is fixed, use \"+ New cylinder\"."}</div>}
       </>}
       {m.mode==="fix"&&<>
-        <Field label="Which spare?"><select style={inp} value={m.spareId} onChange={e=>setModal({...m,spareId:e.target.value})}>{spareNow.map(c=>(<option key={c.id} value={c.id}>{kgTxt(c.kg)} bought {fmtDayLabel(c.purchaseDate)}</option>))}</select></Field>
+        <Field label="Which spare?"><select style={inp} value={m.spareId} onChange={e=>setModal({...m,spareId:e.target.value})}>{spareNow.map(c=>(<option key={c.id} value={c.id}>{kgTxt(c.kg)} {supplyReady?"arrived":"bought"} {fmtDayLabel(c.purchaseDate)}</option>))}</select></Field>
         <Field label="Fixed on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
         {finishPicker(m.finishIds,ids=>setModal({...m,finishIds:ids}))}
       </>}
-      {m.mode==="edit"&&<>
+      {m.mode==="edit"&&staffLocked&&<>
+        <div style={{fontSize:12,color:"#525252",marginBottom:10}}>{(()=>{const c0=all.find(c=>c.id===m.id);return c0?kgTxt(c0.kg)+" cylinder, arrived "+fmtDayLabel(c0.purchaseDate)+". Only the fleet manager can change its size or cost.":"";})()}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Field label="Bought on"><input type="date" style={inp} value={m.purchaseDate} max={todayStr} onChange={e=>setModal({...m,purchaseDate:e.target.value})}/></Field>
+          <Field label="Fixed on (blank = spare)"><input type="date" style={inp} value={m.fixedDate} max={todayStr} onChange={e=>setModal({...m,fixedDate:e.target.value})}/></Field>
+          <Field label="Finished on (blank = in use)"><input type="date" style={inp} value={m.finishedDate} max={todayStr} onChange={e=>setModal({...m,finishedDate:e.target.value})}/></Field>
+        </div>
+        <Field label="Notes"><input style={inp} value={m.notes} onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
+      </>}
+      {m.mode==="edit"&&!staffLocked&&<>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Field label={supplyReady?"Arrived / bought on":"Bought on"}><input type="date" style={inp} value={m.purchaseDate} max={todayStr} onChange={e=>setModal({...m,purchaseDate:e.target.value})}/></Field>
           <Field label="Kg"><input type="number" style={inp} value={m.kg} onChange={e=>setModal({...m,kg:e.target.value})}/></Field>
           <Field label="Cost (optional)"><input type="number" style={inp} value={m.cost} onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
           <Field label="Fixed on (blank = spare)"><input type="date" style={inp} value={m.fixedDate} max={todayStr} onChange={e=>setModal({...m,fixedDate:e.target.value})}/></Field>
@@ -3001,7 +3122,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady}){
       </>}
       {msg&&<div style={{padding:10,borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
       <div style={{display:"flex",gap:8,justifyContent:"space-between"}}>
-        {m.mode==="edit"?<button onClick={()=>del(all.find(c=>c.id===m.id))} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>:<span/>}
+        {m.mode==="edit"&&!staffLocked?<button onClick={()=>del(all.find(c=>c.id===m.id))} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>:<span/>}
         <button disabled={busy} onClick={saveModal} style={{...btn(busy?"#C6C6C6":orange),padding:"10px 22px",fontSize:13}}>{busy?"Saving...":"Save"}</button>
       </div>
     </Modal>}
@@ -4018,10 +4139,18 @@ function FleetProAppInner(){
   // Cooking gas cylinders (20261012_gas_cylinders.sql); gasReady hides the page until it is run.
   const [gasCylinders,setGasCylinders]=useState([]);
   const [gasReady,setGasReady]=useState(false);
+  // Gas bought by the fleet manager and sent to stores (20261014_gas_supply.sql).
+  // Until it is run gasSupplyReady is false and stores keep adding their own cylinders.
+  const [gasPurchases,setGasPurchases]=useState([]);
+  const [gasSupplyReady,setGasSupplyReady]=useState(false);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
     try{const rows=await db.getGasCylinders();if(live){setGasCylinders(rows.map(toGAS));setGasReady(true);}}
     catch(e){console.warn("Cooking gas not available:",e?.message);if(live)setGasReady(false);}
+    try{const rows=await db.getGasPurchases();if(live){setGasPurchases(rows.map(toGP));setGasSupplyReady(true);}}
+    catch(e){console.warn("Gas purchases not available:",e?.message);if(live)setGasSupplyReady(false);}
   })();return()=>{live=false;};},[user?.uid]);
+  // gas sent to this store and not accepted yet (badge on the menu)
+  const gasToAccept=user?.role==="Store Staff"?(gasCylinders||[]).filter(c=>c.received===false&&c.storeLoc===user?.store_location).length:0;
   const [lossesReady,setLossesReady]=useState(false);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
     try{const rows=await db.getDieselLosses();if(live){setDieselLosses(rows.map(toLOSS));setLossesReady(true);}}
@@ -4113,7 +4242,7 @@ function FleetProAppInner(){
     {mob&&showNav&&<div onClick={()=>setShowNav(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:998}}/>}
     <div style={{width:mob?280:(col?64:240),minHeight:"100vh",background:"linear-gradient(180deg,#0F1A2E 0%,#162D50 100%)",position:"fixed",left:mob?(showNav?0:-280):0,top:0,zIndex:999,transition:mob?"left 0.25s ease":"width 0.2s",overflow:"hidden",boxShadow:mob&&showNav?"4px 0 20px rgba(0,0,0,0.3)":"none"}}>
       <div style={{padding:col&&!mob?"18px 12px":"18px 20px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid rgba(255,255,255,0.06)"}}><div style={{width:34,height:34,borderRadius:8,background:`linear-gradient(135deg,${P},#4589FF)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Truck size={18} color="#fff"/></div>{(!col||mob)&&<div><div style={{fontSize:16,fontWeight:700,color:"#fff"}}>FleetPro</div><div style={{fontSize:9,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Fleet Management</div></div>}</div>
-      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{(()=>{const items=NAV.filter(item=>(item.id!=="gas"||gasReady)&&(isStoreStaff?["staff-dashboard","diesel","diesel-mgmt","generators","gas","settings"].includes(item.id):true));return items.map((item,idx)=>{const active=page===item.id;const Icon=item.icon;const newGroup=idx===0||items[idx-1].group!==item.group;return(<div key={item.id}>{newGroup&&((!col||mob)?<div style={{fontSize:9,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.25)",padding:idx===0?"2px 12px 4px":"12px 12px 4px",textTransform:"uppercase"}}>{item.group}</div>:idx>0&&<div style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 6px"}}/>)}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}</button></div>);});})()}</nav>
+      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{(()=>{const items=NAV.filter(item=>(item.id!=="gas"||gasReady)&&(isStoreStaff?["staff-dashboard","diesel","diesel-mgmt","generators","gas","settings"].includes(item.id):true));return items.map((item,idx)=>{const active=page===item.id;const Icon=item.icon;const newGroup=idx===0||items[idx-1].group!==item.group;return(<div key={item.id}>{newGroup&&((!col||mob)?<div style={{fontSize:9,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.25)",padding:idx===0?"2px 12px 4px":"12px 12px 4px",textTransform:"uppercase"}}>{item.group}</div>:idx>0&&<div style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 6px"}}/>)}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}{item.id==="gas"&&gasToAccept>0&&<span title="Gas sent to you - accept it" style={{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:"#E8590C",color:"#fff",fontSize:10,fontWeight:700,display:"inline-flex",alignItems:"center",justifyContent:"center",padding:"0 5px"}}>{gasToAccept}</span>}</button></div>);});})()}</nav>
       {!mob&&<div style={{position:"absolute",bottom:0,left:0,right:0,padding:"10px 8px",borderTop:"1px solid rgba(255,255,255,0.06)"}}><button onClick={()=>setCol(!col)} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:8,borderRadius:7,border:"none",cursor:"pointer",width:"100%",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.35)",fontSize:12}}>{col?<ChevronRight size={15}/>:<><ChevronLeft size={15}/> Collapse</>}</button></div>}
     </div>
     <header style={{height:56,background:"#fff",borderBottom:"1px solid #E8ECF1",display:"flex",alignItems:"center",justifyContent:"space-between",padding:mob?"0 12px":"0 24px",position:"sticky",top:0,zIndex:50,marginLeft:sw,transition:"margin-left 0.2s"}}>
@@ -4145,7 +4274,7 @@ function FleetProAppInner(){
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
-        <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady}/>}/>
+        <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady} gasPurchases={gasPurchases} setGasPurchases={setGasPurchases} supplyReady={gasSupplyReady}/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>

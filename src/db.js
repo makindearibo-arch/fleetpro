@@ -345,4 +345,9 @@ export const db = {
   async addGasCylinder(c) { return insertRow('gas_cylinders', c); },
   async updateGasCylinder(id, c) { return updateRow('gas_cylinders', id, c); },
   async deleteGasCylinder(id) { return deleteRow('gas_cylinders', id); },
+  // Gas the fleet manager buys and then sends to stores (20261014_gas_supply.sql)
+  async getGasPurchases() { return fetchAll('gas_purchases', 'date', false); },
+  async addGasPurchase(p) { return insertRow('gas_purchases', p); },
+  async updateGasPurchase(id, p) { return updateRow('gas_purchases', id, p); },
+  async deleteGasPurchase(id) { return deleteRow('gas_purchases', id); },
 };
