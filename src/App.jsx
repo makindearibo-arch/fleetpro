@@ -297,15 +297,25 @@ const depotLedger=({checks,loads,purchases,deliveries,losses,today})=>{
   const lostMain=sumBy((losses||[]).filter(l=>l.location!=="tanker"),l=>l.litres);
   const lostTanker=sumBy((losses||[]).filter(l=>l.location==="tanker"),l=>l.litres);
   const chk={};(checks||[]).forEach(c=>{chk[c.tank+"|"+c.date]=c;});
+  // The books never take a count's figure, so after a count that differed they
+  // stay off by that variance until a loss is accepted. mainGauge / tankerGauge =
+  // what the gauge should actually show (books + the variance still unexplained),
+  // so whoever reads it knows what to expect (Makinde, 2026-10-12).
+  const outst=(diff,acc)=>diff<0?Math.min(0,diff+acc):diff;
+  let mDiff=null,mAcc=0,tDiff=null,tAcc=0;
   let tank=0;const days=[];
   for(const d of daysFromTo(start,today>start?today:start)){
     const row={date:d,bought:bought[d]||0,loaded:loaded[d]||0,returned:returned[d]||0,delivered:delivered[d]||0,lostMain:lostMain[d]||0,lostTanker:lostTanker[d]||0};
     row.mainOpen=Math.round(total-tank);row.mainExpected=row.mainOpen;row.tankerOpen=Math.round(tank);
     const mc=chk["main|"+d];if(mc){row.mainCheck=mc;row.mainDiff=Math.round(mc.litres-(total-tank));}
+    if(mc){mDiff=row.mainDiff;mAcc=0;}else if(mDiff){const o=outst(mDiff,mAcc);if(o)row.mainGauge=Math.round(row.mainOpen+o);}
+    if(tDiff){const o=outst(tDiff,tAcc);if(o)row.tankerGauge=Math.round(row.tankerOpen+o);}
     total+=row.bought-row.delivered-row.lostMain-row.lostTanker;
     tank+=row.loaded-row.returned-row.delivered-row.lostTanker;
     row.mainEnd=Math.round(total-tank);row.tankerEnd=Math.round(tank);row.tankerExpected=row.tankerEnd;
-    const tc=chk["tanker|"+d];if(tc){row.tankerCheck=tc;row.tankerDiff=Math.round(tc.litres-tank);}
+    if(mDiff!=null)mAcc+=row.lostMain;
+    if(tDiff){const o=outst(tDiff,tAcc+row.lostTanker);if(o)row.tankerGaugeEnd=Math.round(row.tankerEnd+o);}
+    const tc=chk["tanker|"+d];if(tc){row.tankerCheck=tc;row.tankerDiff=Math.round(tc.litres-tank);tDiff=row.tankerDiff;tAcc=0;}else if(tDiff!=null)tAcc+=row.lostTanker;
     days.push(row);}
   const last=days[days.length-1];
   const lastMain=[...days].reverse().find(r=>r.mainCheck)||null,lastTanker=[...days].reverse().find(r=>r.tankerCheck)||null;
@@ -317,7 +327,12 @@ const depotLedger=({checks,loads,purchases,deliveries,losses,today})=>{
   const outstanding=(diff,acc)=>diff<0?Math.min(0,diff+acc):diff;
   const mainVar=lastMain?outstanding(lastMain.mainDiff,since("lostMain",lastMain.date,true)):null;
   const tankerVar=lastTanker?outstanding(lastTanker.tankerDiff,since("lostTanker",lastTanker.date,false)):null;
-  return{start,days,mainNow:last?last.mainEnd:null,tankerNow:last?last.tankerEnd:null,lastMain,lastTanker,mainVar,tankerVar};
+  // The main tank and the tanker are ONE stock: diesel found in the tanker that the
+  // books did not know about (left over from earlier loads) offsets diesel missing
+  // from the main tank -- most likely the same diesel (Makinde, 2026-10-12: tanker
+  // checked empty on 10 Oct when the books said -31 L -> 420 L missing becomes 389).
+  const netVar=(mainVar==null&&tankerVar==null)?null:(mainVar||0)+(tankerVar||0);
+  return{start,days,mainNow:last?last.mainEnd:null,tankerNow:last?last.tankerEnd:null,lastMain,lastTanker,mainVar,tankerVar,netVar};
 };
 // COUNTED DAYS ARE LOCKED (2026-10-07, Makinde): once a count is recorded,
 // anything that would change the figure it was checked against can only be
@@ -391,7 +406,7 @@ const purchaseStock=({purchases,deliveries,losses,ledger})=>{
   (losses||[]).forEach(l=>{if(l.purchaseId)lost[l.purchaseId]=(lost[l.purchaseId]||0)+(l.litres||0);});
   const byId={};
   (purchases||[]).forEach(p=>{const left=(p.litresReceived??p.litres)-(del[p.id]||0)-(lost[p.id]||0);byId[p.id]={left,lossAccepted:lost[p.id]||0,missing:0,deliverable:left};});
-  let miss=Math.max(0,-((ledger&&ledger.mainVar)||0))+Math.max(0,-((ledger&&ledger.tankerVar)||0));
+  let miss=Math.max(0,-((ledger&&ledger.netVar)||0));   // main tank + tanker together
   const missingTotal=miss;
   const fifo=(purchases||[]).filter(p=>p.destination!=="direct"&&p.supplier!=="STOCK RECONCILIATION"&&byId[p.id].left>0)
     .sort((a,b)=>(a.date||"").localeCompare(b.date||"")||String(a.createdAt||"").localeCompare(String(b.createdAt||"")));
@@ -765,8 +780,9 @@ function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,die
   const overdueWO=(workOrders||[]).filter(w=>w.status!=="Completed"&&w.due&&w.due<todayStr).length;
   if(overdueWO)attention.push({icon:Wrench,color:"#FF832B",text:`${overdueWO} open work order${overdueWO>1?"s":""} past due`,page:"workorders"});
   // main tank / tanker count vs the books -- first, in red, until corrected or the loss is accepted
-  if(depotAlert?.tanker)attention.unshift({icon:AlertTriangle,color:"#DA1E28",text:depotAlert.tanker.diff<0?`${Math.abs(depotAlert.tanker.diff).toLocaleString()} L of diesel missing from the tanker (checked ${fmtDayLabel(depotAlert.tanker.date)})`:`The tanker had ${depotAlert.tanker.diff.toLocaleString()} L more than the books (checked ${fmtDayLabel(depotAlert.tanker.date)})`,page:"diesel-mgmt"});
-  if(depotAlert?.main)attention.unshift({icon:AlertTriangle,color:"#DA1E28",text:depotAlert.main.diff<0?`${Math.abs(depotAlert.main.diff).toLocaleString()} L of diesel missing from the main tank (counted ${fmtDayLabel(depotAlert.main.date)})`:`The main tank has ${depotAlert.main.diff.toLocaleString()} L more than the books (counted ${fmtDayLabel(depotAlert.main.date)})`,page:"diesel-mgmt"});
+  if(depotAlert?.main&&depotAlert?.tanker){if(depotAlert.net)attention.unshift({icon:AlertTriangle,color:"#DA1E28",text:depotAlert.net<0?`${Math.abs(depotAlert.net).toLocaleString()} L of diesel missing from the main tank and tanker together (main tank counted ${fmtDayLabel(depotAlert.main.date)}, tanker checked ${fmtDayLabel(depotAlert.tanker.date)})`:`The main tank and tanker hold ${depotAlert.net.toLocaleString()} L more than the books`,page:"diesel-mgmt"});}
+  else if(depotAlert?.tanker)attention.unshift({icon:AlertTriangle,color:"#DA1E28",text:depotAlert.tanker.diff<0?`${Math.abs(depotAlert.tanker.diff).toLocaleString()} L of diesel missing from the tanker (checked ${fmtDayLabel(depotAlert.tanker.date)})`:`The tanker had ${depotAlert.tanker.diff.toLocaleString()} L more than the books (checked ${fmtDayLabel(depotAlert.tanker.date)})`,page:"diesel-mgmt"});
+  else if(depotAlert?.main)attention.unshift({icon:AlertTriangle,color:"#DA1E28",text:depotAlert.main.diff<0?`${Math.abs(depotAlert.main.diff).toLocaleString()} L of diesel missing from the main tank (counted ${fmtDayLabel(depotAlert.main.date)})`:`The main tank has ${depotAlert.main.diff.toLocaleString()} L more than the books (counted ${fmtDayLabel(depotAlert.main.date)})`,page:"diesel-mgmt"});
   return(<div style={{display:"flex",flexDirection:"column",gap:18}}>
     <div style={{background:"linear-gradient(135deg,#0F1A2E,#1A3A6B,#0F62FE)",borderRadius:16,padding:"24px 28px",color:"#fff"}}><div style={{fontSize:11,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:"0.08em"}}>Good morning</div><h2 style={{fontSize:20,fontWeight:700,margin:"4px 0 0"}}>Fleet Overview</h2><p style={{fontSize:13,color:"rgba(255,255,255,0.6)",marginTop:4}}>{av} vehicles + {ag} generators active</p></div>
     <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}><Kpi icon={Truck} label="Vehicles" value={`${av}/${vehicles.length}`} onClick={()=>go("vehicles")}/><Kpi icon={Zap} label="Generators" value={`${ag}/${generators.length}`} onClick={()=>go("generators")}/><Kpi icon={Wrench} label="Open WOs" value={ow} accent="#FF832B" onClick={()=>go("workorders")}/><Kpi icon={DollarSign} label="Cost This Month" value={fmt(monthlyCost)} sub="Fuel + diesel + maintenance" delta={costDelta} deltaGoodWhenDown/></div>
@@ -3182,6 +3198,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
   const setDate=(date)=>{const ex=modal.kind==="load"?null:(checks||[]).find(c=>c.tank===modal.kind&&c.date===date);
     setModal({...modal,date,litres:ex?String(ex.litres):"",notes:ex?ex.notes:"",preview:ex?ex.photoUrl:"",photo:null,existingId:ex?ex.id:null});};
   // what the ledger expects on the modal's morning (ignoring a reading already saved for that day)
+  const gaugeFor=(kind,date)=>{const l=depotLedger({checks:(checks||[]).filter(c=>!(c.tank===kind&&c.date===date)),loads,purchases,deliveries,losses,today:date});const row=l.days.find(r=>r.date===date);return row?((kind==="main"?row.mainGauge:row.tankerGaugeEnd)??null):null;};
   const expectedFor=(kind,date)=>{const l=depotLedger({checks:(checks||[]).filter(c=>!(c.tank===kind&&c.date===date)),loads,purchases,deliveries,losses,today:date});const row=l.days.find(r=>r.date===date);return row?(kind==="main"?row.mainExpected:row.tankerExpected):null;}; // main: that morning; tanker: end of that day
   const save=async()=>{
     const m=modal;const litres=parseFloat(m.litres);
@@ -3223,9 +3240,9 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
   const notesOn=d=>[...(checks||[]).filter(c=>c.date===d&&c.notes).map(c=>(c.tank==="main"?"Main tank: ":"Tanker: ")+c.notes),...(loads||[]).filter(l=>l.date===d&&l.notes).map(l=>(l.kind==="return"?"Poured back: ":"Loading: ")+l.notes),...(losses||[]).filter(l=>l.date===d).map(l=>"Loss accepted ("+(l.location==="tanker"?"tanker":"main tank")+", "+l.litres+" L): "+l.reason)].join("; ");
   const exportMain=()=>{
     const f0=sheetRows[0]?.date||from,f1=sheetRows[sheetRows.length-1]?.date||to;   // the days actually covered
-    const head=["Date","Main tank opening (books)","Bought into main tank","Into tanker","Poured back","Loss accepted (main tank)","Main tank closing (books)","Main tank counted (morning)","Main tank variance","Tanker opening (books)","Loaded into tanker","Delivered to stores","Loss accepted (tanker)","Tanker closing (books)","Tanker counted (end of day)","Tanker variance","Notes"];
-    const body=sheetRows.map(r=>[r.date,r.mainOpen,r.bought,netIn(r),r.returned||"",r.lostMain||"",r.mainEnd,r.mainCheck?r.mainCheck.litres:"",r.mainDiff??"",r.tankerOpen,netIn(r),r.delivered,r.lostTanker||"",r.tankerEnd,r.tankerCheck?r.tankerCheck.litres:"",r.tankerDiff??"",notesOn(r.date)]);
-    if(sheetRows.length)body.push(["Period "+f0+" to "+f1,sheetRows[0].mainOpen,sumOf("bought"),sumOf("loaded")-sumOf("returned"),sumOf("returned")||"",sumOf("lostMain")||"",sheetRows[sheetRows.length-1].mainEnd,lastCountIn?lastCountIn.mainCheck.litres:"",lastCountIn?lastCountIn.mainDiff:"",sheetRows[0].tankerOpen,sumOf("loaded")-sumOf("returned"),sumOf("delivered"),sumOf("lostTanker")||"",sheetRows[sheetRows.length-1].tankerEnd,lastCheckIn?lastCheckIn.tankerCheck.litres:"",lastCheckIn?lastCheckIn.tankerDiff:"",mainReads+" main tank count"+(mainReads===1?"":"s")+", "+tankReads+" tanker check"+(tankReads===1?"":"s")+"; the variance shown is the latest count in the period"]);
+    const head=["Date","Main tank opening (books)","Main tank gauge should read","Bought into main tank","Into tanker","Poured back","Loss accepted (main tank)","Main tank closing (books)","Main tank counted (morning)","Main tank variance","Tanker opening (books)","Tanker should hold","Loaded into tanker","Delivered to stores","Loss accepted (tanker)","Tanker closing (books)","Tanker counted (end of day)","Tanker variance","Notes"];
+    const body=sheetRows.map(r=>[r.date,r.mainOpen,r.mainGauge??"",r.bought,netIn(r),r.returned||"",r.lostMain||"",r.mainEnd,r.mainCheck?r.mainCheck.litres:"",r.mainDiff??"",r.tankerOpen,r.tankerGauge??"",netIn(r),r.delivered,r.lostTanker||"",r.tankerEnd,r.tankerCheck?r.tankerCheck.litres:"",r.tankerDiff??"",notesOn(r.date)]);
+    if(sheetRows.length)body.push(["Period "+f0+" to "+f1,sheetRows[0].mainOpen,"",sumOf("bought"),sumOf("loaded")-sumOf("returned"),sumOf("returned")||"",sumOf("lostMain")||"",sheetRows[sheetRows.length-1].mainEnd,lastCountIn?lastCountIn.mainCheck.litres:"",lastCountIn?lastCountIn.mainDiff:"",sheetRows[0].tankerOpen,"",sumOf("loaded")-sumOf("returned"),sumOf("delivered"),sumOf("lostTanker")||"",sheetRows[sheetRows.length-1].tankerEnd,lastCheckIn?lastCheckIn.tankerCheck.litres:"",lastCheckIn?lastCheckIn.tankerDiff:"",mainReads+" main tank count"+(mainReads===1?"":"s")+", "+tankReads+" tanker check"+(tankReads===1?"":"s")+"; the variance shown is the latest count in the period"]);
     downloadCsv(`diesel-stock-main-tank-and-tanker_${f0}_to_${f1}.csv`,head,body);
   };
   const recent=[...(checks||[]).map(c=>({k:"check",x:c})),...(loads||[]).map(l=>({k:"load",x:l}))].sort((a,b)=>b.x.date.localeCompare(a.x.date)||String(b.x.createdAt).localeCompare(String(a.x.createdAt))).slice(0,15);
@@ -3235,10 +3252,10 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
 
     {depotReady&&<>
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:14}}>
-      <Kpi icon={Package} label="Main tank (books)" value={L(ledger.mainNow)} sub={lastMainRow?<>Read {fmtDayLabel(lastMainRow.date)}: {L(lastMainRow.mainCheck.litres)} {lastMainRow.mainDiff==null?"(first reading)":ledger.mainVar===0&&lastMainRow.mainDiff!==0?pill({t:"loss accepted",c:"#B45309",bg:"#FFF8E1"}):pill(diffWord(ledger.mainVar,MAIN_TOL_L))}</>:"No reading yet"}/>
-      <Kpi icon={Truck} label="In the tanker (books)" value={L(ledger.tankerNow)} sub={lastTankRow?<>Checked {fmtDayLabel(lastTankRow.date)}: {L(lastTankRow.tankerCheck.litres)} {ledger.tankerVar===0&&lastTankRow.tankerDiff!==0?pill({t:"loss accepted",c:"#B45309",bg:"#FFF8E1"}):pill(diffWord(ledger.tankerVar,TANKER_TOL_L))}</>:"Loaded minus delivered"}/>
+      <Kpi icon={Package} label="Main tank (books)" value={L(ledger.mainNow)} sub={lastMainRow?<>Read {fmtDayLabel(lastMainRow.date)}: {L(lastMainRow.mainCheck.litres)} {lastMainRow.mainDiff==null?"(first reading)":ledger.mainVar===0&&lastMainRow.mainDiff!==0?pill({t:"loss accepted",c:"#B45309",bg:"#FFF8E1"}):ledger.netVar===0&&ledger.mainVar?pill({t:"balanced by the tanker",c:"#B45309",bg:"#FFF8E1"}):pill(diffWord(ledger.mainVar,MAIN_TOL_L))}</>:"No reading yet"}/>
+      <Kpi icon={Truck} label="In the tanker (books)" value={L(ledger.tankerNow)} sub={lastTankRow?<>Checked {fmtDayLabel(lastTankRow.date)}: {L(lastTankRow.tankerCheck.litres)} {ledger.tankerVar===0&&lastTankRow.tankerDiff!==0?pill({t:"loss accepted",c:"#B45309",bg:"#FFF8E1"}):ledger.netVar===0&&ledger.tankerVar?pill({t:"balanced by the main tank",c:"#B45309",bg:"#FFF8E1"}):pill(diffWord(ledger.tankerVar,TANKER_TOL_L))}</>:"Loaded minus delivered"}/>
       <Kpi icon={Fuel} label="In store tanks" value={L(storeNow)} sub="Each tank's latest reading"/>
-      <Kpi icon={Droplet} label="All our diesel" value={L((ledger.mainNow||0)+(ledger.tankerNow||0)+storeNow)} sub="Main tank + tanker + stores"/>
+      <Kpi icon={Droplet} label="All our diesel" value={L((ledger.mainNow||0)+(ledger.tankerNow||0)+storeNow)} sub={ledger.mainVar&&ledger.tankerVar&&ledger.netVar?<>Main tank + tanker + stores {pill(diffWord(ledger.netVar,0))}<span style={{fontSize:10,color:"#8D8D8D"}}> (main + tanker)</span></>:"Main tank + tanker + stores"}/>
     </div>
 
     <div style={card}>
@@ -3267,14 +3284,14 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
         </thead>
         <tbody>{sheetRows.map(r=>{const into=netIn(r);const bad=(r.mainDiff!=null&&r.mainDiff!==0)||(r.tankerDiff!=null&&r.tankerDiff!==0);return(<tr key={r.date} style={{background:bad?"#FFF8F8":"transparent"}}>
           <td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{fmtDayLabel(r.date)}</td>
-          <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{L(r.mainOpen)}</td>
+          <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{L(r.mainOpen)}{r.mainGauge!=null&&<div title="The books less the diesel still missing from the last count" style={{fontSize:10,color:"#B45309",whiteSpace:"nowrap"}}>gauge should read ~{L(r.mainGauge)}</div>}</td>
           <td style={tc}>{r.bought?L(r.bought):"-"}</td>
           <td style={tc}>{into?L(into):"-"}{r.returned?<div style={{fontSize:10,color:"#8D8D8D"}}>{L(r.returned)} poured back</div>:null}</td>
           {anyLoss&&<td style={{...tc,color:"#B45309"}}>{r.lostMain?L(r.lostMain):"-"}</td>}
           <td style={{...tc,fontWeight:700}}>{L(r.mainEnd)}</td>
           <td style={tc}>{r.mainCheck?<b>{L(r.mainCheck.litres)}</b>:<span style={{color:"#A8A8A8"}}>not counted</span>}{r.mainCheck?.photoUrl&&<a href={r.mainCheck.photoUrl} target="_blank" rel="noreferrer" style={{marginLeft:6,fontSize:11,color:P}}>photo</a>}{r.mainCheck&&changedCount("main",r.date)>0&&<div style={{fontSize:10,fontWeight:700,color:"#B45309",whiteSpace:"nowrap"}}>changed after count</div>}</td>
           <td style={tc}>{r.mainCheck?pill(diffWord(r.mainDiff,MAIN_TOL_L)):<span style={{color:"#A8A8A8"}}>-</span>}</td>
-          <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{L(r.tankerOpen)}</td>
+          <td style={{...tc,borderLeft:"3px solid #F4F4F4"}}>{L(r.tankerOpen)}{r.tankerGauge!=null&&<div title="The books adjusted by what the last tanker check found" style={{fontSize:10,color:"#B45309",whiteSpace:"nowrap"}}>should hold ~{L(r.tankerGauge)}</div>}</td>
           <td style={tc}>{into?L(into):"-"}</td>
           <td style={tc}>{r.delivered?L(r.delivered):"-"}</td>
           {anyLoss&&<td style={{...tc,color:"#B45309"}}>{r.lostTanker?L(r.lostTanker):"-"}</td>}
@@ -3292,6 +3309,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
       </table></div>
       {sheetRows.length===0&&<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No days in this range. Tracking started {fmtDayLabel(ledger.start)}.</div>}
       <div style={{fontSize:11,color:"#8D8D8D",marginTop:8}}>Opening and closing are the books: diesel bought into the main tank minus what has been delivered, so each closing is the next day's opening. "Counted" is the gauge reading (main tank, morning) or the tanker check (end of day); the variance is counted minus the books. A shortfall stays until the count is corrected or the Super Admin accepts the loss. The whole-period variance is the latest count in the period.</div>
+      {sheetRows.some(r=>r.mainGauge!=null||r.tankerGauge!=null)&&<div style={{fontSize:11,color:"#B45309",marginTop:6}}>"Gauge should read" / "should hold": the books stay as they are until a loss is accepted, so while a count's difference is unexplained the gauge should show the books less what is still missing (or plus what was found). The next count is judged against the books.</div>}
       <div style={{fontSize:11,color:"#525252",marginTop:6,display:"flex",gap:5,alignItems:"flex-start"}}><Lock size={12} style={{flexShrink:0,marginTop:1}}/><span>Counted days are locked: once a count is recorded, only the Super Admin can change it, or the purchases, tanker loadings and deliveries it already covers. Record the day's purchases, loadings and deliveries before the next count.</span></div>
       {isSuper&&afterCount.length>0&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082"}}>
         <div style={{fontSize:13,fontWeight:700,color:"#7A4F00"}}>Changed after the count ({afterCount.length})</div>
@@ -3355,7 +3373,8 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
         {modal.kind==="tanker"&&<button onClick={()=>setModal({...modal,litres:"0"})} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Empty</button>}</div>
       </Field>
       {modal.kind!=="load"&&(()=>{const exp=expectedFor(modal.kind,modal.date);const v=parseFloat(modal.litres);const diff=(exp!=null&&!isNaN(v))?Math.round(v-exp):null;
-        return exp!=null?<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Should be about <b>{L(exp)}</b>{diff!=null&&<> - {pill(diffWord(diff,modal.kind==="main"?MAIN_TOL_L:TANKER_TOL_L))}</>}</div>
+        const g=gaugeFor(modal.kind,modal.date);
+        return exp!=null?<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>{g!=null?<>The gauge should read about <b>{L(g)}</b> <span style={{color:"#525252"}}>(the books say {L(exp)}; {g<exp?L(exp-g)+" is still missing":L(g-exp)+" more was found"} from an earlier count)</span></>:<>Should be about <b>{L(exp)}</b></>}{diff!=null&&<> - {pill(diffWord(diff,modal.kind==="main"?MAIN_TOL_L:TANKER_TOL_L))}</>}</div>
           :<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>{modal.kind==="main"?"This is the first reading - tracking starts from it.":"No expected figure yet."}</div>;})()}
       {modal.existingId&&(isSuper?<div style={{fontSize:12,color:"#0043CE",marginBottom:10}}>Already recorded for this date - saving will change it.</div>
         :<div style={{fontSize:12,color:"#525252",marginBottom:10,display:"flex",gap:5,alignItems:"flex-start"}}><Lock size={12} style={{flexShrink:0,marginTop:1}}/><span>Already counted for this date. Only the Super Admin can change the litres - you can still add a photo or a note.</span></div>)}
@@ -3628,10 +3647,13 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     {!scopeStore&&depot.start&&(()=>{const m=depot.lastMain,t=depot.lastTanker;const items=[];const accM=m&&m.mainDiff<0&&depot.mainVar>m.mainDiff?" ("+(depot.mainVar-m.mainDiff).toLocaleString()+" L of it accepted as a loss since)":"";
       if(m&&depot.mainVar)items.push(depot.mainVar<0?`${Math.abs(depot.mainVar).toLocaleString()} L missing from the main tank${accM}: counted ${m.mainCheck.litres.toLocaleString()} L on ${fmtDayLabel(m.date)}, the books say ${m.mainOpen.toLocaleString()} L.`:`The main tank has ${m.mainDiff.toLocaleString()} L more than the books: counted ${m.mainCheck.litres.toLocaleString()} L on ${fmtDayLabel(m.date)}, the books say ${m.mainOpen.toLocaleString()} L.`);
       if(t&&depot.tankerVar)items.push(depot.tankerVar<0?`${Math.abs(depot.tankerVar).toLocaleString()} L missing from the tanker: ${t.tankerCheck.litres.toLocaleString()} L found on ${fmtDayLabel(t.date)}, the books say ${t.tankerExpected.toLocaleString()} L.`:`The tanker had ${t.tankerDiff.toLocaleString()} L more than the books on ${fmtDayLabel(t.date)} (found ${t.tankerCheck.litres.toLocaleString()} L, books ${t.tankerExpected.toLocaleString()} L).`);
+      const net=depot.netVar||0;const both=!!(m&&depot.mainVar&&t&&depot.tankerVar);
+      if(both)items.push(net<0?`Main tank and tanker together: ${Math.abs(net).toLocaleString()} L missing.`:net>0?`Main tank and tanker together: ${net.toLocaleString()} L more than the books.`:"Together they balance: what is missing from one is in the other.");
       if(!items.length)return null;
       const pinned=dieselPurchases.filter(p=>(pstock.byId[p.id]?.missing||0)>0);
-      return(<div style={{padding:"12px 16px",borderRadius:10,background:"#FFF1F1",border:"1px solid #FFB3B8",color:"#A2191F",fontSize:13,marginBottom:14}}>
-        <div style={{fontWeight:800,marginBottom:4}}>Diesel stock does not match the books</div>
+      const ok=both&&net===0;
+      return(<div style={{padding:"12px 16px",borderRadius:10,background:ok?"#FFF8E1":"#FFF1F1",border:"1px solid "+(ok?"#FFE082":"#FFB3B8"),color:ok?"#7A4F00":"#A2191F",fontSize:13,marginBottom:14}}>
+        <div style={{fontWeight:800,marginBottom:4}}>{ok?"The main tank and the tanker balance each other":"Diesel stock does not match the books"}</div>
         {items.map((x,i)=>(<div key={i}>{x}</div>))}
         {pinned.length>0&&<div style={{marginTop:4}}>On purchase{pinned.length>1?"s":""}: {pinned.map(p=>p.supplier+" ("+p.date+") "+pstock.byId[p.id].missing.toLocaleString()+" L").join(", ")}.</div>}
         <div style={{marginTop:6,fontSize:12,color:"#525252"}}>If the count was wrong, correct it in Daily stock and this goes away. If the diesel is really gone, only the Super Admin can accept the loss, on the purchase (Overview or Purchases).</div>
@@ -4158,7 +4180,7 @@ function FleetProAppInner(){
   })();return()=>{live=false;};},[user?.uid]);
   // Main tank / tanker variance for the Dashboard's Needs attention list.
   const depotAlert=useMemo(()=>{if(!depotReady)return null;const l=depotLedger({checks:stockChecks,loads:tankerLoads,purchases:dieselPurchases,deliveries:dieselDistributions,losses:dieselLosses,today:ngDate(Date.now())});
-    return{main:l.mainVar?{diff:l.mainVar,date:l.lastMain.date}:null,tanker:l.tankerVar?{diff:l.tankerVar,date:l.lastTanker.date}:null};},[depotReady,stockChecks,tankerLoads,dieselPurchases,dieselDistributions,dieselLosses]);
+    return{main:l.mainVar?{diff:l.mainVar,date:l.lastMain.date}:null,tanker:l.tankerVar?{diff:l.tankerVar,date:l.lastTanker.date}:null,net:l.netVar||0};},[depotReady,stockChecks,tankerLoads,dieselPurchases,dieselDistributions,dieselLosses]);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
     const[a,b,c]=await Promise.all([supabase.from("diesel_purchases").select("destination").limit(1),supabase.from("diesel_distributions").select("source").limit(1),supabase.from("diesel_transfers").select("dest_store").limit(1)]);
     if(live){setRoutesReady(!a.error&&!b.error);setStoreTransfersReady(!c.error);}
