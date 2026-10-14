@@ -23,8 +23,8 @@ const toSR=(r)=>({id:r.id,vehicle:r.vehicle,type:r.type,intervalKm:r.interval_km
 const fromSR=(s)=>({vehicle:s.vehicle,type:s.type,interval_km:s.intervalKm||0,interval_days:s.intervalDays||0,last_done_km:s.lastDoneKm||0,last_done_date:s.lastDoneDate||"",next_due_km:s.nextDueKm||0,next_due_date:s.nextDueDate||"",status:s.status||"Upcoming"});
 const toOdo=(r)=>({id:r.id,asset:r.asset,reading:Number(r.reading)||0,date:r.date,type:r.type});
 // Diesel module mappers
-const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",dieselLevelPhotoUrl:r.diesel_level_photo_url||"",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:r.discrepancy_litres!=null?Number(r.discrepancy_litres):null,discrepancyFlag:r.discrepancy_flag,batchesProduced:r.batches_produced!=null?Number(r.batches_produced):null,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
-const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",diesel_level_photo_url:d.dieselLevelPhotoUrl||"",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,batches_produced:d.batchesProduced??null,submitted_by:d.submittedBy,notes:d.notes||""});
+const toDR=(r)=>({id:r.id,generatorId:r.generator_id,storeLoc:r.store_location,date:r.date,genHoursOpening:Number(r.gen_hours_opening)||null,genHoursClosing:Number(r.gen_hours_closing)||null,hoursRun:Number(r.hours_run)||0,dieselLevelActual:Number(r.diesel_level_actual)||null,dieselLevelTheoretical:Number(r.diesel_level_theoretical)||null,dieselAdded:Number(r.diesel_added)||0,consumptionLitres:Number(r.consumption_litres)||null,consumptionRate:Number(r.consumption_rate)||null,genPhotoUrl:r.gen_photo_url,genSource:r.gen_photo_reading_source||"manual",dieselLevelPhotoUrl:r.diesel_level_photo_url||"",aiReadings:r.ai_readings_json,aiConfidence:r.ai_confidence,nepaHours:Number(r.nepa_hours)||0,nepaMeterOpening:Number(r.nepa_meter_opening)||null,nepaMeterClosing:Number(r.nepa_meter_closing)||null,nepaPhotoUrl:r.nepa_photo_url,nepaSource:r.nepa_source||"manual",discrepancyLitres:r.discrepancy_litres!=null?Number(r.discrepancy_litres):null,discrepancyFlag:r.discrepancy_flag,batchesProduced:r.batches_produced!=null?Number(r.batches_produced):null,pansFired:r.pans_fired!=null?Number(r.pans_fired):null,submittedBy:r.submitted_by,notes:r.notes,createdAt:r.created_at});
+const fromDR=(d)=>({generator_id:d.generatorId,store_location:d.storeLoc,date:d.date,gen_hours_opening:d.genHoursOpening,gen_hours_closing:d.genHoursClosing,diesel_level_actual:d.dieselLevelActual,diesel_level_theoretical:d.dieselLevelTheoretical,diesel_added:d.dieselAdded||0,consumption_litres:d.consumptionLitres,consumption_rate:d.consumptionRate,gen_photo_url:d.genPhotoUrl||"",gen_photo_reading_source:d.genSource||"manual",diesel_level_photo_url:d.dieselLevelPhotoUrl||"",ai_readings_json:d.aiReadings||null,ai_confidence:d.aiConfidence||null,nepa_hours:d.nepaHours||0,nepa_meter_opening:d.nepaMeterOpening,nepa_meter_closing:d.nepaMeterClosing,nepa_photo_url:d.nepaPhotoUrl||"",nepa_source:d.nepaSource||"manual",discrepancy_litres:d.discrepancyLitres,discrepancy_flag:d.discrepancyFlag||false,batches_produced:d.batchesProduced??null,...(d.pansFired!==undefined?{pans_fired:d.pansFired}:{}),submitted_by:d.submittedBy,notes:d.notes||""});
 const toDT=(r)=>({id:r.id,date:r.date,storeLoc:r.store_location,sourceGenId:r.source_generator_id,destType:r.dest_type||"vehicle",destId:r.dest_id,destLabel:r.dest_label||"",litres:Number(r.litres)||0,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at,destStore:r.dest_store||null,confirmed:!!r.received_confirmed,receivedDate:r.received_date||null,receivedBy:r.received_by||null});
 const fromDT=(d)=>({date:d.date,store_location:d.storeLoc,source_generator_id:d.sourceGenId||null,dest_type:d.destType||"vehicle",dest_id:d.destId||null,dest_label:d.destLabel||"",litres:d.litres,notes:d.notes||"",recorded_by:d.recordedBy||null,...(d.destStore!==undefined?{dest_store:d.destStore}:{})});
 const toNPL=(r)=>({id:r.id,storeLoc:r.store_location,fromDate:r.from_date,toDate:r.to_date,totalHours:Number(r.total_hours)||0,meterOpening:r.meter_opening!=null?Number(r.meter_opening):null,meterClosing:r.meter_closing!=null?Number(r.meter_closing):null,photoUrl:r.photo_url||"",notes:r.notes||"",submittedBy:r.submitted_by,createdAt:r.created_at});
@@ -107,7 +107,7 @@ async function shiftReadingAdded({storeLoc,date,delta,targetGenId},dieselReading
     if(!d)return null;
     const body={diesel_added:newAdded};
     if(isOven(target)){
-      if(target.consumptionLitres!=null){const c=Math.max(0,Math.round(target.consumptionLitres+d));body.consumption_litres=c;if(target.batchesProduced>0)body.consumption_rate=Math.round(c/target.batchesProduced*100)/100;}
+      if(target.consumptionLitres!=null){const c=Math.max(0,Math.round(target.consumptionLitres+d));body.consumption_litres=c;if(ovenUnits(target)>0)body.consumption_rate=Math.round(c/ovenUnits(target)*100)/100;}
     }else if(target.discrepancyLitres!=null){
       const disc=Math.round(target.discrepancyLitres-d);const theo=target.consumptionLitres;
       body.discrepancy_litres=disc;body.discrepancy_flag=!!(theo>0&&Math.abs(disc)/theo*100>20&&Math.abs(disc)>=25);
@@ -211,6 +211,10 @@ const suggestDecimal=(open,close,maxHours)=>{for(const d of [10,100,1000]){const
 // transfer logged on a day the store took no reading is not counted as "used"
 // (6 such transfers, 790 L, by Oct 2026); those before a tank's first reading
 // are skipped.
+// An oven's diesel is spread over the bread batches AND the pans it fired; a pan
+// fired counts like a batch (Makinde, 2026-10-14), so its rate is litres per
+// (batches + pans). Readings from before pans were recorded have only batches.
+const ovenUnits=r=>(Number(r.batchesProduced)||0)+(Number(r.pansFired)||0);
 const withTankUsed=(readings,transfers)=>{
   const ev={};
   (transfers||[]).forEach(t=>{const L=t.litres||0;
@@ -231,7 +235,7 @@ const withTankUsed=(readings,transfers)=>{
       const days=prevDate?Math.max(1,Math.round((new Date(r.date)-new Date(prevDate))/864e5)):1;
       prevDate=r.date;
       const h=r.hoursRun;
-      const rateL=(usedL==null||usedL<0)?null:r.batchesProduced>0?Math.round(usedL/r.batchesProduced*100)/100:(h>0&&h<=48*days)?Math.round(usedL/h*100)/100:null;
+      const rateL=(usedL==null||usedL<0)?null:ovenUnits(r)>0?Math.round(usedL/ovenUnits(r)*100)/100:(h>0&&h<=48*days)?Math.round(usedL/h*100)/100:null;
       res.set(r,{usedL,rateL,levelEst:est==null?null:Math.round(est)});});});
   return (readings||[]).map(r=>({...r,...res.get(r)}));
 };
@@ -989,16 +993,17 @@ function GenPage({generators,setGenerators,locations,fuelLogs,canEdit,odoLog,set
     const aReadings=(dieselReadings||[]).filter(r=>r.generatorId===g.id).sort((a,b)=>b.date.localeCompare(a.date));
     const isOvenAsset=g.assetType==="oven";
     const tBatches=aReadings.reduce((s,r)=>s+(r.batchesProduced||0),0);
+    const tPans=aReadings.reduce((s,r)=>s+(r.pansFired||0),0);
     const tConsumed=aReadings.reduce((s,r)=>s+(r.usedL||0),0);
     return(<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}><button onClick={()=>setSel(null)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",cursor:"pointer",color:P,fontSize:13,fontWeight:600}}><ChevronLeft size={16}/> Back</button>{canEdit&&<div style={{display:"flex",gap:6}}><button onClick={()=>{startEdit(g);setSel(null);}} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#525252"}}><Pencil size={13}/>Edit</button><button onClick={()=>handleDelete(g.id)} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#DA1E28"}}><Trash2 size={13}/>Delete</button></div>}</div><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><div style={{background:"linear-gradient(135deg,#1a1a2e,#0f3460)",padding:"22px 26px",color:"#fff"}}><h2 style={{fontSize:18,fontWeight:700,margin:0}}>{g.name}</h2><div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{g.id} - {g.brand} - {g.cap}</div></div><div style={{padding:22,display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"1fr 1fr 1fr",gap:14}}>{(isOvenAsset
-      ?[["Total Batches",tBatches?tBatches.toLocaleString():"-"],["Avg L/Batch",(tBatches>0&&tConsumed>0)?(tConsumed/tBatches).toFixed(2)+" L":"-"],["Total Consumed",tConsumed?tConsumed.toLocaleString()+" L":"-"],["Location",g.loc||"-"],["Readings",aReadings.length||"-"],["Last Reading",aReadings[0]?.date||"-"],["Tank",g.tank?`${g.tank} L`:"-"],["Capacity",g.cap||"-"],["Assigned",g.assigned||"-"]]
+      ?[["Total Batches",tBatches?tBatches.toLocaleString():"-"],...(tPans?[["Total Pans Fired",tPans.toLocaleString()]]:[]),[tPans?"Avg L per batch/pan":"Avg L/Batch",(tBatches+tPans>0&&tConsumed>0)?(tConsumed/(tBatches+tPans)).toFixed(2)+" L":"-"],["Total Consumed",tConsumed?tConsumed.toLocaleString()+" L":"-"],["Location",g.loc||"-"],["Readings",aReadings.length||"-"],["Last Reading",aReadings[0]?.date||"-"],["Tank",g.tank?`${g.tank} L`:"-"],["Capacity",g.cap||"-"],["Assigned",g.assigned||"-"]]
       :[["Run Hours",`${(g.hrs||0).toLocaleString()} hrs`],["Cost/Hour",g.costHr?fmt(g.costHr):"-"],["Capacity",g.cap||"-"],["Location",g.loc||"-"],["Fuel Type",g.fuelType||"-"],["Assigned",g.assigned||"-"],["Tank",g.tank?`${g.tank} L`:"-"],["Next Service",g.nextSvc||"-"],["Fuel Costs (Life)",g.fuelCostLife?fmt(g.fuelCostLife):"-"],["Service Costs (Life)",g.svcCostLife?fmt(g.svcCostLife):"-"]]
     ).map(([l,val])=>(<div key={l}><div style={{fontSize:11,color:"#8D8D8D"}}>{l}</div><div style={{fontSize:14,fontWeight:600,marginTop:2}}>{val}</div></div>))}</div></div>
     {aReadings.length>0&&<div style={{marginTop:14,background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:18}}>
       <h4 style={{fontSize:13,fontWeight:700,marginBottom:10}}>Recent Diesel Readings ({aReadings.length})</h4>
-      <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:isOvenAsset?480:560}}><thead><tr style={{background:"#F4F4F4"}}>{(isOvenAsset?["Date","Batches","Consumed (L)","Level (L)","L/Batch"]:["Date","Open Hrs","Close Hrs","Hours Run","Consumed (L)","Level (L)","Flag"]).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+      <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:isOvenAsset?480:560}}><thead><tr style={{background:"#F4F4F4"}}>{(isOvenAsset?["Date","Batches","Pans","Consumed (L)","Level (L)","L per batch/pan"]:["Date","Open Hrs","Close Hrs","Hours Run","Consumed (L)","Level (L)","Flag"]).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
       <tbody>{aReadings.slice(0,14).map(r=>(isOvenAsset
-        ?<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600,color:"#8B5CF6"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td><td style={tc}>{r.usedL!=null?r.usedL.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{(r.batchesProduced>0&&r.usedL>0)?(r.usedL/r.batchesProduced).toFixed(2):"-"}</td></tr>
+        ?<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4"}}><td style={tc}>{r.date}</td><td style={{...tc,fontWeight:600,color:"#8B5CF6"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td><td style={{...tc,color:"#8B5CF6"}}>{r.pansFired!=null?r.pansFired.toLocaleString():"-"}</td><td style={tc}>{r.usedL!=null?r.usedL.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{(ovenUnits(r)>0&&r.usedL>0)?(r.usedL/ovenUnits(r)).toFixed(2):"-"}</td></tr>
         :<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4",background:r.discrepancyFlag?"#FFF6F6":""}}><td style={tc}>{r.date}</td><td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString():"-"}</td><td style={tc}>{r.genHoursClosing!=null?r.genHoursClosing.toLocaleString():"-"}</td><td style={{...tc,fontWeight:600}}>{r.hoursRun?r.hoursRun.toFixed(1):"-"}</td><td style={tc}>{r.usedL!=null?r.usedL.toLocaleString():"-"}</td><td style={tc}>{r.dieselLevelActual!=null?r.dieselLevelActual.toLocaleString():"-"}</td><td style={tc}>{r.discrepancyFlag?<AlertTriangle size={13} color="#DA1E28"/>:"-"}</td></tr>
       ))}</tbody></table></div>
       {aReadings.length>14&&<div style={{fontSize:11,color:"#8D8D8D",marginTop:6}}>Showing latest 14 — full history in Diesel Management → readings (filter: {g.name})</div>}
@@ -1483,7 +1488,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
 // ============================================
 // DIESEL LOG PAGE - Daily Staff Input
 // ============================================
-function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings,vehicles,dieselTransfers,setDieselTransfers,powerPeriods,setPowerPeriods,powerReady,storeTransfersReady}){
+function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings,vehicles,dieselTransfers,setDieselTransfers,powerPeriods,setPowerPeriods,powerReady,storeTransfersReady,pansReady}){
   const [pageTab,setPageTab]=useState("daily"); // daily | nepa
   const [step,setStep]=useState("select"); // select | input | review | done
   const [selGen,setSelGen]=useState("");
@@ -1507,6 +1512,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const [tankPreview,setTankPreview]=useState("");
   // Bread batches (ovens only)
   const [batches,setBatches]=useState("");
+  const [pans,setPans]=useState("");   // pans fired with the oven's diesel (20261015_oven_pans.sql)
   // NEPA fields
   const [nepaMode,setNepaMode]=useState("manual"); // photo | manual
   const [nepaHours,setNepaHours]=useState("");
@@ -1803,7 +1809,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       let consumptionLitres,consumptionRate;
       if(isOven){
         consumptionLitres=(actualLevel!=null&&prevLevel!=null)?Math.max(0,Math.round(prevLevel+added-transfersOut-actualLevel)):null;
-        consumptionRate=(consumptionLitres!=null&&batchesNum>0)?Math.round(consumptionLitres/batchesNum*100)/100:null;
+        const unitsNum=(batchesNum||0)+((pansReady&&pans!=="")?(parseFloat(pans)||0):0);
+        consumptionRate=(consumptionLitres!=null&&unitsNum>0)?Math.round(consumptionLitres/unitsNum*100)/100:null;
       }else{
         consumptionLitres=theoretical!=null?Math.round(theoretical):null;
         consumptionRate=rate;
@@ -1872,6 +1879,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         nepaMeterClosing:parseFloat(nepaMeterClose)||null,nepaPhotoUrl:nepaPhotoUrl,nepaSource:nepaMode,
         discrepancyLitres:discrepancy!=null?Math.round(discrepancy):null,discrepancyFlag:discFlag,
         batchesProduced:batches!==""?parseFloat(batches):null,
+        ...(pansReady?{pansFired:pans!==""?parseFloat(pans):null}:{}),
         submittedBy:user?.uid||null,notes:notes
       });
       let saved;
@@ -1931,7 +1939,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     setStep("select");setSelGen("");setEditingId(null);setEntryDate(todayStr);
     setInputMode("photo");setPhoto(null);setPreview("");
     setAnalyzing(false);setMsg("");setAiNotes("");setHoursOpening("");setHoursClosing("");
-    setDieselLevel("");setDieselAdded("");setTankPhoto(null);setTankPreview("");setBatches("");
+    setDieselLevel("");setDieselAdded("");setTankPhoto(null);setTankPreview("");setBatches("");setPans("");
     setNepaMode("manual");setNepaHours("");
     setNepaPhoto(null);setNepaPreview("");setNepaMeterOpen("");setNepaMeterClose("");setNotes("");
   };
@@ -1946,7 +1954,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     setNepaHours(r.nepaHours?String(r.nepaHours):"");
     setNepaMeterOpen(r.nepaMeterOpening?String(r.nepaMeterOpening):"");
     setNepaMeterClose(r.nepaMeterClosing?String(r.nepaMeterClosing):"");
-    setBatches(r.batchesProduced!=null?String(r.batchesProduced):"");
+    setBatches(r.batchesProduced!=null?String(r.batchesProduced):"");setPans(r.pansFired!=null?String(r.pansFired):"");
     setNotes(r.notes||"");setInputMode(r.genSource||"manual");setNepaMode(r.nepaSource||"manual");
     setPreview(r.genPhotoUrl||"");setNepaPreview(r.nepaPhotoUrl||"");setTankPreview(r.dieselLevelPhotoUrl||"");
     setStep("input");
@@ -2134,12 +2142,18 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
           {/* Section: Bread Batches (ovens only) */}
           {selectedGen.assetType==="oven"&&<div style={{marginBottom:20}}>
             <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6,marginBottom:10}}><div style={{width:22,height:22,borderRadius:"50%",background:"#8B5CF6",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>1</div> Bread Production</div>
-            <Field label="Batches Produced Today *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="1" placeholder="e.g. 32" value={batches} onChange={e=>setBatches(e.target.value)}/></Field>
+            <div style={{display:"grid",gridTemplateColumns:pansReady?"1fr 1fr":"1fr",gap:12}}>
+              <Field label="Batches Produced Today *"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="1" placeholder="e.g. 32" value={batches} onChange={e=>setBatches(e.target.value)}/></Field>
+              {pansReady&&<Field label="Pans Fired Today"><input style={{...inp,fontSize:18,fontWeight:700,textAlign:"center"}} type="number" step="1" min="0" placeholder="0 if none" value={pans} onChange={e=>setPans(e.target.value)}/></Field>}
+            </div>
+            {pansReady&&<div style={{fontSize:11,color:"#8D8D8D",marginTop:-6,marginBottom:6}}>Pans fired with the oven's diesel use it too - each pan counts like a batch.</div>}
             {batches&&dieselLevel&&(()=>{
               const prev=getPrevReading(selGen);
               const cons=prev?.dieselLevelActual!=null?prev.dieselLevelActual+autoAdded-parseFloat(dieselLevel):null;
-              const perBatch=cons&&parseFloat(batches)>0?cons/parseFloat(batches):null;
-              return perBatch&&perBatch>0?(<div style={{marginTop:8,padding:8,background:"#EDE7F6",borderRadius:6,display:"flex",justifyContent:"space-between",fontSize:12}}><span style={{color:"#525252"}}>Diesel per batch:</span><span style={{fontWeight:700,color:"#8B5CF6"}}>{perBatch.toFixed(2)} L/batch</span></div>):null;
+              const units=(parseFloat(batches)||0)+(pansReady?(parseFloat(pans)||0):0);
+              const perUnit=cons&&units>0?cons/units:null;
+              const withPans=pansReady&&parseFloat(pans)>0;
+              return perUnit&&perUnit>0?(<div style={{marginTop:8,padding:8,background:"#EDE7F6",borderRadius:6,display:"flex",justifyContent:"space-between",fontSize:12}}><span style={{color:"#525252"}}>Diesel per {withPans?"batch/pan":"batch"}:</span><span style={{fontWeight:700,color:"#8B5CF6"}}>{perUnit.toFixed(2)} L{withPans?" per batch/pan":"/batch"}</span></div>):null;
             })()}
           </div>}
 
@@ -3947,6 +3961,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const tUsed=rows.reduce((s,r)=>s+(usedOf(r)||0),0);
       const tAdded=rows.reduce((s,r)=>s+(r.dieselAdded||0),0);
       const tBatches=rows.reduce((s,r)=>s+(r.batchesProduced||0),0);
+      const tPans=rows.reduce((s,r)=>s+(r.pansFired||0),0);
       const tTransferred=rows.reduce((s,r)=>s+(txMap[r.generatorId+"|"+r.date]||0),0);
       const kpiCount=4+(tBatches>0?1:0)+(tTransferred>0?1:0);
       // Pagination
@@ -3961,12 +3976,12 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const pwDay=powerHoursByDay(powerPeriods);const nplEnd={};(nepaPeriodLogs||[]).forEach(n=>{nplEnd[n.storeLoc+"|"+n.toDate]=n;});
       const gridOf=(r)=>{const p=pwDay[r.storeLoc+"|"+r.date];const n=nplEnd[r.storeLoc+"|"+r.date];
         return{hrs:p?Math.round(p.ms/36e4)/10:(r.nepaHours||null),units:n?nplUnits(n):((r.nepaMeterOpening!=null&&r.nepaMeterClosing!=null)?Math.round((r.nepaMeterClosing-r.nepaMeterOpening)*10)/10:null),since:n&&n.fromDate!==n.toDate?n.fromDate:null};};
-      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Transferred Out (L)","Expected (L)","Batches","Rate (L/hr | L/batch)","Power (h)","Grid Units","Notes"];
+      const cols=["Date","Branch","Asset","Open Hrs","Close Hrs","Hours Run","Open Level (L)","Close Level (L)","Added (L)","Used (L)","Transferred Out (L)","Expected (L)","Batches","Pans","Rate (L/hr | L per batch/pan)","Power (h)","Grid Units","Notes"];
       const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1,background:"#F4F4F4"};
       const resetPage=()=>setRdPage(0);
       const exportCsv=()=>{
         const head=cols.join(",");
-        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",txOf(r)||"",expectedOf(r)??"",r.batchesProduced??"",r.rateL!=null?r.rateL.toFixed(2):"",gridOf(r).hrs??"",gridOf(r).units??"",[(r.notes||""),txNote(r)].filter(Boolean).join(" | ").replace(/[",\n]/g," ")].join(",")).join("\n");
+        const body=rows.map(r=>[r.date,r.storeLoc,genName(r.generatorId),r.genHoursOpening??"",r.genHoursClosing??"",r.hoursRun??"",openMap[r.id]??"",r.dieselLevelActual??"",r.dieselAdded??"",usedOf(r)??"",txOf(r)||"",expectedOf(r)??"",r.batchesProduced??"",r.pansFired??"",r.rateL!=null?r.rateL.toFixed(2):"",gridOf(r).hrs??"",gridOf(r).units??"",[(r.notes||""),txNote(r)].filter(Boolean).join(" | ").replace(/[",\n]/g," ")].join(",")).join("\n");
         const blob=new Blob([head+"\n"+body],{type:"text/csv"});
         const url=URL.createObjectURL(blob);const a=document.createElement("a");
         a.href=url;a.download=`diesel-readings${rdStore?"-"+rdStore.replace(/\s+/g,"_"):""}.csv`;a.click();URL.revokeObjectURL(url);
@@ -3987,7 +4002,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <Kpi icon={Droplet} label="Total Used" value={tUsed.toLocaleString()+" L"} sub="Measured tank drop"/>
           <Kpi icon={Fuel} label="Total Added" value={tAdded.toLocaleString()+" L"}/>
           {tTransferred>0&&<Kpi icon={Send} label="Transferred Out" value={tTransferred.toLocaleString()+" L"} sub="To vehicles / oven"/>}
-          {tBatches>0&&<Kpi icon={Package} label="Bread Batches" value={tBatches.toLocaleString()} sub={tUsed>0?`${(tUsed/tBatches).toFixed(2)} L/batch avg`:""}/>}
+          {tBatches>0&&<Kpi icon={Package} label={tPans?"Batches + Pans Fired":"Bread Batches"} value={tBatches.toLocaleString()+(tPans?" + "+tPans.toLocaleString():"")} sub={tUsed>0?`${(tUsed/(tBatches+tPans)).toFixed(2)} L per batch${tPans?"/pan":""} avg`:""}/>}
         </div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
           {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
@@ -4006,6 +4021,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
             <td style={{...tc,color:txOf(r)>0?"#8A3FFC":"#8D8D8D",fontWeight:txOf(r)>0?600:400}} title={txNote(r)}>{txOf(r)>0?txOf(r).toLocaleString()+" L":"-"}</td>
             <td style={{...tc,color:"#8D8D8D"}}>{expectedOf(r)!=null?expectedOf(r).toLocaleString():"-"}</td>
             <td style={{...tc,fontWeight:r.batchesProduced!=null?600:400,color:r.batchesProduced!=null?"#8B5CF6":"#161616"}}>{r.batchesProduced!=null?r.batchesProduced.toLocaleString():"-"}</td>
+            <td style={{...tc,color:r.pansFired!=null?"#8B5CF6":"#161616"}}>{r.pansFired!=null?r.pansFired.toLocaleString():"-"}</td>
             <td style={tc}>{r.rateL!=null?r.rateL.toFixed(2):"-"}</td>
             {(()=>{const gr=gridOf(r);return(<><td style={{...tc,color:gr.hrs!=null?"#8B5CF6":"#A8A8A8"}}>{gr.hrs!=null?gr.hrs.toFixed(1):"-"}</td><td style={{...tc,color:gr.units!=null?"#8B5CF6":"#A8A8A8"}} title={gr.since?"Meter reading covers the days since "+gr.since:""}>{gr.units!=null?gr.units.toLocaleString()+(gr.since?"*":""):"-"}</td></>);})()}
             <td style={{...tc,whiteSpace:"nowrap"}}>{(r.notes||txOf(r)>0)?<button onClick={()=>setNoteRow({date:r.date,gen:genName(r.generatorId),store:r.storeLoc,notes:r.notes||"",transfers:txLabelMap[r.generatorId+"|"+r.date]||[]})} title="View notes" style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 9px",borderRadius:6,border:"1px solid "+(txOf(r)>0?"#E0D4FF":"#E0E0E0"),background:txOf(r)>0?"#F5F0FF":"#fff",fontSize:11,fontWeight:600,color:txOf(r)>0?"#8A3FFC":"#525252",cursor:"pointer"}}><FileText size={11}/>{txOf(r)>0?"Transfer":"Note"}</button>:<span style={{color:"#C6C6C6"}}>-</span>}</td>
@@ -4138,6 +4154,7 @@ function FleetProAppInner(){
   // Purchase destination / delivery source columns (20261008_diesel_routes.sql);
   // until they exist the forms keep the old behaviour and save payloads are unchanged.
   const [routesReady,setRoutesReady]=useState(false);
+  const [pansReady,setPansReady]=useState(false);   // diesel_readings.pans_fired (20261015_oven_pans.sql)
   const [storeTransfersReady,setStoreTransfersReady]=useState(false);   // 20261010_store_transfers.sql
   // Accepted diesel losses (20261009_diesel_losses.sql). Loaded on their own so a
   // missing table never hides the rest of the Daily stock tab.
@@ -4167,8 +4184,8 @@ function FleetProAppInner(){
     const lc=l.counts&&l.counts.length?l.counts[l.counts.length-1].date:null;
     return{net:l.netVar||0,date:lc};},[depotReady,stockChecks,tankerLoads,dieselPurchases,dieselDistributions,dieselLosses]);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
-    const[a,b,c]=await Promise.all([supabase.from("diesel_purchases").select("destination").limit(1),supabase.from("diesel_distributions").select("source").limit(1),supabase.from("diesel_transfers").select("dest_store").limit(1)]);
-    if(live){setRoutesReady(!a.error&&!b.error);setStoreTransfersReady(!c.error);}
+    const[a,b,c,d]=await Promise.all([supabase.from("diesel_purchases").select("destination").limit(1),supabase.from("diesel_distributions").select("source").limit(1),supabase.from("diesel_transfers").select("dest_store").limit(1),supabase.from("diesel_readings").select("pans_fired").limit(1)]);
+    if(live){setRoutesReady(!a.error&&!b.error);setStoreTransfersReady(!c.error);setPansReady(!d.error);}
   })();return()=>{live=false;};},[user?.uid]);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
     try{const[c,l]=await Promise.all([db.getStockChecks(),db.getTankerLoads()]);if(live){setStockChecks(c.map(toSC));setTankerLoads(l.map(toTL));setDepotReady(true);}}
@@ -4266,7 +4283,7 @@ function FleetProAppInner(){
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders}/>}/>
-        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady}/>}/>
+        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady} pansReady={pansReady}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady}/>}/>
         <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
