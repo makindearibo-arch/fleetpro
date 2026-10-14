@@ -2645,7 +2645,8 @@ function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appS
 // ============================================
 // STAFF DASHBOARD PAGE - Supply, History, Generators, Reports
 // ============================================
-function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,dieselTransfers,setDieselTransfers,storeTransfersReady}){
+function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,dieselTransfers,setDieselTransfers,storeTransfersReady,gasCylinders,setGasCylinders,gasSupplyReady}){
+  const [gasBusy,setGasBusy]=useState(false);   // accepting gas (banner below); before any early return
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
   const myStore=isStoreStaff?userStore:null;
@@ -2758,8 +2759,36 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   // diesel sent from another store waits for acceptance here too, next to deliveries
   const pendingTransfersIn=storeTransfersReady?(dieselTransfers||[]).filter(t=>(myStore?isIncoming(t,myStore):t.destType==="store")&&!t.confirmed&&t.date>=_pendCut).map(t=>({...t,isTransfer:true})):[];
   const pendingRecent=[...(dieselDistributions||[]).filter(d=>(myStore?d.storeLoc===myStore:true)&&!d.confirmed&&d.date>=_pendCut),...pendingTransfersIn].sort((a,b)=>b.date.localeCompare(a.date));
+  // cooking gas the fleet manager sent and this store has not accepted yet (also on the Cooking Gas page)
+  const pendingGas=(gasSupplyReady&&myStore)?(gasCylinders||[]).filter(c=>c.storeLoc===myStore&&c.received===false).sort((a,b)=>a.purchaseDate.localeCompare(b.purchaseDate)):[];
+  const acceptGas=async(list)=>{setGasBusy(true);
+    try{for(const c of list){const row=await db.updateGasCylinder(c.id,{received_confirmed:true,received_date:ngDate(Date.now()),received_by:user?.uid||null});if(setGasCylinders)setGasCylinders(prev=>prev.map(x=>x.id===c.id?toGAS(row):x));}}
+    catch(e){alert("Error: "+(e.message||e));}setGasBusy(false);};
 
   return(<div>
+    {pendingGas.length>0&&(
+      <div style={{marginBottom:16,border:"1px solid #FFD8A8",borderRadius:12,background:"#FFF4EC",overflow:"hidden"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"12px 16px",flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <Flame size={18} color="#E8590C"/>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:"#B4460C"}}>{pendingGas.length} cooking gas cylinder{pendingGas.length>1?"s":""} sent to you</div>
+              <div style={{fontSize:11,color:"#525252"}}>Accept each one only when it has arrived. Then use "Fix a spare" on the Cooking Gas page when you start using it.</div>
+            </div>
+          </div>
+          {pendingGas.length>1&&<button disabled={gasBusy} onClick={()=>acceptGas(pendingGas)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"#E8590C",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
+        </div>
+        <div>{pendingGas.map(c=>(
+          <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 16px",borderTop:"1px solid #FFD8A8"}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#B4460C"}}>{c.kg.toLocaleString()} kg cylinder <span style={{fontWeight:500,color:"#8D8D8D",fontSize:11}}>{"\u00b7 sent "+fmtDayLabel(c.purchaseDate)}</span></div>
+              {c.notes?<div style={{fontSize:10,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.notes}</div>:null}
+            </div>
+            <button disabled={gasBusy} onClick={()=>acceptGas([c])} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{gasBusy?"Saving...":"Accept"}</button>
+          </div>))}
+        </div>
+      </div>
+    )}
     {pendingRecent.length>0&&(
       <div style={{marginBottom:16,border:"1px solid #A6C8FF",borderRadius:12,background:"#EDF5FF",overflow:"hidden"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"12px 16px",flexWrap:"wrap"}}>
@@ -2898,8 +2927,12 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
   const purch=(gasPurchases||[]).map(p=>{const sent=all.filter(c=>c.purchaseId===p.id);return{...p,sentList:sent,sent:sent.length,left:p.cylinders-sent.length,waitingN:sent.filter(c=>c.received===false).length};});
   const withLeft=purch.filter(p=>p.left>0).sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt).localeCompare(String(b.createdAt)));   // oldest first (FIFO)
   const perCyl=p=>p.cost!=null&&p.cylinders?Math.round(p.cost/p.cylinders):null;
-  const openPurchase=(p)=>{setMsg("");setModal(p?{mode:"purchase",id:p.id,date:p.date,supplier:p.supplier,cylinders:String(p.cylinders),kgEach:String(p.kgEach),cost:p.cost!=null?String(p.cost):"",notes:p.notes,sentN:p.sent}
-    :{mode:"purchase",date:todayStr,supplier:"",cylinders:"",kgEach:"50",cost:"",notes:"",sentN:0});};
+  // Full cylinders that were already at the main office when tracking started:
+  // recorded once like a purchase (supplier OPENING STOCK) and sent to stores
+  // from there like any other gas (Makinde, 2026-10-14).
+  const OPENING="OPENING STOCK";
+  const openPurchase=(p,kind)=>{setMsg("");setModal(p?{mode:"purchase",kind:p.supplier===OPENING?"opening":"bought",id:p.id,date:p.date,supplier:p.supplier===OPENING?"":p.supplier,cylinders:String(p.cylinders),kgEach:String(p.kgEach),cost:p.cost!=null?String(p.cost):"",notes:p.notes,sentN:p.sent}
+    :{mode:"purchase",kind:kind||"bought",date:todayStr,supplier:"",cylinders:"",kgEach:"50",cost:"",notes:"",sentN:0});};
   const openSend=(st,pid)=>{setMsg("");const p=pid?withLeft.find(x=>x.id===pid):withLeft[0];setModal({mode:"send",store:st||"",n:"1",purchaseId:p?p.id:"",date:todayStr,notes:""});};
   const accept=async(list)=>{setBusy(true);setMsg("");
     try{for(const c of list)local(toGAS(await db.updateGasCylinder(c.id,{received_confirmed:true,received_date:todayStr,received_by:user?.uid||null})));}
@@ -2915,7 +2948,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
     if(m.mode==="purchase")return run(async()=>{const n=parseInt(m.cylinders,10),kg=parseFloat(m.kgEach);
       if(!m.date)throw new Error("Enter the date.");if(!(n>0))throw new Error("Enter how many cylinders.");if(!(kg>0))throw new Error("Enter the kg of each cylinder.");
       if(m.id&&n<m.sentN)throw new Error(m.sentN+" cylinders from this purchase were already sent - it cannot be fewer than that.");
-      const body={date:m.date,supplier:(m.supplier||"").trim(),cylinders:n,kg_each:kg,cost:m.cost===""?null:parseFloat(m.cost),notes:m.notes||""};
+      const body={date:m.date,supplier:m.kind==="opening"?OPENING:(m.supplier||"").trim(),cylinders:n,kg_each:kg,cost:m.cost===""?null:parseFloat(m.cost),notes:m.notes||""};
       const row=toGP(m.id?await db.updateGasPurchase(m.id,body):await db.addGasPurchase(body));
       setGasPurchases(prev=>m.id?prev.map(p=>p.id===m.id?row:p):[row,...prev]);});
     if(m.mode==="send")return run(async()=>{const n=parseInt(m.n,10);const p=purch.find(x=>x.id===m.purchaseId);
@@ -2951,7 +2984,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
           <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Cooking gas - {store}</h3><div style={{fontSize:12,color:"#525252",marginTop:4}}>Usually lasts {usualTxt(u,tk)}</div></div>
           {canWrite&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {isAdmin&&supplyReady&&<button onClick={()=>openSend(store)} disabled={!withLeft.length} title={withLeft.length?"":"No gas left at the depot - record a gas purchase first"} style={btn(withLeft.length?orange:"#C6C6C6")}>Send gas here</button>}
+            {isAdmin&&supplyReady&&<button onClick={()=>openSend(store)} disabled={!withLeft.length} title={withLeft.length?"":"No gas left at the main office - record a gas purchase or the opening stock first"} style={btn(withLeft.length?orange:"#C6C6C6")}>Send gas here</button>}
             {!staffLocked&&<button onClick={openNew} style={supplyReady?btn("#fff","#525252","1.5px solid #E0E0E0"):btn(orange)}>{supplyReady?"+ Cylinder already here":"+ New cylinder"}</button>}
             {using.length>0&&<button onClick={openFinish} style={btn("#fff",orange,"1.5px solid "+orange)}>Gas finished</button>}
             {sp.length>0&&<button onClick={openFix} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Fix a spare</button>}
@@ -3005,16 +3038,17 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
           <div style={{fontSize:11,color:"#8D8D8D",marginTop:2,maxWidth:620}}>The fleet manager records the gas bought, then sends cylinders to stores. A store accepts each cylinder when it arrives; until then it cannot use it.</div></div>
         {isAdmin&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           <button onClick={()=>openPurchase(null)} style={btn(orange)}>+ Gas purchase</button>
+          <button onClick={()=>openPurchase(null,"opening")} style={btn("#fff","#B45309","1.5px solid #FFD8A8")}>+ Opening stock</button>
           <button onClick={()=>openSend("")} disabled={!withLeft.length} style={btn(withLeft.length?"#FFF4EC":"#F4F4F4",withLeft.length?orange:"#A8A8A8","1.5px solid "+(withLeft.length?orange:"#E0E0E0"))}>Send to a store</button>
         </div>}
       </div>
       <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:12}}>
-        <div style={{padding:"10px 14px",borderRadius:10,background:"#F4F4F4",fontSize:13}}><b>At the depot (bought, not sent):</b> {depotTxt||"none"}</div>
+        <div style={{padding:"10px 14px",borderRadius:10,background:"#F4F4F4",fontSize:13}}><b>At the main office (not sent yet):</b> {depotTxt||"none"}</div>
         <div style={{padding:"10px 14px",borderRadius:10,background:waitAll.length?"#FFF8E1":"#F4F4F4",fontSize:13}}><b>Sent, not accepted yet:</b> {waitAll.length?waitAll.length+" - "+waitStores.slice(0,4).join(", ")+(waitStores.length>4?" +"+(waitStores.length-4)+" more":""):"none"}</div>
       </div>
-      {shown.length>0&&<div style={{overflowX:"auto",marginTop:12}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Cylinders","Cost","Per cylinder","Sent to","Left at depot",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+      {shown.length>0&&<div style={{overflowX:"auto",marginTop:12}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Supplier","Cylinders","Cost","Per cylinder","Sent to","Left at main office",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
       <tbody>{shown.map(p=>(<tr key={p.id}>
-        <td style={{...tc,whiteSpace:"nowrap"}}>{fmtDayLabel(p.date)}</td><td style={{...tc,fontWeight:600}}>{p.supplier||"-"}{p.notes?<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>{p.notes}</div>:null}</td>
+        <td style={{...tc,whiteSpace:"nowrap"}}>{fmtDayLabel(p.date)}</td><td style={{...tc,fontWeight:600}}>{p.supplier===OPENING?<span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF8E1",color:"#B45309"}}>Opening stock</span>:(p.supplier||"-")}{p.notes?<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>{p.notes}</div>:null}</td>
         <td style={tc}>{p.cylinders} x {kgTxt(p.kgEach)}</td><td style={tc}>{p.cost!=null?fmt(p.cost):"-"}</td>
         <td style={tc}>{perCyl(p)!=null?fmt(perCyl(p)):"-"}{perCyl(p)!=null&&p.kgEach?<div style={{fontSize:10,color:"#8D8D8D"}}>{fmt(Math.round(p.cost/(p.cylinders*p.kgEach)))}/kg</div>:null}</td>
         <td style={{...tc,fontSize:12}}>{p.sent?sentTo(p):<span style={{color:"#A8A8A8"}}>not sent yet</span>}</td>
@@ -3069,14 +3103,16 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
     <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14,maxWidth:760}}>{supplyReady?"The fleet manager records the gas bought and sends cylinders to stores; each store accepts what arrives, then records when a cylinder is fixed (started being used) and when it finishes. The app works out how long cylinders usually last at each store and flags one that runs out much faster."
       :"Gas can only be measured when a cylinder runs out, so record each cylinder: when it was bought, when it was fixed (started being used) and when it finished. The app works out how long cylinders usually last at each store and flags one that runs out much faster."}</div>
     {store?storeView():<>{isAdmin&&purchasesCard()}{allView()}</>}
-    {m&&<Modal title={m.mode==="purchase"?(m.id?"Change gas purchase":"Gas purchase"):m.mode==="send"?"Send gas to a store":m.mode==="new"?(supplyReady?"Cylinder already at the store":"New gas cylinder"):m.mode==="finish"?"Gas finished":m.mode==="fix"?"Fix a spare cylinder":"Change cylinder"} onClose={()=>setModal(null)}>
+    {m&&<Modal title={m.mode==="purchase"?(m.kind==="opening"?"Opening stock at the main office":m.id?"Change gas purchase":"Gas purchase"):m.mode==="send"?"Send gas to a store":m.mode==="new"?(supplyReady?"Cylinder already at the store":"New gas cylinder"):m.mode==="finish"?"Gas finished":m.mode==="fix"?"Fix a spare cylinder":"Change cylinder"} onClose={()=>setModal(null)}>
       {m.mode==="purchase"&&<>
+        {!m.id&&<Field label="What are you recording?"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{[["bought","Gas bought"],["opening","Opening stock (already at the main office)"]].map(([v,t])=>(<button key={v} onClick={()=>setModal({...m,kind:v})} style={btn(m.kind===v?"#FFF4EC":"#fff",m.kind===v?orange:"#525252","1.5px solid "+(m.kind===v?orange:"#E0E0E0"))}>{t}</button>))}</div></Field>}
+        {m.kind==="opening"&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>Full cylinders that were already at the main office when we started recording gas. They are sent to stores from here like any gas bought.</div>}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Field label="Bought on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
-          <Field label="Supplier"><input style={inp} value={m.supplier} placeholder="e.g. gas plant name" onChange={e=>setModal({...m,supplier:e.target.value})}/></Field>
+          <Field label={m.kind==="opening"?"Counted on":"Bought on"}><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
+          {m.kind!=="opening"?<Field label="Supplier"><input style={inp} value={m.supplier} placeholder="e.g. gas plant name" onChange={e=>setModal({...m,supplier:e.target.value})}/></Field>:<div/>}
           <Field label="How many cylinders"><input type="number" min="1" step="1" style={{...inp,fontWeight:700}} value={m.cylinders} placeholder="e.g. 4" onChange={e=>setModal({...m,cylinders:e.target.value})}/></Field>
           <Field label="Kg each"><input type="number" style={{...inp,fontWeight:700}} value={m.kgEach} onChange={e=>setModal({...m,kgEach:e.target.value})}/></Field>
-          <Field label="Total cost (optional)"><input type="number" style={inp} value={m.cost} placeholder="e.g. 380000" onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
+          <Field label={m.kind==="opening"?"Value (optional)":"Total cost (optional)"}><input type="number" style={inp} value={m.cost} placeholder="e.g. 380000" onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
         </div>
         {(()=>{const n=parseInt(m.cylinders,10),kg=parseFloat(m.kgEach),c=parseFloat(m.cost);return n>0&&kg>0?<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>{(n*kg).toLocaleString()} kg in all{c>0?<> - <b>{fmt(Math.round(c/n))}</b> a cylinder ({fmt(Math.round(c/(n*kg)))}/kg)</>:null}</div>:null;})()}
         {m.id&&m.sentN>0&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>{m.sentN} cylinder{m.sentN===1?" was":"s were"} already sent from this purchase. Changing the cost does not change what was charged to those stores.</div>}
@@ -3089,7 +3125,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
           <Field label="Sent on"><input type="date" style={inp} value={m.date} min={p?p.date:undefined} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
         </div>
         <Field label="From which purchase"><select style={inp} value={m.purchaseId} onChange={e=>setModal({...m,purchaseId:e.target.value})}><option value="">Choose...</option>{withLeft.map(x=>(<option key={x.id} value={x.id}>{fmtDayLabel(x.date)} {x.supplier||""} - {x.left} x {x.kgEach} kg left</option>))}</select></Field>
-        {p&&<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Each cylinder: <b>{kgTxt(p.kgEach)}</b>{perCyl(p)!=null?<>, {fmt(perCyl(p))} charged to the store</>:null}. {p.left} left at the depot from this purchase.</div>}
+        {p&&<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Each cylinder: <b>{kgTxt(p.kgEach)}</b>{perCyl(p)!=null?<>, {fmt(perCyl(p))} charged to the store</>:null}. {p.left} left at the main office from this purchase.</div>}
         <Field label="Notes (optional)"><input style={inp} value={m.notes} placeholder="e.g. driver's name" onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
         <div style={{fontSize:11,color:"#8D8D8D",marginBottom:10}}>The store sees it under Cooking Gas and accepts it when it arrives.</div>
       </>;})()}
@@ -4284,7 +4320,7 @@ function FleetProAppInner(){
       <Routes>
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady} pansReady={pansReady}/>}/>
-        <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady}/>}/>
+        <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasSupplyReady={gasSupplyReady}/>}/>
         <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
