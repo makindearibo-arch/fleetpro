@@ -2902,6 +2902,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
   const [modal,setModal]=useState(null);
   const [busy,setBusy]=useState(false);
   const [msg,setMsg]=useState("");
+  const [sentStore,setSentStore]=useState("");   // "Gas sent to stores" filter
   const orange="#E8590C";
   const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
   const btn=(bg,fg,border)=>({padding:"8px 14px",borderRadius:9,border:border||"none",background:bg,color:fg||"#fff",fontSize:12,fontWeight:600,cursor:"pointer"});
@@ -2931,6 +2932,18 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
   // recorded once like a purchase (supplier OPENING STOCK) and sent to stores
   // from there like any other gas (Makinde, 2026-10-14).
   const OPENING="OPENING STOCK";
+  const shortDay=d=>d?fmtDayLabel(d).replace(/^\S+ /,""):"";
+  const purchName=p=>p?(p.supplier===OPENING?"Opening stock":(p.supplier||"?"))+" "+shortDay(p.date):"";
+  // every cylinder the fleet manager sent, newest first -- one line each
+  const sentAll=all.filter(c=>c.purchaseId).sort((a,b)=>b.purchaseDate.localeCompare(a.purchaseDate)||String(b.createdAt).localeCompare(String(a.createdAt)));
+  const purchOf=c=>purch.find(p=>p.id===c.purchaseId);
+  // Changing a sent cylinder (a mistake in the store, date, size, cost or purchase):
+  // if the store had accepted it, the acceptance is cleared so they accept the
+  // corrected one, and the cylinder's notes say what it was (Makinde, 2026-10-20).
+  const openTransfer=c=>{setMsg("");setModal({mode:"transfer",id:c.id,store:c.storeLoc,date:c.purchaseDate,purchaseId:c.purchaseId,kg:String(c.kg),cost:c.cost!=null?String(c.cost):"",notes:c.notes||"",was:c});};
+  const delSent=async(c)=>{if(c.fixedDate){alert("This cylinder is already in use at "+c.storeLoc+" (fixed "+fmtDayLabel(c.fixedDate)+"), so it cannot be deleted.");return;}
+    if(!confirm("Delete this "+c.kg+" kg cylinder sent to "+c.storeLoc+" on "+fmtDayLabel(c.purchaseDate)+"?"+(c.received!==false?"\n\n"+c.storeLoc+" already accepted it.":"")))return;
+    try{await db.deleteGasCylinder(c.id);setGasCylinders(prev=>prev.filter(x=>x.id!==c.id));setModal(null);}catch(e){alert(e.message||String(e));}};
   const openPurchase=(p,kind)=>{setMsg("");setModal(p?{mode:"purchase",kind:p.supplier===OPENING?"opening":"bought",id:p.id,date:p.date,supplier:p.supplier===OPENING?"":p.supplier,cylinders:String(p.cylinders),kgEach:String(p.kgEach),cost:p.cost!=null?String(p.cost):"",notes:p.notes,sentN:p.sent}
     :{mode:"purchase",kind:kind||"bought",date:todayStr,supplier:"",cylinders:"",kgEach:"50",cost:"",notes:"",sentN:0});};
   const openSend=(st,pid)=>{setMsg("");const p=pid?withLeft.find(x=>x.id===pid):withLeft[0];setModal({mode:"send",store:st||"",n:"1",purchaseId:p?p.id:"",date:todayStr,notes:""});};
@@ -2943,7 +2956,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
   const openNew=()=>{setMsg("");const arr=ofStore(store);const u=inUse(arr);setModal({mode:"new",purchaseDate:todayStr,kg:String(typicalKg(arr)),cost:"",useNow:true,fixedDate:todayStr,finishIds:u.length===1?[u[0].id]:[],notes:""});};
   const openFinish=()=>{setMsg("");const arr=ofStore(store);const u=inUse(arr);const sp=spares(arr);setModal({mode:"finish",id:u.length===1?u[0].id:"",date:todayStr,fixSpare:sp.length>0,spareId:sp[0]?.id||""});};
   const openFix=()=>{setMsg("");const arr=ofStore(store);const u=inUse(arr);const sp=spares(arr);setModal({mode:"fix",spareId:sp[0]?.id||"",date:todayStr,finishIds:u.length===1?[u[0].id]:[]});};
-  const openEdit=c=>{setMsg("");setModal({mode:"edit",id:c.id,purchaseDate:c.purchaseDate,kg:String(c.kg),cost:c.cost!=null?String(c.cost):"",fixedDate:c.fixedDate||"",finishedDate:c.finishedDate||"",notes:c.notes||""});};
+  const openEdit=c=>{setMsg("");setModal({mode:"edit",id:c.id,purchaseDate:c.purchaseDate,kg:String(c.kg),cost:c.cost!=null?String(c.cost):"",fixedDate:c.fixedDate||"",finishedDate:c.finishedDate||"",notes:c.notes||"",sent:!!c.purchaseId});};
   const saveModal=()=>{const m=modal;
     if(m.mode==="purchase")return run(async()=>{const n=parseInt(m.cylinders,10),kg=parseFloat(m.kgEach);
       if(!m.date)throw new Error("Enter the date.");if(!(n>0))throw new Error("Enter how many cylinders.");if(!(kg>0))throw new Error("Enter the kg of each cylinder.");
@@ -2951,6 +2964,19 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
       const body={date:m.date,supplier:m.kind==="opening"?OPENING:(m.supplier||"").trim(),cylinders:n,kg_each:kg,cost:m.cost===""?null:parseFloat(m.cost),notes:m.notes||""};
       const row=toGP(m.id?await db.updateGasPurchase(m.id,body):await db.addGasPurchase(body));
       setGasPurchases(prev=>m.id?prev.map(p=>p.id===m.id?row:p):[row,...prev]);});
+    if(m.mode==="transfer")return run(async()=>{const c0=m.was;const kg=parseFloat(m.kg);const p=purch.find(x=>x.id===m.purchaseId);
+      if(!m.store)throw new Error("Choose the store.");if(!p)throw new Error("Choose the purchase the gas came from.");if(!(kg>0))throw new Error("Enter the kg.");if(!m.date)throw new Error("Enter the date it was sent.");
+      if(m.date<p.date)throw new Error("The gas cannot be sent before it was bought ("+fmtDayLabel(p.date)+").");
+      if(m.store!==c0.storeLoc&&c0.fixedDate)throw new Error("This cylinder is already in use at "+c0.storeLoc+" (fixed "+fmtDayLabel(c0.fixedDate)+"), so it cannot be moved to another store.");
+      if(c0.fixedDate&&m.date>c0.fixedDate)throw new Error("It was fixed on "+fmtDayLabel(c0.fixedDate)+", so it cannot have been sent after that.");
+      if(p.id!==c0.purchaseId&&p.left<1)throw new Error("That purchase has no cylinders left to send.");
+      const cost=m.cost===""?null:parseFloat(m.cost);
+      const ch=[];if(m.store!==c0.storeLoc)ch.push("sent to "+c0.storeLoc);if(m.date!==c0.purchaseDate)ch.push("sent on "+shortDay(c0.purchaseDate));if(kg!==c0.kg)ch.push(c0.kg+" kg");
+      if((cost??null)!==(c0.cost??null))ch.push("cost "+(c0.cost!=null?fmt(c0.cost):"none"));if(p.id!==c0.purchaseId)ch.push("from "+(purchName(purchOf(c0))||"another purchase"));
+      const body={notes:m.notes||""};
+      if(ch.length){Object.assign(body,{store_location:m.store,purchase_date:m.date,purchase_id:p.id,kg,cost,received_confirmed:false,received_date:null,received_by:null});
+        body.notes=((m.notes||"")+" [changed "+shortDay(todayStr)+" by "+(user?.name||"the fleet manager")+" - was "+ch.join(", ")+(c0.received!==false?" - please accept it again":"")+"]").trim();}
+      local(toGAS(await db.updateGasCylinder(m.id,body)));});
     if(m.mode==="send")return run(async()=>{const n=parseInt(m.n,10);const p=purch.find(x=>x.id===m.purchaseId);
       if(!m.store)throw new Error("Choose the store.");if(!p)throw new Error("Choose the purchase the gas comes from.");if(!(n>0))throw new Error("Enter how many cylinders.");
       if(n>p.left)throw new Error("Only "+p.left+" cylinder"+(p.left===1?"":"s")+" of that purchase "+(p.left===1?"is":"are")+" left to send.");
@@ -3030,8 +3056,8 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
     const bySize={};withLeft.forEach(p=>{bySize[p.kgEach]=(bySize[p.kgEach]||0)+p.left;});
     const depotTxt=Object.entries(bySize).sort((a,b)=>Number(b[0])-Number(a[0])).map(([kg,n])=>n+" x "+Number(kg).toLocaleString()+" kg").join(", ");
     const waitAll=waiting(all);const waitStores=[...new Set(waitAll.map(c=>c.storeLoc))];
-    const sentTo=p=>{const m={};p.sentList.forEach(c=>{const k=c.storeLoc;m[k]=m[k]||{n:0,w:0};m[k].n++;if(c.received===false)m[k].w++;});
-      return Object.entries(m).map(([st,v])=>st+(v.n>1?" x"+v.n:"")+(v.w?" ("+v.w+" not accepted)":"")).join(", ");};
+    const sentTo=p=>{const m={};p.sentList.forEach(c=>{const k=c.storeLoc+"|"+c.purchaseDate;m[k]=m[k]||{st:c.storeLoc,d:c.purchaseDate,n:0,w:0};m[k].n++;if(c.received===false)m[k].w++;});
+      return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d)).map(v=>v.st+" "+shortDay(v.d)+(v.n>1?" x"+v.n:"")+(v.w?" ("+v.w+" not accepted)":"")).join(", ");};
     return(<div style={card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
         <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Gas bought and sent to stores</h3>
@@ -3060,6 +3086,35 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
         </div>}</td>
       </tr>))}</tbody></table></div>}
       {!purch.length&&<div style={{padding:"14px 0 2px",color:"#8D8D8D",fontSize:13}}>No gas purchases recorded yet.</div>}
+    </div>);};
+  const sentCard=()=>{if(!supplyReady||!sentAll.length)return null;
+    const inR=d=>d&&d>=from&&d<=to;
+    const rows=sentAll.filter(c=>(!sentStore||c.storeLoc===sentStore)&&(inR(c.purchaseDate)||c.received===false));
+    const stores=[...new Set(sentAll.map(c=>c.storeLoc))].sort();
+    const accTxt=c=>c.received===false?pill(/\[changed /.test(c.notes||"")?"Changed - waiting to accept again":"Waiting to accept","#B45309","#FFF8E1"):pill("Accepted"+(c.receivedDate?" "+shortDay(c.receivedDate):""),"#24A148","#DEFBE6");
+    const useTxt=c=>c.finishedDate?"Finished "+shortDay(c.finishedDate):c.fixedDate?"In use since "+shortDay(c.fixedDate):c.received===false?"-":"Spare";
+    const exportSent=()=>downloadCsv(`gas-sent-to-stores_${from}_to_${to}.csv`,["Sent on","Store","Kg","From purchase","Cost (NGN)","Accepted","Accepted on","Fixed","Finished","Notes"],
+      rows.map(c=>[c.purchaseDate,c.storeLoc,c.kg,purchName(purchOf(c)),c.cost??"",c.received===false?"no":"yes",c.receivedDate||"",c.fixedDate||"",c.finishedDate||"",c.notes||""]));
+    return(<div style={{...card,padding:0,overflow:"hidden"}}>
+      <div style={{padding:"12px 16px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:"1px solid #E8ECF1"}}>
+        <div style={{marginRight:6}}><b style={{fontSize:14}}>Gas sent to stores</b><div style={{fontSize:11,color:"#8D8D8D"}}>One line per cylinder: sent in the dates chosen, plus anything not accepted yet</div></div>
+        <select value={sentStore} onChange={e=>setSentStore(e.target.value)} style={{...inp,width:170,padding:"5px 8px"}}><option value="">All stores</option>{stores.map(st=>(<option key={st} value={st}>{st}</option>))}</select>
+        <span style={{fontSize:12,color:"#525252"}}>Sent from</span><input type="date" value={from} max={to} onChange={e=>setFrom(e.target.value)} style={{...inp,width:150,padding:"5px 8px"}}/>
+        <span style={{fontSize:12,color:"#525252"}}>to</span><input type="date" value={to} min={from} max={todayStr} onChange={e=>setTo(e.target.value||todayStr)} style={{...inp,width:150,padding:"5px 8px"}}/>
+        <div style={{flex:1}}/><button onClick={exportSent} disabled={!rows.length} style={btn("#fff",P,"1.5px solid "+P)}>Export to Excel</button>
+      </div>
+      {rows.length===0?<div style={{padding:20,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No gas sent in these dates.</div>
+      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}><thead><tr style={{background:"#F4F4F4"}}>{["Sent on","Store","Cylinder","From purchase","Cost","Accepted","At the store",""].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+      <tbody>{rows.map(c=>(<tr key={c.id} style={{background:c.received===false?"#FFFCF2":"transparent"}}>
+        <td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{fmtDayLabel(c.purchaseDate)}</td>
+        <td style={{...tc,fontWeight:700}}>{c.storeLoc}</td>
+        <td style={tc}>{kgTxt(c.kg)}</td>
+        <td style={{...tc,fontSize:12}}>{purchName(purchOf(c))||"-"}</td>
+        <td style={tc}>{c.cost!=null?fmt(c.cost):"-"}</td>
+        <td style={tc}>{accTxt(c)}{c.notes?<div title={c.notes} style={{fontSize:10,color:"#8D8D8D",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.notes}</div>:null}</td>
+        <td style={{...tc,fontSize:12,whiteSpace:"nowrap"}}>{useTxt(c)}</td>
+        <td style={tc}>{isAdmin&&<div style={{display:"flex",gap:4}}><button onClick={()=>openTransfer(c)} style={btn("#fff","#525252","1px solid #E0E0E0")}>Change</button>{!c.fixedDate&&<button onClick={()=>delSent(c)} style={btn("#fff","#DA1E28","1px solid #E0E0E0")}>Delete</button>}</div>}</td>
+      </tr>))}</tbody></table></div>}
     </div>);};
   const allView=()=>{const stores=[...new Set([...(locations||[]),...all.map(c=>c.storeLoc)])].filter(st=>ofStore(st).length).sort();
     const inR=d=>d&&d>=from&&d<=to;
@@ -3102,8 +3157,8 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
     </div>
     <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14,maxWidth:760}}>{supplyReady?"The fleet manager records the gas bought and sends cylinders to stores; each store accepts what arrives, then records when a cylinder is fixed (started being used) and when it finishes. The app works out how long cylinders usually last at each store and flags one that runs out much faster."
       :"Gas can only be measured when a cylinder runs out, so record each cylinder: when it was bought, when it was fixed (started being used) and when it finished. The app works out how long cylinders usually last at each store and flags one that runs out much faster."}</div>
-    {store?storeView():<>{isAdmin&&purchasesCard()}{allView()}</>}
-    {m&&<Modal title={m.mode==="purchase"?(m.kind==="opening"?"Opening stock at the main office":m.id?"Change gas purchase":"Gas purchase"):m.mode==="send"?"Send gas to a store":m.mode==="new"?(supplyReady?"Cylinder already at the store":"New gas cylinder"):m.mode==="finish"?"Gas finished":m.mode==="fix"?"Fix a spare cylinder":"Change cylinder"} onClose={()=>setModal(null)}>
+    {store?storeView():<>{isAdmin&&purchasesCard()}{isAdmin&&sentCard()}{allView()}</>}
+    {m&&<Modal title={m.mode==="purchase"?(m.kind==="opening"?"Opening stock at the main office":m.id?"Change gas purchase":"Gas purchase"):m.mode==="transfer"?"Change gas sent to a store":m.mode==="send"?"Send gas to a store":m.mode==="new"?(supplyReady?"Cylinder already at the store":"New gas cylinder"):m.mode==="finish"?"Gas finished":m.mode==="fix"?"Fix a spare cylinder":"Change cylinder"} onClose={()=>setModal(null)}>
       {m.mode==="purchase"&&<>
         {!m.id&&<Field label="What are you recording?"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{[["bought","Gas bought"],["opening","Opening stock (already at the main office)"]].map(([v,t])=>(<button key={v} onClick={()=>setModal({...m,kind:v})} style={btn(m.kind===v?"#FFF4EC":"#fff",m.kind===v?orange:"#525252","1.5px solid "+(m.kind===v?orange:"#E0E0E0"))}>{t}</button>))}</div></Field>}
         {m.kind==="opening"&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>Full cylinders that were already at the main office when we started recording gas. They are sent to stores from here like any gas bought.</div>}
@@ -3128,6 +3183,18 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
         {p&&<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Each cylinder: <b>{kgTxt(p.kgEach)}</b>{perCyl(p)!=null?<>, {fmt(perCyl(p))} charged to the store</>:null}. {p.left} left at the main office from this purchase.</div>}
         <Field label="Notes (optional)"><input style={inp} value={m.notes} placeholder="e.g. driver's name" onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
         <div style={{fontSize:11,color:"#8D8D8D",marginBottom:10}}>The store sees it under Cooking Gas and accepts it when it arrives.</div>
+      </>;})()}
+      {m.mode==="transfer"&&(()=>{const c0=m.was;const opts=purch.filter(x=>x.id===c0.purchaseId||x.left>0);return<>
+        {c0.received!==false&&<div style={{padding:"8px 12px",borderRadius:8,background:"#FFF8E1",color:"#7A4F00",fontSize:12,marginBottom:10}}>{c0.storeLoc} already accepted this cylinder{c0.receivedDate?" on "+fmtDayLabel(c0.receivedDate):""}. If you change it, the store will need to accept it again.</div>}
+        {c0.fixedDate&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>It is already {c0.finishedDate?"finished":"in use"} at {c0.storeLoc} (fixed {fmtDayLabel(c0.fixedDate)}), so it cannot be moved to another store.</div>}
+        <Field label="Store"><select style={inp} value={m.store} disabled={!!c0.fixedDate} onChange={e=>setModal({...m,store:e.target.value})}>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Field label="Sent on"><input type="date" style={inp} value={m.date} max={c0.fixedDate||todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
+          <Field label="Kg"><input type="number" style={inp} value={m.kg} onChange={e=>setModal({...m,kg:e.target.value})}/></Field>
+        </div>
+        <Field label="From which purchase"><select style={inp} value={m.purchaseId} onChange={e=>{const p=purch.find(x=>x.id===e.target.value);setModal({...m,purchaseId:e.target.value,kg:p?String(p.kgEach):m.kg,cost:p&&perCyl(p)!=null?String(perCyl(p)):""});}}>{opts.map(x=>(<option key={x.id} value={x.id}>{purchName(x)} - {x.kgEach} kg{x.id===c0.purchaseId?" (this one)":" - "+x.left+" left"}</option>))}</select></Field>
+        <Field label="Cost charged to the store (optional)"><input type="number" style={inp} value={m.cost} onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
+        <Field label="Notes"><input style={inp} value={m.notes} onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
       </>;})()}
       {m.mode==="new"&&supplyReady&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>For a cylinder the store already has (e.g. the one in use when you start). Gas you buy from now on: record it under "Gas purchase" and send it to the store.</div>}
       {m.mode==="new"&&<>
@@ -3162,10 +3229,11 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
         <Field label="Notes"><input style={inp} value={m.notes} onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
       </>}
       {m.mode==="edit"&&!staffLocked&&<>
+        {m.sent&&<div style={{fontSize:12,color:"#525252",marginBottom:10}}>This cylinder was sent from a purchase. To change the store, the date sent, its size or cost, use <b>Change</b> under "Gas sent to stores" (All stores view) - the store then accepts it again.</div>}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Field label={supplyReady?"Arrived / bought on":"Bought on"}><input type="date" style={inp} value={m.purchaseDate} max={todayStr} onChange={e=>setModal({...m,purchaseDate:e.target.value})}/></Field>
-          <Field label="Kg"><input type="number" style={inp} value={m.kg} onChange={e=>setModal({...m,kg:e.target.value})}/></Field>
-          <Field label="Cost (optional)"><input type="number" style={inp} value={m.cost} onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
+          <Field label={supplyReady?"Arrived / bought on":"Bought on"}><input type="date" style={inp} disabled={!!m.sent} value={m.purchaseDate} max={todayStr} onChange={e=>setModal({...m,purchaseDate:e.target.value})}/></Field>
+          <Field label="Kg"><input type="number" style={inp} disabled={!!m.sent} value={m.kg} onChange={e=>setModal({...m,kg:e.target.value})}/></Field>
+          <Field label="Cost (optional)"><input type="number" style={inp} disabled={!!m.sent} value={m.cost} onChange={e=>setModal({...m,cost:e.target.value})}/></Field>
           <Field label="Fixed on (blank = spare)"><input type="date" style={inp} value={m.fixedDate} max={todayStr} onChange={e=>setModal({...m,fixedDate:e.target.value})}/></Field>
           <Field label="Finished on (blank = in use)"><input type="date" style={inp} value={m.finishedDate} max={todayStr} onChange={e=>setModal({...m,finishedDate:e.target.value})}/></Field>
         </div>
@@ -3173,7 +3241,8 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
       </>}
       {msg&&<div style={{padding:10,borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
       <div style={{display:"flex",gap:8,justifyContent:"space-between"}}>
-        {m.mode==="edit"&&!staffLocked?<button onClick={()=>del(all.find(c=>c.id===m.id))} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>:<span/>}
+        {m.mode==="transfer"&&!m.was.fixedDate?<button onClick={()=>delSent(m.was)} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>
+          :m.mode==="edit"&&!staffLocked?<button onClick={()=>del(all.find(c=>c.id===m.id))} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>:<span/>}
         <button disabled={busy} onClick={saveModal} style={{...btn(busy?"#C6C6C6":orange),padding:"10px 22px",fontSize:13}}>{busy?"Saving...":"Save"}</button>
       </div>
     </Modal>}
