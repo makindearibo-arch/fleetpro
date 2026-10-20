@@ -3009,6 +3009,24 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
   const hasOpening=purch.some(p=>p.supplier==="OPENING STOCK");   // the opening stock is entered ONCE
   const withLeft=purch.filter(p=>p.left>0).sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt).localeCompare(String(b.createdAt)));   // oldest first (FIFO)
   const perCyl=p=>p.cost!=null&&p.cylinders?Math.round(p.cost/p.cylinders):null;
+  // what a purchase can still send for a send dated `date`: a send dated on/before the latest
+  // count of that size may also use the cylinders that count found missing (it explains them)
+  const roomOn=(p,date)=>{const k=Number(p.kgEach);const lc=(gasCounts||[]).filter(c=>c.kgEach===k).reduce((a,c)=>c.date>a?c.date:a,"");
+    return p.left+(p.missing&&date<=lc?p.missing:0);};
+  // A send recorded LATE (dated before the purchase chosen) is charged to a purchase that already
+  // existed on that date. If those are all used up, the latest cylinder sent from them moves onto
+  // the chosen purchase and the late one takes its place: same gas, only which purchase paid for
+  // it changes (no store has to accept anything again). -> {plan:[[purchase, cylinderToMove|null]], err}
+  const sendPlan=(p,date,n)=>{if(!p||!date||!(n>0))return{plan:[]};
+    if(date>=p.date){const r=roomOn(p,date);return n>r?{plan:[],err:"Only "+r+" cylinder"+(r===1?"":"s")+" of that purchase "+(r===1?"is":"are")+" left to send."}:{plan:Array.from({length:n},()=>[p,null])};}
+    const k=Number(p.kgEach);const plan=[];
+    const older=purch.filter(q=>Number(q.kgEach)===k&&q.date<=date).sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt).localeCompare(String(b.createdAt)));
+    older.forEach(q=>{for(let i=roomOn(q,date);i>0&&plan.length<n;i--)plan.push([q,null]);});
+    const movable=all.filter(c=>c.purchaseId&&older.some(q=>q.id===c.purchaseId)&&c.purchaseDate>=p.date).sort((a,b)=>b.purchaseDate.localeCompare(a.purchaseDate)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+    const need=n-plan.length;
+    if(need>Math.min(roomOn(p,date),movable.length))return{plan:[],err:"No "+kgTxt(k)+" cylinder bought by "+fmtDayLabel(date)+" is free on record, and not enough cylinders sent later can be moved onto "+purchName(p)+" to make room. Check the opening stock and the purchases."};
+    movable.slice(0,need).forEach(c=>plan.push([older.find(q=>q.id===c.purchaseId),c]));
+    return{plan};};
   // Full cylinders that were already at the main office when tracking started:
   // recorded once like a purchase (supplier OPENING STOCK) and sent to stores
   // from there like any other gas (Makinde, 2026-10-14).
@@ -3075,10 +3093,12 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
         body.notes=((m.notes||"")+" [changed "+shortDay(todayStr)+" by "+(user?.name||"the fleet manager")+" - was "+ch.join(", ")+(c0.received!==false?" - please accept it again":"")+"]").trim();}
       local(toGAS(await db.updateGasCylinder(m.id,body)));});
     if(m.mode==="send")return run(async()=>{const n=parseInt(m.n,10);const p=purch.find(x=>x.id===m.purchaseId);
-      if(!m.store)throw new Error("Choose the store.");if(!p)throw new Error("Choose the purchase the gas comes from.");if(!(n>0))throw new Error("Enter how many cylinders.");
-      if(n>p.left)throw new Error("Only "+p.left+" cylinder"+(p.left===1?"":"s")+" of that purchase "+(p.left===1?"is":"are")+" left to send.");
-      if(m.date<p.date)throw new Error("The gas cannot be sent before it was bought ("+fmtDayLabel(p.date)+").");
-      for(let i=0;i<n;i++)local(toGAS(await db.addGasCylinder({store_location:m.store,purchase_date:m.date,kg:p.kgEach,cost:perCyl(p),purchase_id:p.id,received_confirmed:false,notes:m.notes||""})));});
+      if(!m.store)throw new Error("Choose the store.");if(!p)throw new Error("Choose the purchase the gas comes from.");if(!(n>0))throw new Error("Enter how many cylinders.");if(!m.date)throw new Error("Enter the date it was sent.");
+      const {plan,err}=sendPlan(p,m.date,n);if(err)throw new Error(err);
+      for(const [q,mv] of plan){
+        if(mv)local(toGAS(await db.updateGasCylinder(mv.id,{purchase_id:p.id,cost:perCyl(p),
+          notes:((mv.notes||"")+" [moved "+shortDay(todayStr)+" by "+(user?.name||"the fleet manager")+": now charged to "+purchName(p)+" - a cylinder sent "+shortDay(m.date)+" to "+m.store+" was recorded late and took its place on "+purchName(q)+"]").trim()})));
+        local(toGAS(await db.addGasCylinder({store_location:m.store,purchase_date:m.date,kg:q.kgEach,cost:perCyl(q),purchase_id:q.id,received_confirmed:false,notes:m.notes||""})));}});
     if(m.mode==="new")return run(async()=>{const kg=parseFloat(m.kg);if(!(kg>0))throw new Error("Enter the kg.");
       if(m.useNow&&m.fixedDate<m.purchaseDate)throw new Error("It cannot be fixed before it was bought.");
       if(m.useNow&&m.finishIds.length)await finishThese(m.finishIds,m.fixedDate);
@@ -3210,7 +3230,8 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
       </div>
       {rows.length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No days in this range. Tracking started {fmtDayLabel(gasLed.start)}.</div>
       :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:760}}>
-        <thead><tr style={{background:"#F4F4F4"}}>{["Date","Opening","+ Bought","- Sent to stores","= Closing","Counted","Variance"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+        <thead><tr><th colSpan={7} style={{...th,textAlign:"left",background:"#FFF4EC",color:orange,fontSize:12,textTransform:"none"}}>{k.toLocaleString()} kg cylinders - every number below is a count of full {k.toLocaleString()} kg cylinders</th></tr>
+          <tr style={{background:"#F4F4F4"}}>{["Date","Opening ("+k+" kg)","+ Bought ("+k+" kg)","- Sent to stores ("+k+" kg)","= Closing ("+k+" kg)","Counted ("+k+" kg)","Variance"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
         <tbody>{rows.map(r=>(<tr key={r.date} style={{background:r.count&&r.diff?"#FFF8F8":"transparent"}}>
           <td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{fmtDayLabel(r.date)}</td>
           <td style={tc}>{r.open}{r.openingStock?<div style={{fontSize:10,color:"#B45309"}}>opening stock {r.openingStock}</div>:null}</td>
@@ -3319,10 +3340,14 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
         <Field label="Store"><select style={inp} value={m.store} onChange={e=>setModal({...m,store:e.target.value})}><option value="">Choose the store...</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Field label="How many cylinders"><input type="number" min="1" step="1" style={{...inp,fontWeight:700}} value={m.n} onChange={e=>setModal({...m,n:e.target.value})}/></Field>
-          <Field label="Sent on"><input type="date" style={inp} value={m.date} min={p?p.date:undefined} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
+          <Field label="Sent on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
         </div>
         <Field label="From which purchase"><select style={inp} value={m.purchaseId} onChange={e=>setModal({...m,purchaseId:e.target.value})}><option value="">Choose...</option>{withLeft.map(x=>(<option key={x.id} value={x.id}>{fmtDayLabel(x.date)} {x.supplier||""} - {x.left} x {x.kgEach} kg left</option>))}</select></Field>
         {p&&<div style={{padding:"8px 12px",borderRadius:8,background:"#F4F4F4",fontSize:12,marginBottom:12}}>Each cylinder: <b>{kgTxt(p.kgEach)}</b>{perCyl(p)!=null?<>, {fmt(perCyl(p))} charged to the store</>:null}. {p.left} left at the main office from this purchase.</div>}
+        {p&&m.date&&m.date<p.date&&(()=>{const {plan,err}=sendPlan(p,m.date,parseInt(m.n,10));if(!plan.length&&!err)return null;
+          return<div style={{padding:"8px 12px",borderRadius:8,background:err?"#FFF1F1":"#FFF8E1",color:err?"#A2191F":"#7A4F00",fontSize:12,marginBottom:12}}>
+            <b>Sent before this purchase was bought ({fmtDayLabel(p.date)}).</b> {err||<>It will be charged to gas that was at the main office on {fmtDayLabel(m.date)}: {plan.map(([q,mv],i)=>(<span key={i}>{i?"; ":""}<b>{purchName(q)}</b>{mv?<> - its cylinder sent to {mv.storeLoc} on {shortDay(mv.purchaseDate)} moves to {purchName(p)} instead</>:null}</span>))}. Same gas, only which purchase paid for it changes; nobody has to accept anything again.</>}
+          </div>;})()}
         <Field label="Notes (optional)"><input style={inp} value={m.notes} placeholder="e.g. driver's name" onChange={e=>setModal({...m,notes:e.target.value})}/></Field>
         <div style={{fontSize:11,color:"#8D8D8D",marginBottom:10}}>The store sees it under Cooking Gas and accepts it when it arrives.</div>
       </>;})()}
