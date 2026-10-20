@@ -350,4 +350,9 @@ export const db = {
   async addGasPurchase(p) { return insertRow('gas_purchases', p); },
   async updateGasPurchase(id, p) { return updateRow('gas_purchases', id, p); },
   async deleteGasPurchase(id) { return deleteRow('gas_purchases', id); },
+  // Counts of full cylinders at the main office (20261020_gas_stock_counts.sql)
+  async getGasStockCounts() { return fetchAll('gas_stock_counts', 'date', true); },
+  async addGasStockCount(c) { return insertRow('gas_stock_counts', c); },
+  async updateGasStockCount(id, c) { return updateRow('gas_stock_counts', id, c); },
+  async deleteGasStockCount(id) { return deleteRow('gas_stock_counts', id); },
 };
