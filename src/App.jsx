@@ -8,6 +8,10 @@ import LiveMapPage from "./LiveMapPage.jsx";
 
 const isMob=()=>typeof window!=="undefined"&&window.innerWidth<768;
 const P="#0F62FE";
+// Roles that can look but not change anything (Viewer and the imprest approvers Audit /
+// HQ Accounts / Senior Manager). Their write buttons are hidden; the database refuses
+// their writes anyway (20261005_access_rules.sql).
+const isReadOnlyRole=u=>!["Super Admin","Fleet Manager","Store Staff"].includes(u?.role);
 // DB field mappers
 const toV=(r)=>({id:r.id,name:r.name,type:r.type,year:r.year,status:r.status,km:Number(r.km)||0,driver:r.driver,loc:r.loc,nextSvc:r.next_svc,plate:r.plate,img:r.img,vin:r.vin,group:r.grp,fuelType:r.fuel_type,svcCostLife:Number(r.svc_cost_life)||0,fuelCostLife:Number(r.fuel_cost_life)||0,otherCostLife:Number(r.other_cost_life)||0});
 const fromV=(v)=>({id:v.id,name:v.name,type:v.type,year:v.year||0,status:v.status,km:v.km||0,driver:v.driver||"",loc:v.loc||"",next_svc:v.nextSvc||"",plate:v.plate||"",img:v.img||"🚛",vin:v.vin||"",grp:v.group||"",fuel_type:v.fuelType||"",svc_cost_life:v.svcCostLife||0,fuel_cost_life:v.fuelCostLife||0,other_cost_life:v.otherCostLife||0});
@@ -1480,7 +1484,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
     catch(e){alert("Error: "+e.message);}
   };
   const isSA=user?.role==="Super Admin";
-  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vehicle groups","vendor types","diesel",...(user?.role==="Super Admin"?["change history",...(imprestReady?["imprest approvals"]:[])]:[])]:["profile","users"];
+  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vehicle groups","vendor types","diesel",...(user?.role==="Super Admin"?["change history",...(imprestReady?["imprest approvals"]:[])]:[])]:["profile","users",...(user?.role==="Audit"?["change history"]:[])];
   return(<div style={{maxWidth:800}}><div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 20px",borderRadius:8,border:tab===t?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}</div>
     {tab==="profile"&&(<div style={{maxWidth:480}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>My Profile</h3><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20}}><div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}><div style={{width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${P},#6929C4)`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18,fontWeight:700}}>{user.avatar}</div><div><div style={{fontSize:16,fontWeight:700}}>{user.name}</div><div style={{fontSize:12,color:"#8D8D8D"}}>{user.email}</div><Badge label={user.role}/></div></div><ProfileEditor user={user} setUser={(u)=>{setUser(u);setUsers(users.map(x=>x.id===u.id?u:x));}} /></div></div>)}
     {tab==="users"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Team Members</h3>{isSA&&<button onClick={()=>setShowAddUser(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add User</button>}</div>
@@ -1629,6 +1633,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
+  const readOnly=isReadOnlyRole(user);
   const storeGens=isStoreStaff?generators.filter(g=>g.loc===userStore):generators;
   const autoLockDays=Number(appSettings?.diesel_auto_lock_days??1);
   const requirePhotoBackdated=appSettings?.diesel_require_photo_backdated!==false;
@@ -2278,7 +2283,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
               {dayIncoming.map(t=>(<div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 12px",borderTop:"1px solid #F0F2F5"}}>
                   <div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:"#FF832B"}}>{t.litres.toLocaleString()} L</div><div style={{fontSize:10,color:"#8D8D8D"}}>From {t.storeLoc} (moved between stores){t.notes?" - "+t.notes:""}</div></div>
                   {t.confirmed?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted{tanksHere.length>1?" - into "+(((generators||[]).find(x=>x.id===transferTankOf(t,generators))||{}).name||"the main tank"):""}</span>
-                    :<AcceptTransferButton t={t} tanks={tanksHere} onAccept={async(tt,tank)=>{try{await acceptStoreTransfer(tt,user,setDieselTransfers,dieselReadings,setDieselReadings,generators,tank);}catch(e){alert("Error: "+e.message);}}}/>}
+                    :readOnly?<span style={{fontSize:11,fontWeight:600,color:"#B45309",whiteSpace:"nowrap"}}>Not accepted yet</span>:<AcceptTransferButton t={t} tanks={tanksHere} onAccept={async(tt,tank)=>{try{await acceptStoreTransfer(tt,user,setDieselTransfers,dieselReadings,setDieselReadings,generators,tank);}catch(e){alert("Error: "+e.message);}}}/>}
                 </div>))}
               {dayDists.length===0&&dayIncoming.length===0
                 ?<div style={{padding:"10px 12px",fontSize:11,color:"#8D8D8D",borderTop:"1px solid #E8ECF1"}}>No admin delivery recorded for this date. Diesel you receive from admin is added here automatically once you accept it.</div>
@@ -2290,7 +2295,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                     </div>
                     {d.confirmed
                       ?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted</span>
-                      :<button type="button" onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));await applyAcceptToReading(d,dieselReadings,setDieselReadings,generators);}catch(e){alert("Error: "+e.message);}}} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
+                      :readOnly?<span style={{fontSize:11,fontWeight:600,color:"#B45309",whiteSpace:"nowrap"}}>Not accepted yet</span>:<button type="button" onClick={async()=>{try{const row=await db.updateDieselDistribution(d.id,{received_confirmed:true,received_date:new Date().toISOString().split("T")[0],received_by:user?.uid});setDieselDistributions(prev=>prev.map(x=>x.id===d.id?toDD(row):x));await applyAcceptToReading(d,dieselReadings,setDieselReadings,generators);}catch(e){alert("Error: "+e.message);}}} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
                   </div>);})}
               {!distsCountHere&&dayDists.length>0&&<div style={{padding:"8px 12px",background:"#F4F4F4",borderTop:"1px solid #E8ECF1",fontSize:11,color:"#525252"}}>Deliveries go into the main tank and are counted on the <b>generator's</b> reading — this oven records 0 added.</div>}
               {pendingIncoming.length>0&&<div style={{padding:"8px 12px",background:"#FFF4EC",borderTop:"1px solid #FFD7B5",fontSize:11,color:"#8A3800"}}>{pendingIncoming.reduce((s,t)=>s+(t.litres||0),0).toLocaleString()} L sent from another store but not yet accepted - tap <b>Accept</b> to include it in today's reading.</div>}
@@ -2330,7 +2335,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 
           {(()=>{const editLocked=editingId&&!checkEditWindow(dieselReadings.find(r=>r.id===editingId)).canEdit;
             const disabled=(!hoursClosing&&!dieselLevel)||saving||lockInfo.locked||editLocked;
-            return(
+            return readOnly?<div style={{marginTop:16,padding:"12px",borderRadius:10,background:"#F4F4F4",color:"#525252",fontSize:13,textAlign:"center"}}>View only - your role ({user?.role}) cannot record readings.</div>:(
               <button onClick={handleSave} disabled={disabled}
                 style={{width:"100%",marginTop:16,padding:"14px",borderRadius:10,border:"none",background:disabled?"#C6C6C6":P,color:"#fff",fontSize:14,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>
                 {saving?"Saving...":lockInfo.locked?"Date Locked":editLocked?"Edit Window Expired":editingId?"Update Reading":"Submit Reading"}
@@ -2368,6 +2373,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
 function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTransfers,locations,appSettings,dieselLocks,storeTransfersReady,onAccept,tanksFor}){
   const isStoreStaff=user?.role==="Store Staff";
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
+  const readOnly=isReadOnlyRole(user);
   const userStore=user?.store_location||"";
   const todayStr=new Date().toISOString().split("T")[0];
   const autoLockDays=Number(appSettings?.diesel_auto_lock_days??1);
@@ -2443,7 +2449,7 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
     {!showForm&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Diesel Transfers</h3><div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Diesel given to vehicles, moved to the oven or sent to another store — kept separate from generator consumption</div></div>
-        <button onClick={()=>{resetForm();setShowForm(true);}} style={{padding:"8px 14px",borderRadius:8,border:"none",background:"#FF832B",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><Plus size={13}/>New Transfer</button>
+        {!readOnly&&<button onClick={()=>{resetForm();setShowForm(true);}} style={{padding:"8px 14px",borderRadius:8,border:"none",background:"#FF832B",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><Plus size={13}/>New Transfer</button>}
       </div>
       {visible.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No transfers recorded yet</div>
       :<div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:640}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","From","To","Litres","Notes",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
@@ -2749,6 +2755,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   const [gasBusy,setGasBusy]=useState(false);   // accepting gas (banner below); before any early return
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
+  const readOnly=isReadOnlyRole(user);
   const myStore=isStoreStaff?userStore:null;
   const nowD=new Date();const defMonthStart=new Date(nowD.getFullYear(),nowD.getMonth(),1).toISOString().split("T")[0];const defMonthEnd=new Date(nowD.getFullYear(),nowD.getMonth()+1,0).toISOString().split("T")[0];
   const [dashTab,setDashTab]=useState("supply");
@@ -2876,7 +2883,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
               <div style={{fontSize:11,color:"#525252"}}>Accept each one only when it has arrived. Then use "Fix a spare" on the Cooking Gas page when you start using it.</div>
             </div>
           </div>
-          {pendingGas.length>1&&<button disabled={gasBusy} onClick={()=>acceptGas(pendingGas)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"#E8590C",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
+          {!readOnly&&pendingGas.length>1&&<button disabled={gasBusy} onClick={()=>acceptGas(pendingGas)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"#E8590C",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
         </div>
         <div>{pendingGas.map(c=>(
           <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 16px",borderTop:"1px solid #FFD8A8"}}>
@@ -2884,7 +2891,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
               <div style={{fontSize:13,fontWeight:700,color:"#B4460C"}}>{c.kg.toLocaleString()} kg cylinder <span style={{fontWeight:500,color:"#8D8D8D",fontSize:11}}>{"\u00b7 sent "+fmtDayLabel(c.purchaseDate)}</span></div>
               {c.notes?<div style={{fontSize:10,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.notes}</div>:null}
             </div>
-            <button disabled={gasBusy} onClick={()=>acceptGas([c])} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{gasBusy?"Saving...":"Accept"}</button>
+            {!readOnly&&<button disabled={gasBusy} onClick={()=>acceptGas([c])} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{gasBusy?"Saving...":"Accept"}</button>}
           </div>))}
         </div>
       </div>
@@ -2899,7 +2906,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
               <div style={{fontSize:11,color:"#525252"}}>{pendingRecent.reduce((s,d)=>s+(d.litres||0),0).toLocaleString()} L delivered to your store — tap Accept to add it to that day's reading.</div>
             </div>
           </div>
-          {pendingRecent.length>1&&<button onClick={()=>acceptAll(pendingRecent)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
+          {!readOnly&&pendingRecent.length>1&&<button onClick={()=>acceptAll(pendingRecent)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
         </div>
         <div>{pendingRecent.slice(0,6).map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(
           <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 16px",borderTop:"1px solid #D0E2FF"}}>
@@ -2907,7 +2914,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
               <div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L <span style={{fontWeight:500,color:"#8D8D8D",fontSize:11}}>· {d.date}</span></div>
               <div style={{fontSize:10,color:"#8D8D8D",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.isTransfer?"From "+d.storeLoc+" (moved between stores)":p?p.supplier:"Admin delivery"}{d.notes?" \u2014 "+d.notes:""}</div>
             </div>
-            {d.isTransfer?<AcceptTransferButton t={d} tanks={activeTanks(d.destStore,generators,dieselReadings)} onAccept={(tt,tank)=>acceptDelivery(tt,tank)}/>
+            {readOnly?null:d.isTransfer?<AcceptTransferButton t={d} tanks={activeTanks(d.destStore,generators,dieselReadings)} onAccept={(tt,tank)=>acceptDelivery(tt,tank)}/>
               :<button onClick={()=>acceptDelivery(d)} style={{padding:"6px 14px",borderRadius:7,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept</button>}
           </div>);})}
           {pendingRecent.length>6&&<div style={{padding:"8px 16px",borderTop:"1px solid #D0E2FF",fontSize:11,color:"#525252"}}>+{pendingRecent.length-6} more in the Supply tab below</div>}
@@ -2943,7 +2950,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
     {dashTab==="supply"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Diesel Received</h4></div>
       {myDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
-      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{!d.confirmed&&<button onClick={()=>acceptDelivery(d)} style={{padding:"5px 12px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer"}}>Accept Delivery</button>}</td></tr>);})}</tbody></table>}
+      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=(dieselPurchases||[]).find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{!d.confirmed&&!readOnly&&<button onClick={()=>acceptDelivery(d)} style={{padding:"5px 12px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer"}}>Accept Delivery</button>}</td></tr>);})}</tbody></table>}
     </div>)}
     {/* History Tab */}
     {dashTab==="history"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
@@ -3778,7 +3785,7 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
 // ============================================
 // DAILY STOCK TAB (Diesel Management, fleet admins) -- main tank, tanker, stores
 // ============================================
-function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purchases,deliveries,readings,transfers,generators,baselines,locations,canManage,isSuper}){
+function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purchases,deliveries,readings,transfers,generators,baselines,locations,canManage,isSuper,seeHistory}){
   const todayStr=ngDate(Date.now());
   const yesterdayStr=ngDate(Date.now()-864e5);
   const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
@@ -3786,11 +3793,11 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
   const L=v=>v==null?"-":Math.round(v).toLocaleString()+" L";
   const ledger=depotLedger({checks,loads,purchases,deliveries,losses,today:todayStr});
   const lock=stockLock(checks);
-  // changes made after a count to what it covers (Super Admin: the change history)
+  // changes made after a count to what it covers (from the change history: Super Admin and Audit)
   const [audit,setAudit]=useState([]);
-  useEffect(()=>{if(!isSuper||!ledger.start)return;let live=true;
+  useEffect(()=>{if(!seeHistory||!ledger.start)return;let live=true;
     db.getStockAudit(ledger.start+"T00:00:00+01:00").then(r=>{if(live)setAudit(r);}).catch(e=>console.warn("Stock change history:",e?.message));
-    return()=>{live=false;};},[isSuper,ledger.start,checks,loads,purchases,deliveries]);
+    return()=>{live=false;};},[seeHistory,ledger.start,checks,loads,purchases,deliveries]);
   const afterCount=useMemo(()=>changesAfterCounts(audit,checks),[audit,checks]);
   const changedCount=(tank,date)=>afterCount.filter(c=>c.counts.some(k=>k.tank===tank&&k.date===date)).length;
   const countLabel=k=>(k.tank==="main"?"main tank count of ":"tanker check of ")+fmtDayLabel(k.date);
@@ -3943,7 +3950,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
         {" "}= counts {ledger.adjusted<0?"-":"+"}{Math.abs(ledger.adjusted).toLocaleString()} L{ledger.accepted?<>, accepted as a loss {ledger.accepted.toLocaleString()} L</>:null}.
       </div>}
       <div style={{fontSize:11,color:"#525252",marginTop:6,display:"flex",gap:5,alignItems:"flex-start"}}><Lock size={12} style={{flexShrink:0,marginTop:1}}/><span>Counted days are locked: once a count is recorded, only the Super Admin can change it, or the purchases, tanker loadings and deliveries it already covers. Record the day's purchases, loadings and deliveries before the next count.</span></div>
-      {isSuper&&afterCount.length>0&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082"}}>
+      {seeHistory&&afterCount.length>0&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082"}}>
         <div style={{fontSize:13,fontWeight:700,color:"#7A4F00"}}>Changed after the count ({afterCount.length})</div>
         <div style={{fontSize:11,color:"#7A4F00",marginBottom:6}}>These records were added, changed or deleted after a count that depends on them had been recorded, so they moved the books for a day that was already counted. From the change history - only you see this.</div>
         {afterCount.slice(0,30).map((c,i)=>(<div key={i} style={{fontSize:12,padding:"6px 0",borderTop:"1px solid #FFE082"}}>
@@ -4307,7 +4314,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         :dieselDistributions.slice(0,8).map(d=>(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #F4F4F4"}}><div><div style={{fontSize:13,fontWeight:600}}>{d.storeLoc}</div><div style={{fontSize:11,color:"#8D8D8D"}}>{d.date}{d.notes?" - "+d.notes:""}</div></div><div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</div></div>))}
       </div>
     </div>)}
-    {tab==="daily stock"&&!scopeStore&&<DailyStockTab checks={stockChecks||[]} setChecks={setStockChecks} loads={tankerLoads||[]} setLoads={setTankerLoads} losses={losses||[]} depotReady={depotReady} purchases={dieselPurchases} deliveries={dieselDistributions} readings={dieselReadings} transfers={dieselTransfers} generators={generators} baselines={genBaselines} locations={locations} canManage={canManage} isSuper={superUser}/>}
+    {tab==="daily stock"&&!scopeStore&&<DailyStockTab checks={stockChecks||[]} setChecks={setStockChecks} loads={tankerLoads||[]} setLoads={setTankerLoads} losses={losses||[]} depotReady={depotReady} purchases={dieselPurchases} deliveries={dieselDistributions} readings={dieselReadings} transfers={dieselTransfers} generators={generators} baselines={genBaselines} locations={locations} canManage={canManage} isSuper={superUser} seeHistory={superUser||user?.role==="Audit"}/>}
     {tab==="watchtower"&&!scopeStore&&(()=>{
       const today30=new Date(Date.now()-30*864e5).toISOString().split("T")[0];
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
