@@ -371,4 +371,7 @@ export const db = {
     return data?.chain || null;
   },
   async setImprestChain(chain) { return updateRow('imprest_config', 1, { chain }); },
+  async getImprestCash() { return fetchAll('imprest_cash', 'date', true); },
+  async addImprestCash(c) { return insertRow('imprest_cash', c); },
+  async deleteImprestCash(id) { return deleteRow('imprest_cash', id); },
 };
