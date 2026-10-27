@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
-import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, ChevronDown, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, Lock, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Flame, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin, Paperclip, Upload } from "lucide-react";
+import { Truck, Users, Fuel, Wrench, Settings, FileText, Home, ChevronLeft, ChevronRight, ChevronDown, Plus, Search, Zap, Clock, Gauge, DollarSign, AlertTriangle, X, Save, LogOut, Eye, EyeOff, Shield, Download, BarChart3, ClipboardList, Trash2, Pencil, Lock, FileCheck, Bell, Check, CheckCircle, Briefcase, Camera, Droplet, Flame, Trophy, TrendingUp, TrendingDown, Package, Send, ShoppingCart, Calendar, Filter, FileDown, MapPin, Paperclip, Upload, Wallet } from "lucide-react";
 import { supabase } from "./supabase.js";
 import { db, signIn, signOut, getSession, getProfile, inviteUser, resetPassword } from "./db.js";
 import LiveMapPage from "./LiveMapPage.jsx";
@@ -617,12 +617,37 @@ function DocUpload({folder,value,onChange,accept}){
   const drop=()=>{if(!confirm("Remove this attachment from the record?"))return;onChange("");setErr("");};
   return(<div>{value?(<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#F4F4F4",borderRadius:8}}><Paperclip size={14} color="#525252"/><span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{shown}</span><button type="button" onClick={()=>openDoc(value)} style={{background:"none",border:"none",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}>View</button><label style={{color:P,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>{busy?"...":"Retake"}<input type="file" accept="image/*" capture="environment" onChange={pick} disabled={busy} style={{display:"none"}}/></label><button type="button" onClick={drop} style={{background:"none",border:"none",color:"#DA1E28",fontSize:12,fontWeight:600,cursor:"pointer"}}>Remove</button></div>):(<div style={{display:"flex",gap:8,flexWrap:"wrap"}}><label style={btn}><Camera size={14}/>{busy?"Uploading...":"Take photo"}<input type="file" accept="image/*" capture="environment" onChange={pick} disabled={busy} style={{display:"none"}}/></label><label style={btn}><Upload size={14}/>{busy?"Uploading...":"Choose file"}<input type="file" accept={accept||"image/*,application/pdf"} onChange={pick} disabled={busy} style={{display:"none"}}/></label></div>)}{err&&<div style={{fontSize:11,color:"#DA1E28",marginTop:5}}>{err}</div>}</div>);}
 
+// Imprest approval order (Settings, Super Admin only). Saved in imprest_config; a
+// voucher keeps the order it was submitted with, so a change applies to new submissions.
+function ImprestChainPanel({chain,setChain}){
+  const [list,setList]=useState(chain||IMP_DEFAULT_CHAIN);const [busy,setBusy]=useState(false);const [msg,setMsg]=useState("");
+  useEffect(()=>{setList(chain||IMP_DEFAULT_CHAIN);},[chain]);
+  const move=(i,d)=>{const l=[...list];const j=i+d;if(j<0||j>=l.length)return;[l[i],l[j]]=[l[j],l[i]];setList(l);};
+  const left=IMP_STEP_ROLES.filter(r=>!list.includes(r));
+  const changed=JSON.stringify(list)!==JSON.stringify(chain);
+  const save=async()=>{if(!list.length){setMsg("Keep at least one step.");return;}setBusy(true);setMsg("");
+    try{const row=await db.setImprestChain(list);setChain(row.chain);setMsg("Saved. New submissions follow this order.");}catch(e){setMsg(e.message||String(e));}setBusy(false);};
+  const sb={background:"none",border:"1px solid #E0E0E0",borderRadius:6,cursor:"pointer",padding:"2px 8px",fontSize:12};
+  return(<div style={{maxWidth:520}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:6}}>Imprest approval order</h3>
+    <div style={{fontSize:12,color:"#525252",marginBottom:12}}>Each imprest voucher is approved by these roles, in this order. Vouchers already in approval keep the order they were submitted with. The Super Admin can act at any step.</div>
+    <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:14}}>
+      {list.map((r,i)=>(<div key={r} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid #F4F4F4"}}>
+        <b style={{width:22,color:"#8D8D8D"}}>{i+1}.</b><span style={{flex:1,fontWeight:600}}>{r}</span>
+        <button onClick={()=>move(i,-1)} disabled={i===0} style={{...sb,opacity:i===0?0.4:1}}>↑</button><button onClick={()=>move(i,1)} disabled={i===list.length-1} style={{...sb,opacity:i===list.length-1?0.4:1}}>↓</button>
+        <button onClick={()=>setList(list.filter(x=>x!==r))} disabled={list.length===1} style={{...sb,color:"#DA1E28",opacity:list.length===1?0.4:1}}>Remove</button></div>))}
+      {left.length>0&&<div style={{display:"flex",gap:8,alignItems:"center",marginTop:10}}><span style={{fontSize:12,color:"#525252"}}>Add a step:</span>{left.map(r=>(<button key={r} onClick={()=>setList([...list,r])} style={sb}>+ {r}</button>))}</div>}
+      {msg&&<div style={{fontSize:12,marginTop:10,color:/^Saved/.test(msg)?"#24A148":"#DA1E28"}}>{msg}</div>}
+      <div style={{display:"flex",gap:8,marginTop:12}}><button disabled={busy||!changed} onClick={save} style={{padding:"8px 16px",borderRadius:9,border:"none",background:P,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",opacity:busy||!changed?0.5:1}}>Save order</button>
+        {changed&&<button onClick={()=>setList(chain)} style={{padding:"8px 16px",borderRadius:9,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>Undo</button>}</div>
+    </div></div>);
+}
+
 // Change history (Settings, Super Admin only). Reads public.audit_log, which the
 // database fills from triggers on every stock-related insert/edit/delete -- the
 // app cannot skip or alter it. Shows who, when, and before -> after.
-const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",gas_cylinders:"Cooking gas",gas_purchases:"Gas purchases",auth_users:"Passwords",gas_stock_counts:"Gas stock counts",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading",diesel_losses:"Accepted losses"};
+const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",gas_cylinders:"Cooking gas",gas_purchases:"Gas purchases",auth_users:"Passwords",gas_stock_counts:"Gas stock counts",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading",diesel_losses:"Accepted losses",imprest_vouchers:"Imprest",imprest_config:"Imprest approval order"};
 const AUDIT_FIELDS={on_at:"power on",off_at:"power off",litres:"litres",litres_received:"received",price_per_litre:"price/L",supplier:"supplier",date:"date",store_location:"store",received_confirmed:"accepted",received_date:"accepted on",diesel_level_actual:"tank level",diesel_added:"added",consumption_litres:"used",discrepancy_litres:"discrepancy",discrepancy_flag:"flagged",gen_hours_opening:"meter open",gen_hours_closing:"meter close",avg_litres_per_hour:"baseline L/hr",role:"role",name:"name",email:"email",value:"value",notes:"notes",purchase_id:"from purchase",batches_produced:"batches",dest_label:"to",from_date:"from",to_date:"to"};
-const AUDIT_HIDE=new Set(["purchase_id","updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
+const AUDIT_HIDE=new Set(["history","purchase_id","updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
 const auditVal=v=>v===null||v===undefined||v===""?"-":typeof v==="boolean"?(v?"yes":"no"):typeof v==="number"?v.toLocaleString():typeof v==="object"?JSON.stringify(v).slice(0,60):String(v).length>60?String(v).slice(0,57)+"...":String(v);
 const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.litres).toLocaleString()+" L":"";
   if(t==="diesel_purchases")return(d.supplier||"?")+" "+(d.date||"")+L;
@@ -635,6 +660,8 @@ const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.lit
   if(t==="diesel_losses")return"Loss accepted "+(d.date||"")+L+" ("+(d.location==="tanker"?"tanker":"main tank")+"): "+(d.reason||"");
   if(t==="tanker_loads")return(d.kind==="return"?"Poured back into main tank ":"Loaded into tanker ")+(d.date||"")+L;
   if(t==="gas_cylinders")return(d.store_location||"?")+" "+(d.kg?d.kg+" kg ":"")+(d.purchase_id?"sent ":"bought ")+(d.purchase_date||"")+(d.received_confirmed===false?" (not accepted yet)":"")+(d.finished_date?", finished "+d.finished_date:d.fixed_date?", fixed "+d.fixed_date:"");
+  if(t==="imprest_vouchers")return(d.kind==="midweek"?"Mid-week imprest "+(d.title||""):"Weekly imprest")+" week of "+(d.week_start||"")+" - "+(d.status||"")+(d.retired?" (retired)":"");
+  if(t==="imprest_config")return"Imprest approval order: "+(Array.isArray(d.chain)?d.chain.join(" -> "):"");
   if(t==="gas_stock_counts")return"Main office gas count "+(d.date||"")+": "+(d.cylinders??"?")+" x "+(d.kg_each||"?")+" kg";
   if(t==="auth_users")return(d.name||"?")+(d.email?" ("+d.email+")":"")+" - password set";
   if(t==="gas_purchases")return"Gas from "+(d.supplier||"?")+" "+(d.date||"")+" - "+(d.cylinders||"?")+" x "+(d.kg_each||"?")+" kg";
@@ -755,7 +782,7 @@ function DieselUsagePanel({dieselReadings,dieselDistributions,dieselTransfers,av
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:11,color:"#8D8D8D"}}>{u.rows.length>8?"Top 8 of "+u.rows.length+" stores. ":""}Avg / day is per day logged.</span><button onClick={openReport} style={{fontSize:12,color:P,fontWeight:600,background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:3}}>Full report<ChevronRight size={14}/></button></div>
   </div>);
 }
-function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,papers,svcReminders,depotAlert,gasCylinders}){
+function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,papers,svcReminders,depotAlert,gasCylinders,imprestAlerts}){
   const av=vehicles.filter(v=>v.status==="Active").length;const ag=generators.filter(g=>g.status==="Active").length;const ow=workOrders.filter(w=>w.status!=="Completed").length;
   const pd=[{name:"Active",value:av,color:"#24A148"},{name:"In Shop",value:vehicles.filter(v=>v.status==="In Shop").length,color:"#F1C21B"},{name:"Out of Svc",value:vehicles.filter(v=>v.status==="Out of Service").length,color:"#DA1E28"}].filter(d=>d.value>0);
   // Real operating costs: fuel logs (naira) + diesel consumption x weighted avg purchase price + WO costs, last 6 months
@@ -794,6 +821,7 @@ function DashPage({vehicles,generators,workOrders,go,fuelLogs,dieselReadings,die
   if(missed.length)attention.push({icon:Clock,color:"#FF832B",text:`${missed.length} store${missed.length>1?"s":""} didn't log diesel yesterday: ${missed.slice(0,4).join(", ")}${missed.length>4?" +"+(missed.length-4)+" more":""}`,page:"diesel-mgmt"});
   const unconf=(dieselDistributions||[]).filter(d=>!d.confirmed&&d.date<=d3).length;
   if(unconf)attention.push({icon:Send,color:"#FF832B",text:`${unconf} diesel deliver${unconf>1?"ies":"y"} not yet confirmed by stores`,page:"diesel-mgmt"});
+  (imprestAlerts||[]).forEach(t=>attention.push({icon:Wallet,color:"#B45309",text:t,page:"imprest"}));
   const gasWaiting=(gasCylinders||[]).filter(c=>c.received===false&&c.purchaseDate<=d3);
   if(gasWaiting.length)attention.push({icon:Flame,color:"#FF832B",text:`${gasWaiting.length} gas cylinder${gasWaiting.length>1?"s":""} sent but not accepted for 3+ days: ${[...new Set(gasWaiting.map(c=>c.storeLoc))].slice(0,4).join(", ")}`,page:"gas"});
   gasFastSince(gasCylinders,d7).slice(0,3).forEach(g=>attention.push({icon:Flame,color:"#E8590C",text:`${g.store}: cooking gas ran out in ${g.days} day${g.days===1?"":"s"} (usually ~${g.expected})`,page:"gas"}));
@@ -1403,7 +1431,7 @@ function ProfileEditor({user,setUser}){
   return(<div><Field label="Full Name"><div style={{display:"flex",gap:8}}><input style={{...inp,flex:1}} value={name} onChange={e=>setName(e.target.value)}/><button onClick={handleSaveName} disabled={saving||name===user.name} style={{padding:"9px 16px",borderRadius:8,border:"none",background:(name!==user.name)?P:"#C6C6C6",color:"#fff",fontSize:12,fontWeight:600,cursor:(name!==user.name)?"pointer":"not-allowed"}}>{saving?"...":"Save"}</button></div></Field>{!showPw?<button onClick={()=>setShowPw(true)} style={{background:"none",border:"none",color:P,fontSize:12,fontWeight:600,cursor:"pointer",marginTop:8}}>Change Password</button>:<div style={{marginTop:12}}><Field label="New Password"><input style={inp} type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="Min 6 characters"/></Field><Field label="Confirm Password"><input style={inp} type="password" value={pw2} onChange={e=>setPw2(e.target.value)} placeholder="Re-enter password"/></Field><div style={{display:"flex",gap:8,marginTop:8}}><button onClick={()=>{setShowPw(false);setPw("");setPw2("");}} style={{padding:"8px 16px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#525252"}}>Cancel</button><button onClick={handleChangePw} disabled={saving||!pw} style={{padding:"8px 16px",borderRadius:8,border:"none",background:pw?P:"#C6C6C6",color:"#fff",fontSize:12,fontWeight:600,cursor:pw?"pointer":"not-allowed"}}>{saving?"...":"Update Password"}</button></div></div>}{msg&&<div style={{marginTop:10,padding:8,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12}}>{msg}</div>}</div>);
 }
 
-function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,vendorTypes,setVendorTypes,users,setUsers,user,setUser,appSettings,setAppSettings,dieselLocks,setDieselLocks}){
+function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,vendorTypes,setVendorTypes,users,setUsers,user,setUser,appSettings,setAppSettings,dieselLocks,setDieselLocks,imprestChain,setImprestChain,imprestReady}){
   const isAdmin=user?.role==="Super Admin"||user?.role==="Fleet Manager";
   const [tab,setTab]=useState(user?.role==="Store Staff"?"profile":"users");const [showAddUser,setShowAddUser]=useState(false);const [showAddLoc,setShowAddLoc]=useState(false);
   const [uf,setUf]=useState({name:"",email:"",password:"",role:"Viewer",store_location:""});
@@ -1452,11 +1480,11 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
     catch(e){alert("Error: "+e.message);}
   };
   const isSA=user?.role==="Super Admin";
-  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vehicle groups","vendor types","diesel",...(user?.role==="Super Admin"?["change history"]:[])]:["profile","users"];
+  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vehicle groups","vendor types","diesel",...(user?.role==="Super Admin"?["change history",...(imprestReady?["imprest approvals"]:[])]:[])]:["profile","users"];
   return(<div style={{maxWidth:800}}><div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 20px",borderRadius:8,border:tab===t?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}</div>
     {tab==="profile"&&(<div style={{maxWidth:480}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>My Profile</h3><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20}}><div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}><div style={{width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${P},#6929C4)`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18,fontWeight:700}}>{user.avatar}</div><div><div style={{fontSize:16,fontWeight:700}}>{user.name}</div><div style={{fontSize:12,color:"#8D8D8D"}}>{user.email}</div><Badge label={user.role}/></div></div><ProfileEditor user={user} setUser={(u)=>{setUser(u);setUsers(users.map(x=>x.id===u.id?u:x));}} /></div></div>)}
     {tab==="users"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Team Members</h3>{isSA&&<button onClick={()=>setShowAddUser(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add User</button>}</div>
-      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:isSA?860:420}}><thead><tr style={{background:"#F4F4F4"}}>{["Name","Email","Role",isSA?"Location":"",isSA?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{users.map(u=>(<tr key={u.id}><td style={{...tc,fontWeight:600}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:P}}>{u.avatar||"?"}</div>{u.name}</div></td><td style={tc}>{u.email}</td><td style={tc}><Badge label={u.role}/></td>{isSA&&<td style={tc}>{u.role==="Store Staff"?<select style={{...inp,width:150,padding:"5px 8px",fontSize:11,...((!u.store_location)?{borderColor:"#DA1E28"}:{})}} value={u.store_location||""} onChange={e=>handleStoreChange(u.id,e.target.value)}><option value="">-- pick store --</option>{locations.map(l=>(<option key={l} value={l}>{l}</option>))}</select>:<span style={{fontSize:11,color:"#8D8D8D"}}>All stores</span>}</td>}{isSA&&<td style={tc}><div style={{display:"flex",gap:6,alignItems:"center"}}><select style={{...inp,width:140,padding:"5px 8px",fontSize:11}} value={u.role} onChange={e=>handleRoleChange(u.id,e.target.value)}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option></select><button onClick={()=>setPwFor({u,pw:"",pw2:"",show:false,busy:false,msg:"",done:false})} style={{padding:"5px 10px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>Set password</button></div></td>}</tr>))}</tbody></table></div>
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:isSA?860:420}}><thead><tr style={{background:"#F4F4F4"}}>{["Name","Email","Role",isSA?"Location":"",isSA?"Actions":""].filter(Boolean).map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{users.map(u=>(<tr key={u.id}><td style={{...tc,fontWeight:600}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:"#D0E2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:P}}>{u.avatar||"?"}</div>{u.name}</div></td><td style={tc}>{u.email}</td><td style={tc}><Badge label={u.role}/></td>{isSA&&<td style={tc}>{u.role==="Store Staff"?<select style={{...inp,width:150,padding:"5px 8px",fontSize:11,...((!u.store_location)?{borderColor:"#DA1E28"}:{})}} value={u.store_location||""} onChange={e=>handleStoreChange(u.id,e.target.value)}><option value="">-- pick store --</option>{locations.map(l=>(<option key={l} value={l}>{l}</option>))}</select>:<span style={{fontSize:11,color:"#8D8D8D"}}>All stores</span>}</td>}{isSA&&<td style={tc}><div style={{display:"flex",gap:6,alignItems:"center"}}><select style={{...inp,width:140,padding:"5px 8px",fontSize:11}} value={u.role} onChange={e=>handleRoleChange(u.id,e.target.value)}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option><option>Audit</option><option>HQ Accounts</option><option>Senior Manager</option></select><button onClick={()=>setPwFor({u,pw:"",pw2:"",show:false,busy:false,msg:"",done:false})} style={{padding:"5px 10px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>Set password</button></div></td>}</tr>))}</tbody></table></div>
       {pwFor&&(<Modal title={"Set password - "+pwFor.u.name} onClose={()=>setPwFor(null)}>
         <div style={{fontSize:12,color:"#525252",marginBottom:12}}>{pwFor.u.email}{pwFor.u.store_location?" - "+pwFor.u.store_location:""}</div>
         {pwFor.done?<>
@@ -1480,7 +1508,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
           </div>
         </>}
       </Modal>)}
-      {showAddUser&&(<Modal title="Add Team Member" onClose={()=>setShowAddUser(false)}><Field label="Full Name *"><input style={inp} placeholder="e.g. John Doe" value={uf.name} onChange={e=>setUf({...uf,name:e.target.value})}/></Field><Field label="Email *"><input style={inp} type="email" placeholder="john@micmakin.com" value={uf.email} onChange={e=>setUf({...uf,email:e.target.value})}/></Field><Field label="Password *"><input style={inp} type="text" placeholder="Temporary password" value={uf.password} onChange={e=>setUf({...uf,password:e.target.value})}/></Field><Field label="Role"><select style={inp} value={uf.role} onChange={e=>setUf({...uf,role:e.target.value})}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option></select></Field>{uf.role==="Store Staff"&&<Field label="Store Location *"><select style={inp} value={uf.store_location||""} onChange={e=>setUf({...uf,store_location:e.target.value})}><option value="">-- Select Store --</option>{locations.map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>}{msg&&<div style={{padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12,marginBottom:10}}>{msg}</div>}<div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button onClick={()=>setShowAddUser(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddUser} disabled={!uf.email||!uf.password||loading} style={{padding:"9px 20px",borderRadius:8,border:"none",background:(uf.email&&uf.password&&!loading)?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(uf.email&&uf.password&&!loading)?"pointer":"not-allowed"}}>{loading?"Creating...":"Create User"}</button></div></Modal>)}
+      {showAddUser&&(<Modal title="Add Team Member" onClose={()=>setShowAddUser(false)}><Field label="Full Name *"><input style={inp} placeholder="e.g. John Doe" value={uf.name} onChange={e=>setUf({...uf,name:e.target.value})}/></Field><Field label="Email *"><input style={inp} type="email" placeholder="john@micmakin.com" value={uf.email} onChange={e=>setUf({...uf,email:e.target.value})}/></Field><Field label="Password *"><input style={inp} type="text" placeholder="Temporary password" value={uf.password} onChange={e=>setUf({...uf,password:e.target.value})}/></Field><Field label="Role"><select style={inp} value={uf.role} onChange={e=>setUf({...uf,role:e.target.value})}><option>Super Admin</option><option>Fleet Manager</option><option>Store Staff</option><option>Viewer</option><option>Audit</option><option>HQ Accounts</option><option>Senior Manager</option></select></Field>{uf.role==="Store Staff"&&<Field label="Store Location *"><select style={inp} value={uf.store_location||""} onChange={e=>setUf({...uf,store_location:e.target.value})}><option value="">-- Select Store --</option>{locations.map(l=>(<option key={l} value={l}>{l}</option>))}</select></Field>}{msg&&<div style={{padding:10,borderRadius:8,background:msg.startsWith("Error")?"#DA1E2818":"#24A14818",color:msg.startsWith("Error")?"#DA1E28":"#24A148",fontSize:12,marginBottom:10}}>{msg}</div>}<div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button onClick={()=>setShowAddUser(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddUser} disabled={!uf.email||!uf.password||loading} style={{padding:"9px 20px",borderRadius:8,border:"none",background:(uf.email&&uf.password&&!loading)?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:(uf.email&&uf.password&&!loading)?"pointer":"not-allowed"}}>{loading?"Creating...":"Create User"}</button></div></Modal>)}
     </div>)}
     {tab==="locations"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Locations</h3><button onClick={()=>setShowAddLoc(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add Location</button></div>
       <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{locations.map((l,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",background:"#fff",borderRadius:8,border:"1px solid #E8ECF1"}}><span style={{fontSize:13}}>{l}</span></div>))}</div>
@@ -1498,6 +1526,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
       {showAddVT&&(<Modal title="Add Vendor Type" onClose={()=>setShowAddVT(false)}><Field label="Type Name *"><input style={inp} placeholder="e.g. Diesel Supplier" value={newVT} onChange={e=>setNewVT(e.target.value)}/></Field><div style={{display:"flex",gap:10,justifyContent:"flex-end"}}><button onClick={()=>setShowAddVT(false)} style={{padding:"9px 20px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button><button onClick={handleAddVT} disabled={!newVT.trim()} style={{padding:"9px 20px",borderRadius:8,border:"none",background:newVT.trim()?P:"#C6C6C6",color:"#fff",fontSize:13,fontWeight:600,cursor:newVT.trim()?"pointer":"not-allowed"}}>Add</button></div></Modal>)}
     </div>)}
     {tab==="change history"&&<ChangeHistoryPanel/>}
+    {tab==="imprest approvals"&&<ImprestChainPanel chain={imprestChain} setChain={setImprestChain}/>}
     {tab==="diesel"&&isAdmin&&(<div>
       <h3 style={{fontSize:15,fontWeight:700,margin:"0 0 14px"}}>Diesel Entry Settings</h3>
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20,marginBottom:18}}>
@@ -2933,6 +2962,317 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   </div>);
 }
 
+// ============================================
+// IMPREST - weekly petty cash for the fleet office (20261027_imprest.sql)
+// ============================================
+// Same workflow as the DRS imprest, without HR. The fleet office (Fleet Manager or
+// Super Admin) keeps ONE shared voucher per week (Mon-Sun) plus mid-week requests.
+// Each is approved step by step in the order set in imprest_config (default Audit ->
+// HQ Accounts -> Senior Manager; the Super Admin can act at any step and changes the
+// order in Settings). Approvers may lower a line (with a reason) or send it back.
+// The FINAL approval fixes the money in the database: last week's unspent cash
+// (balance b/f) comes off and the rest is paid out by head office; overspending is
+// shown, never added. The fleet office then records what was spent per line (+ a
+// receipt) and retires the voucher; the next weekly voucher cannot be submitted
+// while an earlier approved one is not retired. The database enforces all of it
+// (fp_guard_imprest); the page mirrors the rules so people see why.
+const IMP_CATS=["Transport","Repairs & parts","Tyres & vulcanizer","Police & levies","Cards & airtime","Drivers' meal","Others"];
+const IMP_APPROVER_ROLES=["Audit","HQ Accounts","Senior Manager"];   // read-only elsewhere in FleetPro
+const IMP_STEP_ROLES=[...IMP_APPROVER_ROLES,"Super Admin"];
+const IMP_DEFAULT_CHAIN=["Audit","HQ Accounts","Senior Manager"];
+const isImpOffice=u=>u?.role==="Super Admin"||u?.role==="Fleet Manager";
+const impCanSee=u=>isImpOffice(u)||IMP_APPROVER_ROLES.includes(u?.role);
+const impMonday=d=>{const t=new Date(d+"T12:00:00Z");return new Date(t.getTime()-((t.getUTCDay()+6)%7)*864e5).toISOString().slice(0,10);};
+const impAddDays=(d,n)=>new Date(new Date(d+"T12:00:00Z").getTime()+n*864e5).toISOString().slice(0,10);
+const impId=()=>Math.random().toString(36).slice(2,10);
+const impAmt=l=>(Number(l.qty)||0)*(Number(l.unitPrice)||0);
+const impAllowed=l=>l.allowed!=null&&l.allowed!==""?(Number(l.allowed)||0):impAmt(l);
+const impSpent=l=>l.spent!=null&&l.spent!==""?(Number(l.spent)||0):0;
+const impSum=(lines,f)=>(lines||[]).reduce((a,l)=>a+f(l),0);
+const impMyTurn=(v,role)=>v.status==="in_approval"&&(role==="Super Admin"||v.chain[v.step]===role);
+const impCashHeld=v=>v.kind==="weekly"?Math.max(v.approvedTotal||0,v.balanceBf||0):(v.approvedTotal||0);
+const impName=v=>(v.kind==="weekly"?"Weekly imprest":"Mid-week: "+(v.title||"request"))+", week of "+fmtDayLabel(v.weekStart).replace(/^\S+ /,"");
+// unspent cash from the latest earlier week with approved vouchers -- the same rule as
+// fp_imprest_carry() in the database: sum of (cash held - spent); negative = overspent
+const impCarry=(vouchers,week,exceptId)=>{const prev=(vouchers||[]).filter(v=>v.status==="approved"&&v.weekStart<week&&v.id!==exceptId);
+  if(!prev.length)return{week:null,bal:0,list:[]};const w=prev.reduce((a,v)=>v.weekStart>a?v.weekStart:a,"");const list=prev.filter(v=>v.weekStart===w);
+  return{week:w,bal:list.reduce((a,v)=>a+impCashHeld(v)-(v.spentTotal||0),0),list};};
+const impStatus=v=>v.status==="draft"?["Draft","#525252","#F4F4F4"]:v.status==="returned"?["Sent back","#DA1E28","#FFF1F1"]:v.status==="in_approval"?["With "+(v.chain[v.step]||"approvers"),"#B45309","#FFF8E1"]:v.retired?["Approved - retired","#0043CE","#EDF5FF"]:["Approved","#24A148","#DEFBE6"];
+const toIV=r=>({id:r.id,kind:r.kind,weekStart:r.week_start,title:r.title||"",status:r.status,chain:Array.isArray(r.chain)?r.chain:[],step:Number(r.step)||0,
+  lines:Array.isArray(r.lines)?r.lines:[],history:Array.isArray(r.history)?r.history:[],requestedTotal:Number(r.requested_total)||0,
+  approvedTotal:r.approved_total!=null?Number(r.approved_total):null,spentTotal:r.spent_total!=null?Number(r.spent_total):null,
+  balanceBf:r.balance_bf!=null?Number(r.balance_bf):null,overspentBf:r.overspent_bf!=null?Number(r.overspent_bf):null,toPayOut:r.to_pay_out!=null?Number(r.to_pay_out):null,
+  submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,paidAt:r.paid_at||null,paidNote:r.paid_note||"",retired:!!r.retired,retiredAt:r.retired_at||null,
+  createdAt:r.created_at,updatedAt:r.updated_at});
+
+function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
+  const role=user?.role;const office=isImpOffice(user);const isSA=role==="Super Admin";
+  const todayStr=ngDate(Date.now());const thisWeek=impMonday(todayStr);
+  const [view,setView]=useState(()=>IMP_APPROVER_ROLES.includes(role)?"waiting":"vouchers");
+  const [week,setWeek]=useState(thisWeek);
+  const [openId,setOpenId]=useState(null);
+  const [ed,setEd]=useState(null);   // working copy of the open voucher: {lines, title}
+  const [note,setNote]=useState("");
+  const [busy,setBusy]=useState(false);const [msg,setMsg]=useState("");
+  const [modal,setModal]=useState(null);
+  const [from,setFrom]=useState(()=>impAddDays(thisWeek,-7*11));const [to,setTo]=useState(thisWeek);
+  const all=vouchers||[];
+  const open=all.find(v=>v.id===openId)||null;
+  useEffect(()=>{setNote("");setMsg("");},[openId]);
+  // reload the working copy whenever the saved voucher changes (keeps any message on screen)
+  useEffect(()=>{setEd(open?{lines:open.lines.map(l=>({...l})),title:open.title}:null);},[openId,open?.updatedAt]);   // eslint-disable-line
+  const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
+  const btn=(bg,fg,border)=>({padding:"8px 14px",borderRadius:9,border:border||"none",background:bg,color:fg||"#fff",fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.7:1});
+  const pill=(t,c,bg)=><span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:bg,color:c,whiteSpace:"nowrap"}}>{t}</span>;
+  const statusPill=v=>{const [t,c,bg]=impStatus(v);return pill(t,c,bg);};
+  const vehName=id=>{const v=(vehicles||[]).find(x=>x.id===id);return v?v.name+(v.plate&&v.plate!==v.name?" ("+v.plate+")":""):"";};
+  const dayTxt=d=>fmtDayLabel(d).replace(/^\S+ /,"");
+  const whenTxt=iso=>iso?fmtDayLabel(ngDate(iso))+" "+fmtClock(iso):"";
+
+  // ---- saving
+  const local=row=>{const v=toIV(row);setVouchers(prev=>prev.some(x=>x.id===v.id)?prev.map(x=>x.id===v.id?v:x):[v,...prev]);return v;};
+  const run=async fn=>{setBusy(true);setMsg("");try{await fn();}catch(e){setMsg(e.message||String(e));}setBusy(false);};
+  // re-read first: if someone else acted on it meanwhile, show the new state instead of overwriting it
+  const fresh=async v=>{const r=await db.getImprestVoucher(v.id);if(!r)throw new Error("This voucher no longer exists.");
+    if(r.updated_at!==v.updatedAt){local(r);throw new Error("Someone else changed this voucher a moment ago. It has been refreshed - check it and try again.");}return toIV(r);};
+  const hist=(v,action,text)=>[...v.history,{at:new Date().toISOString(),by:user?.name||user?.email||"?",role,action,note:text||""}];
+  const blank=type=>({id:impId(),desc:"",category:type==="regular"?"Transport":"Others",vehicleId:"",type,qty:1,unitPrice:""});
+  const clean=lines=>lines.map(l=>({...l,desc:String(l.desc||"").trim().toUpperCase(),qty:Number(l.qty)||0,unitPrice:Number(l.unitPrice)||0}));
+
+  const createWeekly=()=>run(async()=>{
+    const prev=all.filter(v=>v.kind==="weekly"&&v.weekStart<week).sort((a,b)=>b.weekStart.localeCompare(a.weekStart))[0];
+    const reg=(prev?prev.lines.filter(l=>l.type==="regular"):[]).map(l=>({id:impId(),desc:l.desc,category:l.category,vehicleId:l.vehicleId||"",type:"regular",qty:l.qty,unitPrice:l.unitPrice}));
+    const lines=reg.length?reg:[blank("regular")];
+    const v=local(await db.addImprestVoucher({kind:"weekly",week_start:week,lines,requested_total:impSum(lines,impAmt)}));setOpenId(v.id);});
+  const createMidweek=title=>run(async()=>{if(!title.trim())throw new Error("Give the request a title, e.g. \"Battery for AKR 11 XC\".");
+    const lines=[blank("oneoff")];
+    const v=local(await db.addImprestVoucher({kind:"midweek",week_start:week,title:title.trim(),lines,requested_total:0}));setModal(null);setOpenId(v.id);});
+  const saveDraft=()=>run(async()=>{await fresh(open);const lines=clean(ed.lines);
+    local(await db.updateImprestVoucher(open.id,{lines,title:ed.title,requested_total:impSum(lines,impAmt)}));});
+  const submit=()=>run(async()=>{const lines=clean(ed.lines);
+    if(!lines.length)throw new Error("Add at least one line.");
+    const bad=lines.find(l=>!l.desc||!(impAmt(l)>0));if(bad)throw new Error("Every line needs a description, a quantity and a unit price.");
+    if(open.kind==="midweek"&&!String(ed.title||"").trim())throw new Error("Give the mid-week request a title.");
+    if(open.kind==="weekly"){const un=all.filter(v=>v.status==="approved"&&!v.retired&&v.weekStart<open.weekStart);
+      if(un.length)throw new Error("First record how the earlier imprest was spent and retire it: "+un.map(impName).join("; ")+".");}
+    const req=impSum(lines,impAmt);const c=open.kind==="weekly"?impCarry(all,open.weekStart,open.id):null;const bf=c?Math.max(0,c.bal):0;
+    if(!confirm("Submit for approval?\n\nRequested: "+fmt(req)+(bf?"\nLess unspent from last week: "+fmt(bf):"")+"\nTo pay out if all of it is approved: "+fmt(Math.max(0,req-bf))+"\n\nIt goes to "+(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ")+"."))return;
+    const r=await fresh(open);
+    local(await db.updateImprestVoucher(open.id,{lines,title:ed.title,requested_total:req,status:"in_approval",history:hist(r,open.status==="returned"?"Resubmitted":"Submitted")}));});
+  const approve=()=>run(async()=>{
+    const over=ed.lines.find(l=>impAllowed(l)>impAmt(l));if(over)throw new Error("You can lower an amount but not raise it above what was asked ("+over.desc+").");
+    const why=ed.lines.filter(l=>impAllowed(l)<impAmt(l)&&!String(l.cutNote||"").trim());if(why.length)throw new Error("Give a reason for each amount you lowered: "+why.map(l=>l.desc).join(", ")+".");
+    const lines=ed.lines.map(l=>{const o={...l};delete o.allowed;delete o.cutNote;const a=impAllowed(l);if(a<impAmt(l)){o.allowed=a;o.cutNote=String(l.cutNote).trim();}return o;});
+    const last=open.step>=open.chain.length-1;
+    if(last){const tot=impSum(lines,impAllowed);let t2="";if(open.kind==="weekly"){const c=impCarry(all,open.weekStart,open.id);const bf=Math.max(0,c.bal);t2=(bf?"\nLess unspent from last week: "+fmt(bf):"")+(c.bal<0?"\nLast week was OVERSPENT by "+fmt(-c.bal)+" (not added).":"")+"\nTo pay out: "+fmt(Math.max(0,tot-bf));}
+      if(!confirm("Final approval.\n\nApproved: "+fmt(tot)+t2+"\n\nAfter this the amounts are fixed."))return;}
+    const r=await fresh(open);
+    local(await db.updateImprestVoucher(open.id,{lines,history:hist(r,last?"Approved - final":"Approved",note.trim()),...(last?{status:"approved"}:{step:open.step+1})}));setNote("");});
+  const sendBack=()=>run(async()=>{if(!note.trim())throw new Error("Say why you are sending it back (in the comment box).");
+    const r=await fresh(open);
+    local(await db.updateImprestVoucher(open.id,{status:"returned",history:hist(r,"Sent back",note.trim())}));setNote("");});
+  const spendLines=()=>ed.lines.map(l=>{const o={...l};if(l.spent===""||l.spent==null)delete o.spent;else o.spent=Number(l.spent)||0;if(!String(l.spentNote||"").trim())delete o.spentNote;if(!l.receipt)delete o.receipt;return o;});
+  const saveSpending=()=>run(async()=>{await fresh(open);local(await db.updateImprestVoucher(open.id,{lines:spendLines()}));});
+  const retire=()=>run(async()=>{const lines=spendLines();const miss=lines.filter(l=>l.spent==null);
+    if(miss.length)throw new Error("Enter what was spent on every line (0 if nothing): "+miss.map(l=>l.desc).join(", ")+".");
+    const spent=impSum(lines,impSpent);const held=impCashHeld(open);
+    if(!confirm("Retire this voucher?\n\nCash held: "+fmt(held)+"\nSpent: "+fmt(spent)+"\n"+(held-spent>=0?"Left over (comes off next week's pay-out): "+fmt(held-spent):"OVERSPENT by "+fmt(spent-held))+"\n\nAfter this the spending is locked."))return;
+    const r=await fresh(open);
+    local(await db.updateImprestVoucher(open.id,{lines,retired:true,history:hist(r,"Retired","Spent "+fmt(spent))}));});
+  const markPaid=(date,txt)=>run(async()=>{if(!date)throw new Error("Enter the date it was paid out.");const r=await fresh(open);
+    local(await db.updateImprestVoucher(open.id,{paid_at:date+"T12:00:00+01:00",paid_note:txt.trim()||null,history:hist(r,"Paid out",fmt(open.toPayOut||0)+(txt.trim()?" - "+txt.trim():""))}));setModal(null);});
+  const del=()=>run(async()=>{if(!confirm("Delete this "+(open.kind==="weekly"?"weekly voucher":"mid-week request")+"?"))return;
+    await db.deleteImprestVoucher(open.id);setVouchers(prev=>prev.filter(x=>x.id!==open.id));setOpenId(null);});
+  const printV=v=>{const w=window.open("","_blank");if(!w)return;const esc=s=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    const rows=v.lines.map((l,i)=>"<tr><td>"+(i+1)+"</td><td>"+esc(l.desc)+"</td><td>"+esc(l.category)+"</td><td>"+esc(vehName(l.vehicleId))+"</td><td class=r>"+(Number(l.qty)||0)+"</td><td class=r>"+fmt(Number(l.unitPrice)||0)+"</td><td class=r>"+fmt(impAmt(l))+"</td><td class=r>"+fmt(impAllowed(l))+"</td><td class=r>"+(l.spent!=null?fmt(impSpent(l)):"")+"</td></tr>").join("");
+    const app=v.history.filter(h=>/^Approved|^Submitted|^Resubmitted|^Paid/.test(h.action)).map(h=>"<div>"+esc(h.action)+": <b>"+esc(h.by)+"</b> ("+esc(h.role)+"), "+esc(whenTxt(h.at))+"</div>").join("");
+    w.document.write("<html><head><title>Petty cash voucher</title><style>body{font-family:Arial,sans-serif;padding:24px;font-size:13px}table{border-collapse:collapse;width:100%;margin:12px 0}td,th{border:1px solid #999;padding:5px 7px;text-align:left}.r{text-align:right}h2{margin:0}</style></head><body>"
+      +"<h2>MICMAKIN - FLEET PETTY CASH VOUCHER</h2><div>"+esc(impName(v))+" ("+esc(dayTxt(v.weekStart))+" - "+esc(dayTxt(impAddDays(v.weekStart,6)))+")</div>"
+      +"<table><tr><th>#</th><th>Description</th><th>Category</th><th>Vehicle</th><th class=r>Qty</th><th class=r>Unit</th><th class=r>Requested</th><th class=r>Approved</th><th class=r>Spent</th></tr>"+rows
+      +"<tr><th colspan=6>TOTAL</th><th class=r>"+fmt(impSum(v.lines,impAmt))+"</th><th class=r>"+fmt(impSum(v.lines,impAllowed))+"</th><th class=r>"+fmt(impSum(v.lines,impSpent))+"</th></tr></table>"
+      +(v.status==="approved"?"<div>APPROVED: <b>"+fmt(v.approvedTotal||0)+"</b></div><div>LESS BALANCE B/F: <b>"+fmt(v.balanceBf||0)+"</b></div><div>TO PAY OUT: <b>"+fmt(v.toPayOut||0)+"</b></div>":"<div>Status: "+esc(impStatus(v)[0])+"</div>")
+      +"<div style='margin-top:14px'>"+app+"</div><script>window.print()</"+"script></body></html>");w.document.close();};
+
+  // ---- what needs doing
+  const waiting=all.filter(v=>v.status==="in_approval"&&(isSA||v.chain[v.step]===role)).sort((a,b)=>String(a.submittedAt).localeCompare(String(b.submittedAt)));
+  const officeTodo=office?all.filter(v=>v.status==="returned"||(v.status==="approved"&&!v.retired&&v.weekStart<thisWeek)).sort((a,b)=>a.weekStart.localeCompare(b.weekStart)):[];
+  const weekList=all.filter(v=>v.weekStart===week).sort((a,b)=>(a.kind==="weekly"?0:1)-(b.kind==="weekly"?0:1)||String(a.createdAt).localeCompare(String(b.createdAt)));
+  const weeklyThis=weekList.find(v=>v.kind==="weekly");
+
+  const vRow=(v,extra)=>{const req=v.requestedTotal||impSum(v.lines,impAmt);return(<tr key={v.id} onClick={()=>setOpenId(v.id)} style={{cursor:"pointer"}}>
+    <td style={{...tc,fontWeight:600}}>{v.kind==="weekly"?"Weekly imprest":<>Mid-week: {v.title||"request"}</>}<div style={{fontSize:11,color:"#8D8D8D",fontWeight:400}}>week of {dayTxt(v.weekStart)}{extra?" - "+extra:""}</div></td>
+    <td style={tc}>{statusPill(v)}</td><td style={tc}>{fmt(req)}</td><td style={tc}>{v.approvedTotal!=null?fmt(v.approvedTotal):"-"}</td>
+    <td style={tc}>{v.toPayOut!=null?<>{fmt(v.toPayOut)}<div style={{fontSize:10,color:v.paidAt?"#24A148":"#B45309"}}>{v.paidAt?"paid "+dayTxt(ngDate(v.paidAt)):"not paid out yet"}</div></>:"-"}</td>
+    <td style={tc}>{v.status==="approved"?(v.spentTotal!=null?fmt(v.spentTotal):"-"):"-"}</td></tr>);};
+  const vTable=(list,extraOf)=>(<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:640}}>
+    <thead><tr style={{background:"#F4F4F4"}}>{["Voucher","Status","Requested","Approved","To pay out","Spent"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+    <tbody>{list.map(v=>vRow(v,extraOf?extraOf(v):""))}</tbody></table></div>);
+
+  if(!ready)return(<div style={card}><h3 style={{fontSize:15,fontWeight:700,margin:"0 0 6px"}}>Imprest</h3><div style={{fontSize:13,color:"#525252"}}>Imprest needs a one-time database update: run <b>supabase/migrations/20261027_imprest.sql</b> in the Supabase SQL editor.</div></div>);
+
+  // ======== one voucher
+  if(open&&ed){
+    const v=open;const editing=office&&(v.status==="draft"||v.status==="returned");const approving=impMyTurn(v,role);const spending=office&&v.status==="approved"&&!v.retired;
+    const lines=ed.lines;const setLine=(i,patch)=>setEd({...ed,lines:lines.map((l,j)=>j===i?{...l,...patch}:l)});
+    const carry=v.kind==="weekly"?impCarry(all,v.weekStart,v.id):null;
+    const lastAmt=desc=>{if(!carry||!carry.list.length)return null;const m=carry.list.flatMap(x=>x.lines).filter(l=>l.desc===String(desc||"").trim().toUpperCase());return m.length?impSum(m,impAllowed):null;};
+    const req=impSum(lines,impAmt),allowed=impSum(lines,impAllowed),spent=impSum(lines,impSpent);
+    const approved=v.status==="approved";
+    const bf=approved?(v.balanceBf||0):carry?Math.max(0,carry.bal):0;const overBf=approved?(v.overspentBf||0):carry?Math.max(0,-carry.bal):0;
+    const payOut=approved?(v.toPayOut||0):Math.max(0,allowed-bf);
+    const unretired=v.kind==="weekly"&&(v.status==="draft"||v.status==="returned")?all.filter(x=>x.status==="approved"&&!x.retired&&x.weekStart<v.weekStart):[];
+    const cats=IMP_CATS.map(c=>[c,impSum(lines.filter(l=>l.category===c),approved||v.status==="in_approval"?impAllowed:impAmt)]).filter(([,t])=>t>0);
+    const steps=["Submitted",...(v.chain.length?v.chain:(chain||IMP_DEFAULT_CHAIN))];
+    const stepState=i=>{if(v.status==="draft")return"todo";if(v.status==="returned")return i===0?"back":"todo";if(v.status==="approved")return"done";if(i===0)return"done";return i-1<v.step?"done":i-1===v.step?"now":"todo";};
+    const cellIn={...inp,padding:"6px 8px",fontSize:12};
+    const sumRow=(label,val,opts={})=>(<div style={{display:"flex",justifyContent:"space-between",gap:12,padding:"5px 0",borderBottom:"1px solid #F4F4F4",fontSize:13,...(opts.style||{})}}><span style={{color:"#525252"}}>{label}</span><b style={{color:opts.color||"#161616"}}>{val}</b></div>);
+    return(<div>
+      <button onClick={()=>setOpenId(null)} style={{display:"flex",alignItems:"center",gap:4,background:"none",border:"none",color:P,fontSize:13,fontWeight:600,cursor:"pointer",padding:0,marginBottom:12}}><ChevronLeft size={16}/>All vouchers</button>
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+          <div><h3 style={{fontSize:16,fontWeight:700,margin:0}}>{v.kind==="weekly"?"Weekly imprest":"Mid-week request"}{v.kind==="midweek"&&!editing?": "+(v.title||""):""}</h3>
+            <div style={{fontSize:12,color:"#8D8D8D",marginTop:2}}>Week {fmtDayLabel(v.weekStart)} – {fmtDayLabel(impAddDays(v.weekStart,6))}</div></div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>{statusPill(v)}<button onClick={()=>printV(v)} style={btn("#fff","#525252","1.5px solid #E0E0E0")}>Print</button></div>
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>{steps.map((s,i)=>{const st=stepState(i);return(<span key={s+i} style={{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:12,
+          background:st==="done"?"#DEFBE6":st==="now"?"#FFF8E1":st==="back"?"#FFF1F1":"#F4F4F4",color:st==="done"?"#24A148":st==="now"?"#B45309":st==="back"?"#DA1E28":"#8D8D8D"}}>{st==="done"?"✓ ":st==="now"?"● ":""}{st==="back"?"Sent back":s}</span>);})}</div>
+        {editing&&v.kind==="midweek"&&<div style={{marginTop:12,maxWidth:420}}><Field label="Title"><input style={inp} value={ed.title} placeholder="e.g. Battery for AKR 11 XC" onChange={e=>setEd({...ed,title:e.target.value})}/></Field></div>}
+        {v.status==="returned"&&(()=>{const h=[...v.history].reverse().find(x=>x.action==="Sent back");return h?<div style={{marginTop:12,padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12}}><b>Sent back by {h.by} ({h.role}):</b> {h.note} - fix it and submit again; approval starts again from {steps[1]}.</div>:null;})()}
+        {unretired.length>0&&<div style={{marginTop:12,padding:"8px 12px",borderRadius:8,background:"#FFF8E1",color:"#7A4F00",fontSize:12}}>Before this can be submitted, record how the earlier imprest was spent and retire it: {unretired.map(x=>(<button key={x.id} onClick={()=>setOpenId(x.id)} style={{background:"none",border:"none",color:P,fontWeight:600,cursor:"pointer",padding:0,marginRight:8,fontSize:12}}>{impName(x)}</button>))}</div>}
+      </div>
+
+      {carry&&carry.list.length>0&&<div style={card}>
+        <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Last imprest (week of {dayTxt(carry.week)}) - how it was spent</h3>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:520}}><thead><tr style={{background:"#F4F4F4"}}>{["Voucher","Cash held","Spent","Left"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+          <tbody>{carry.list.map(x=>{const left=impCashHeld(x)-(x.spentTotal||0);return(<tr key={x.id} onClick={()=>setOpenId(x.id)} style={{cursor:"pointer"}}><td style={tc}>{x.kind==="weekly"?"Weekly":"Mid-week: "+x.title}{!x.retired&&<span style={{marginLeft:6}}>{pill("not retired","#B45309","#FFF8E1")}</span>}</td><td style={tc}>{fmt(impCashHeld(x))}</td><td style={tc}>{fmt(x.spentTotal||0)}</td><td style={{...tc,fontWeight:700,color:left<0?"#DA1E28":"#161616"}}>{left<0?"overspent "+fmt(-left):fmt(left)}</td></tr>);})}</tbody></table></div>
+        <div style={{fontSize:12,color:carry.bal<0?"#A2191F":"#525252",marginTop:8}}>{carry.bal>0?<>Unspent <b>{fmt(carry.bal)}</b> comes off this week's pay-out.</>:carry.bal<0?<>Last week was <b>overspent by {fmt(-carry.bal)}</b>. It is not added to this week - the approvers decide.</>:"Nothing left over."}</div>
+      </div>}
+
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>Lines</h3>
+          {editing&&<div style={{display:"flex",gap:6}}><button onClick={()=>setEd({...ed,lines:[...lines,blank(v.kind==="weekly"?"regular":"oneoff")]})} style={btn("#fff",P,"1.5px solid "+P)}>+ Add line</button></div>}
+        </div>
+        {approving&&<div style={{fontSize:12,color:"#525252",marginBottom:8}}>To refuse or reduce a line, lower its <b>Allowed</b> amount (0 refuses it) and give a reason.</div>}
+        {spending&&<div style={{fontSize:12,color:"#525252",marginBottom:8}}>Enter what was actually spent on each line (0 if nothing){docReady?" and attach the receipt":""}, then <b>Retire</b>.</div>}
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:editing?980:860}}>
+          <thead><tr style={{background:"#F4F4F4"}}>{["#","Description","Category","Vehicle","Type","Qty","Unit price",...(carry?["Last week"]:[]),"Requested","Allowed","Spent",...(editing?[""]:[])].map((h,i)=>(<th key={h+i} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+          <tbody>{lines.map((l,i)=>{const amt=impAmt(l);const al=impAllowed(l);const cut=l.allowed!=null&&l.allowed!==""&&al<amt;const lw=carry?lastAmt(l.desc):null;return(<tr key={l.id||i}>
+            <td style={tc}>{i+1}</td>
+            <td style={{...tc,minWidth:160}}>{editing?<input style={cellIn} value={l.desc} placeholder="e.g. TRANSPORT TO OWO" onChange={e=>setLine(i,{desc:e.target.value})}/>:<b>{l.desc}</b>}</td>
+            <td style={tc}>{editing?<select style={cellIn} value={l.category} onChange={e=>setLine(i,{category:e.target.value})}>{IMP_CATS.map(c=>(<option key={c}>{c}</option>))}</select>:l.category}</td>
+            <td style={tc}>{editing?<select style={cellIn} value={l.vehicleId||""} onChange={e=>setLine(i,{vehicleId:e.target.value})}><option value="">-</option>{(vehicles||[]).map(x=>(<option key={x.id} value={x.id}>{vehName(x.id)}</option>))}</select>:(vehName(l.vehicleId)||"-")}</td>
+            <td style={tc}>{editing?<select style={cellIn} value={l.type} onChange={e=>setLine(i,{type:e.target.value})}><option value="regular">Every week</option><option value="oneoff">One-off</option></select>:(l.type==="regular"?"Every week":"One-off")}</td>
+            <td style={{...tc,width:70}}>{editing?<input type="number" min="0" style={cellIn} value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})}/>:(Number(l.qty)||0)}</td>
+            <td style={{...tc,width:110}}>{editing?<input type="number" min="0" style={cellIn} value={l.unitPrice} onChange={e=>setLine(i,{unitPrice:e.target.value})}/>:fmt(Number(l.unitPrice)||0)}</td>
+            {carry&&<td style={{...tc,color:"#0043CE"}}>{lw!=null?fmt(lw):"-"}</td>}
+            <td style={{...tc,fontWeight:600}}>{fmt(amt)}</td>
+            <td style={{...tc,minWidth:approving?150:90}}>{approving?<><input type="number" min="0" style={cellIn} value={l.allowed!=null?l.allowed:amt} onChange={e=>setLine(i,{allowed:e.target.value})}/>{al<amt&&<input style={{...cellIn,marginTop:4}} value={l.cutNote||""} placeholder="Reason (required)" onChange={e=>setLine(i,{cutNote:e.target.value})}/>}</>
+              :v.status==="draft"?"-":<>{fmt(al)}{cut&&<div style={{fontSize:10,color:"#DA1E28"}}>lowered: {l.cutNote}</div>}</>}</td>
+            <td style={{...tc,minWidth:spending?170:90}}>{spending?<><input type="number" min="0" style={cellIn} value={l.spent??""} placeholder="spent" onChange={e=>setLine(i,{spent:e.target.value})}/>
+                <input style={{...cellIn,marginTop:4}} value={l.spentNote||""} placeholder="note (optional)" onChange={e=>setLine(i,{spentNote:e.target.value})}/>
+                {docReady&&<div style={{marginTop:4}}><DocUpload folder="imprest" value={l.receipt||""} onChange={p=>setLine(i,{receipt:p||""})}/></div>}</>
+              :approved?<>{l.spent!=null?fmt(impSpent(l)):"-"}{l.spentNote?<div style={{fontSize:10,color:"#8D8D8D"}}>{l.spentNote}</div>:null}{l.receipt?<div><DocLink path={l.receipt} title="Receipt"/></div>:null}</>:"-"}</td>
+            {editing&&<td style={tc}><button onClick={()=>setEd({...ed,lines:lines.filter((_,j)=>j!==i)})} title="Remove line" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={14} color="#DA1E28"/></button></td>}
+          </tr>);})}</tbody>
+          <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc} colSpan={carry?8:7}>Total</td><td style={tc}>{fmt(req)}</td><td style={tc}>{v.status==="draft"?"-":fmt(allowed)}</td><td style={tc}>{approved?fmt(spent):"-"}</td>{editing&&<td style={tc}/>}</tr></tfoot>
+        </table></div>
+        {cats.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>{cats.map(([c,t])=>(<span key={c} style={{fontSize:11,padding:"3px 9px",borderRadius:10,background:"#F4F4F4",color:"#525252"}}>{c}: <b>{fmt(t)}</b></span>))}</div>}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr":"1fr 1fr",gap:14}}>
+        <div style={card}>
+          <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Money</h3>
+          {sumRow("Requested",fmt(req))}
+          {v.status!=="draft"&&sumRow(approved?"Approved":"Allowed so far",fmt(allowed))}
+          {v.kind==="weekly"&&sumRow("Less unspent from last week"+(approved?"":" (estimate)"),bf?"- "+fmt(bf):fmt(0))}
+          {v.kind==="weekly"&&overBf>0&&sumRow("Last week overspent (not added)",fmt(overBf),{color:"#DA1E28"})}
+          {sumRow("To pay out"+(approved?"":" (if approved as it stands)"),fmt(payOut),{color:P,style:{fontSize:14}})}
+          {approved&&sumRow("Paid out",v.paidAt?dayTxt(ngDate(v.paidAt))+(v.paidNote?" - "+v.paidNote:""):"Not yet",{color:v.paidAt?"#24A148":"#B45309"})}
+          {approved&&sumRow("Spent",fmt(spent))}
+          {approved&&sumRow("Left over (balance c/f)",impCashHeld(v)-spent>=0?fmt(impCashHeld(v)-spent):"overspent "+fmt(spent-impCashHeld(v)),{color:impCashHeld(v)-spent<0?"#DA1E28":"#161616"})}
+        </div>
+        <div style={card}>
+          <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>{approving?"Your decision":"Actions"}</h3>
+          {msg&&<div style={{padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
+          {editing&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button disabled={busy} onClick={saveDraft} style={btn("#fff",P,"1.5px solid "+P)}>Save draft</button>
+            <button disabled={busy||unretired.length>0} onClick={submit} style={{...btn(P),opacity:unretired.length?0.5:1}}>{v.status==="returned"?"Submit again":"Submit for approval"}</button>
+            <button disabled={busy} onClick={del} style={btn("#fff","#DA1E28","1.5px solid #FFB3B8")}>Delete</button></div>}
+          {approving&&<>
+            {isSA&&v.chain[v.step]!=="Super Admin"&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,marginBottom:8}}>This step is {v.chain[v.step]}'s. As Super Admin you can act for them.</div>}
+            <Field label="Comment (required to send back)"><textarea style={{...inp,minHeight:60}} value={note} onChange={e=>setNote(e.target.value)}/></Field>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button disabled={busy} onClick={approve} style={btn("#24A148")}>{v.step>=v.chain.length-1?"Approve (final)":"Approve → "+v.chain[v.step+1]}</button>
+              <button disabled={busy} onClick={sendBack} style={btn("#fff","#DA1E28","1.5px solid #FFB3B8")}>↩ Send back to fleet office</button></div></>}
+          {spending&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button disabled={busy} onClick={saveSpending} style={btn("#fff",P,"1.5px solid "+P)}>Save spending</button><button disabled={busy} onClick={retire} style={btn(P)}>Retire</button></div>}
+          {approved&&!v.paidAt&&(role==="HQ Accounts"||isSA)&&<div style={{marginTop:10}}><button disabled={busy} onClick={()=>setModal({mode:"paid",date:todayStr,note:""})} style={btn("#24A148")}>Mark as paid out</button></div>}
+          {!editing&&!approving&&!spending&&!(approved&&!v.paidAt&&(role==="HQ Accounts"||isSA))&&<div style={{fontSize:12,color:"#8D8D8D"}}>{v.status==="in_approval"?"Waiting for "+v.chain[v.step]+".":v.status==="draft"||v.status==="returned"?"The fleet office is preparing it.":v.retired?"Approved, paid and retired - nothing left to do.":"Approved. The fleet office records the spending and retires it."}</div>}
+        </div>
+      </div>
+
+      <div style={card}>
+        <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>History</h3>
+        {v.history.length===0?<div style={{fontSize:12,color:"#8D8D8D"}}>Not submitted yet.</div>:[...v.history].reverse().map((h,i)=>(<div key={i} style={{fontSize:12,padding:"6px 0",borderBottom:"1px solid #F4F4F4"}}><b>{h.action}</b> - {h.by}{h.role?" ("+h.role+")":""}, {whenTxt(h.at)}{h.note?<div style={{color:"#525252",marginTop:2}}>{h.note}</div>:null}</div>))}
+      </div>
+      {modal&&modal.mode==="paid"&&<Modal title="Mark as paid out" onClose={()=>setModal(null)}>
+        <div style={{fontSize:13,marginBottom:10}}>To pay out: <b>{fmt(v.toPayOut||0)}</b></div>
+        <Field label="Paid on"><input type="date" style={inp} value={modal.date} max={todayStr} onChange={e=>setModal({...modal,date:e.target.value})}/></Field>
+        <Field label="Note (optional)"><input style={inp} value={modal.note} placeholder="e.g. cash handed to the fleet manager" onChange={e=>setModal({...modal,note:e.target.value})}/></Field>
+        {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
+        <button disabled={busy} onClick={()=>markPaid(modal.date,modal.note)} style={{...btn(P),width:"100%",padding:12}}>Save</button>
+      </Modal>}
+    </div>);
+  }
+
+  // ======== lists
+  const tabBtn=(id,label,n)=>(<button key={id} onClick={()=>setView(id)} style={{padding:"8px 16px",borderRadius:8,border:view===id?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:view===id?"#D0E2FF":"#fff",color:view===id?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>{label}{n?<span style={{marginLeft:6,background:"#DA1E28",color:"#fff",borderRadius:9,padding:"0 6px",fontSize:10}}>{n}</span>:null}</button>);
+  const weeksIn=[...new Set(all.filter(v=>v.weekStart>=impMonday(from)&&v.weekStart<=to).map(v=>v.weekStart))].sort();
+  const weekSum=w=>{const vs=all.filter(v=>v.weekStart===w);const ap=vs.filter(v=>v.status==="approved");const wk=ap.find(v=>v.kind==="weekly");
+    return{weekly:wk?wk.approvedTotal||0:0,bf:wk?wk.balanceBf||0:0,mid:impSum(ap.filter(v=>v.kind==="midweek"),v=>v.approvedTotal||0),pay:impSum(ap,v=>v.toPayOut||0),
+      paid:impSum(ap.filter(v=>v.paidAt),v=>v.toPayOut||0),spent:impSum(ap,v=>v.spentTotal||0),pending:impSum(vs.filter(v=>v.status==="in_approval"),v=>v.requestedTotal||0)};};
+  const exportPaid=()=>downloadCsv(`fleet-imprest_${from}_to_${to}.csv`,["Week","Kind","Title","Status","Requested","Approved","Balance b/f","To pay out","Paid on","Spent","Retired"],
+    all.filter(v=>v.weekStart>=impMonday(from)&&v.weekStart<=to).sort((a,b)=>a.weekStart.localeCompare(b.weekStart)).map(v=>[v.weekStart,v.kind==="weekly"?"Weekly":"Mid-week",v.title,impStatus(v)[0],v.requestedTotal,v.approvedTotal??"",v.balanceBf??"",v.toPayOut??"",v.paidAt?ngDate(v.paidAt):"",v.spentTotal??"",v.retired?"yes":"no"]));
+  return(<div>
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>{tabBtn("vouchers","Vouchers")}{tabBtn("waiting","Waiting for "+(office&&!isSA?"approval":"me"),office&&!isSA?0:waiting.length)}{tabBtn("paid","Paid out")}</div>
+    {msg&&<div style={{padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
+    {view==="vouchers"&&<>
+      {officeTodo.length>0&&<div style={{...card,background:"#FFF8E1",border:"1px solid #F1C21B"}}><div style={{fontSize:13,fontWeight:700,color:"#7A4F00",marginBottom:6}}>Needs the fleet office</div>
+        {officeTodo.map(v=>(<div key={v.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"4px 0",fontSize:12}}><span>{impName(v)} - {v.status==="returned"?"sent back, fix and submit again":"record the spending and retire it"}</span><button onClick={()=>setOpenId(v.id)} style={btn("#fff",P,"1.5px solid "+P)}>Open</button></div>))}</div>}
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:6}}><button onClick={()=>setWeek(impAddDays(week,-7))} style={btn("#fff","#525252","1.5px solid #E0E0E0")}><ChevronLeft size={14}/></button>
+            <b style={{fontSize:14}}>Week {fmtDayLabel(week)} – {fmtDayLabel(impAddDays(week,6))}</b>
+            <button onClick={()=>setWeek(impAddDays(week,7))} disabled={week>=thisWeek} style={{...btn("#fff","#525252","1.5px solid #E0E0E0"),opacity:week>=thisWeek?0.4:1}}><ChevronRight size={14}/></button>
+            {week!==thisWeek&&<button onClick={()=>setWeek(thisWeek)} style={{background:"none",border:"none",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}>This week</button>}</div>
+          {office&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{!weeklyThis&&<button disabled={busy} onClick={createWeekly} style={btn(P)}>+ Weekly voucher</button>}<button disabled={busy} onClick={()=>setModal({mode:"mid",title:""})} style={btn("#fff",P,"1.5px solid "+P)}>+ Mid-week request</button></div>}
+        </div>
+        {weekList.length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No imprest for this week yet.{office?" Start the weekly voucher - lines marked \"every week\" are copied from the last one.":""}</div>:vTable(weekList)}
+      </div>
+    </>}
+    {view==="waiting"&&<div style={card}>
+      {(office&&!isSA?all.filter(v=>v.status==="in_approval"):waiting).length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>Nothing is waiting{office&&!isSA?" for approval":" for you"}.</div>
+        :vTable(office&&!isSA?all.filter(v=>v.status==="in_approval"):waiting,v=>"submitted "+(v.submittedAt?whenTxt(v.submittedAt):"")+(isSA&&v.chain[v.step]!=="Super Admin"?" - at "+v.chain[v.step]:""))}
+    </div>}
+    {view==="paid"&&<div style={card}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        <span style={{fontSize:12,fontWeight:600,color:"#525252"}}>Weeks from</span><input type="date" value={from} max={to} onChange={e=>setFrom(e.target.value||from)} style={{...inp,width:150,padding:"5px 8px"}}/>
+        <span style={{fontSize:12,fontWeight:600,color:"#525252"}}>to</span><input type="date" value={to} min={from} onChange={e=>setTo(e.target.value||to)} style={{...inp,width:150,padding:"5px 8px"}}/>
+        <div style={{flex:1}}/><button onClick={exportPaid} style={btn("#fff",P,"1.5px solid "+P)}>Export to Excel</button></div>
+      {weeksIn.length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No imprest in these weeks.</div>:<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}>
+        <thead><tr style={{background:"#F4F4F4"}}>{["Week","Weekly approved","Less b/f","Mid-week approved","To pay out","Paid out","Spent","Still in approval"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+        <tbody>{weeksIn.map(w=>{const s=weekSum(w);return(<tr key={w} onClick={()=>{setWeek(w);setView("vouchers");}} style={{cursor:"pointer"}}><td style={{...tc,fontWeight:600,whiteSpace:"nowrap"}}>{dayTxt(w)}</td><td style={tc}>{fmt(s.weekly)}</td><td style={tc}>{s.bf?"- "+fmt(s.bf):"-"}</td><td style={tc}>{s.mid?fmt(s.mid):"-"}</td><td style={{...tc,fontWeight:700}}>{fmt(s.pay)}</td><td style={{...tc,color:s.paid>=s.pay&&s.pay>0?"#24A148":"#B45309"}}>{s.pay?(s.paid>=s.pay?"Paid":s.paid?fmt(s.paid)+" of it":"Not yet"):"-"}</td><td style={tc}>{s.spent?fmt(s.spent):"-"}</td><td style={tc}>{s.pending?fmt(s.pending):"-"}</td></tr>);})}</tbody>
+        <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc}>Total</td>{["weekly","bf","mid","pay","paid","spent","pending"].map(k=>(<td key={k} style={tc}>{fmt(impSum(weeksIn,w=>weekSum(w)[k]))}</td>))}</tr></tfoot>
+      </table></div>}
+    </div>}
+    {modal&&modal.mode==="mid"&&<Modal title="Mid-week request" onClose={()=>setModal(null)}>
+      <div style={{fontSize:12,color:"#525252",marginBottom:10}}>For something that cannot wait for next week's voucher. It goes through the same approvals. Week of {dayTxt(week)}.</div>
+      <Field label="What is it for?"><input style={inp} value={modal.title} placeholder="e.g. Battery for AKR 11 XC" onChange={e=>setModal({...modal,title:e.target.value})}/></Field>
+      {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
+      <button disabled={busy} onClick={()=>createMidweek(modal.title)} style={{...btn(P),width:"100%",padding:12}}>Create</button>
+    </Modal>}
+  </div>);
+}
+
 const NAV=[
   {id:"dashboard",path:"/",label:"Dashboard",icon:Home,group:"Overview"},
   {id:"staff-dashboard",path:"/staff-dashboard",label:"My Dashboard",icon:BarChart3,group:"Overview"},
@@ -2949,6 +3289,7 @@ const NAV=[
   {id:"inspections",path:"/inspections",label:"Inspections",icon:CheckCircle,group:"Operations"},
   {id:"vendors",path:"/vendors",label:"Vendors",icon:Briefcase,group:"Operations"},
   {id:"gas",path:"/gas",label:"Cooking Gas",icon:Flame,group:"Operations"},
+  {id:"imprest",path:"/imprest",label:"Imprest",icon:Wallet,group:"Admin"},
   {id:"reports",path:"/reports",label:"Reports",icon:BarChart3,group:"Admin"},
   {id:"settings",path:"/settings",label:"Settings",icon:Settings,group:"Admin"},
 ];
@@ -4429,7 +4770,7 @@ function FleetProAppInner(){
   const dieselReadings=useMemo(()=>withTankUsed(dieselReadingsRaw,dieselTransfers),[dieselReadingsRaw,dieselTransfers]);
   const [dieselLocks,setDieselLocks]=useState([]);
   const [appSettings,setAppSettings]=useState({diesel_auto_lock_days:1,diesel_require_photo_backdated:true});
-  const canEdit=user?.role!=="Viewer"&&user?.role!=="Store Staff";
+  const canEdit=user?.role==="Super Admin"||user?.role==="Fleet Manager";
   // Group list shown in the vehicle form, bulk-assign bar, Reports filter and Settings.
   const [docUploads,setDocUploads]=useState({fuel:false,wo:false,papers:false});
   // Power on/off log (last 120 days). powerReady stays false until the
@@ -4466,6 +4807,25 @@ function FleetProAppInner(){
     try{const rows=await db.getGasStockCounts();if(live){setGasCounts(rows.map(toGSC));setGasCountsReady(true);}}
     catch(e){console.warn("Gas stock counts not available:",e?.message);if(live)setGasCountsReady(false);}
   })();return()=>{live=false;};},[user?.uid]);
+  // Fleet imprest (20261027_imprest.sql); imprestReady stays false until it is run.
+  const [imprest,setImprest]=useState([]);
+  const [imprestChain,setImprestChain]=useState(IMP_DEFAULT_CHAIN);
+  const [imprestReady,setImprestReady]=useState(false);
+  useEffect(()=>{if(!user?.uid||!impCanSee(user))return;let live=true;(async()=>{
+    try{const rows=await db.getImprestVouchers();const ch=await db.getImprestChain();if(live){setImprest(rows.map(toIV));if(Array.isArray(ch)&&ch.length)setImprestChain(ch);setImprestReady(true);}}
+    catch(e){console.warn("Imprest not available:",e?.message);if(live)setImprestReady(false);}
+  })();return()=>{live=false;};},[user?.uid,user?.role]);
+  // menu badge: vouchers at this user's approval step (+ sent back, for the fleet office)
+  const impBadge=imprestReady?imprest.filter(v=>v.status==="in_approval"&&v.chain[v.step]===user?.role).length+(isImpOffice(user)?imprest.filter(v=>v.status==="returned").length:0):0;
+  const imprestAlerts=useMemo(()=>{if(!imprestReady)return[];const out=[];const role=user?.role;
+    const mine=imprest.filter(v=>v.status==="in_approval"&&v.chain[v.step]===role);if(mine.length)out.push(`${mine.length} imprest voucher${mine.length>1?"s":""} waiting for you to approve`);
+    if(isImpOffice(user)){const back=imprest.filter(v=>v.status==="returned");if(back.length)out.push(`Imprest sent back to the fleet office: ${back.map(impName).join("; ")}`);
+      const wk=impMonday(ngDate(Date.now()));const un=imprest.filter(v=>v.status==="approved"&&!v.retired&&v.weekStart<wk);if(un.length)out.push(`Imprest not retired yet (record how it was spent): ${un.map(impName).join("; ")}`);}
+    if(role==="HQ Accounts"||role==="Super Admin"){const unpaid=imprest.filter(v=>v.status==="approved"&&!v.paidAt);if(unpaid.length)out.push(`${unpaid.length} approved imprest voucher${unpaid.length>1?"s":""} not marked as paid out`);}
+    return out;},[imprest,imprestReady,user?.role]);   // eslint-disable-line
+  // the approver roles open on Imprest after logging in
+  const impLanded=useRef(false);
+  useEffect(()=>{if(impLanded.current||!imprestReady||!IMP_APPROVER_ROLES.includes(user?.role))return;impLanded.current=true;if(location.pathname==="/")navigate("/imprest");},[imprestReady,user?.role]);   // eslint-disable-line
   // gas sent to this store and not accepted yet (badge on the menu)
   const gasToAccept=user?.role==="Store Staff"?(gasCylinders||[]).filter(c=>c.received===false&&c.storeLoc===user?.store_location).length:0;
   const [lossesReady,setLossesReady]=useState(false);
@@ -4560,7 +4920,7 @@ function FleetProAppInner(){
     {mob&&showNav&&<div onClick={()=>setShowNav(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:998}}/>}
     <div style={{width:mob?280:(col?64:240),minHeight:"100vh",background:"linear-gradient(180deg,#0F1A2E 0%,#162D50 100%)",position:"fixed",left:mob?(showNav?0:-280):0,top:0,zIndex:999,transition:mob?"left 0.25s ease":"width 0.2s",overflow:"hidden",boxShadow:mob&&showNav?"4px 0 20px rgba(0,0,0,0.3)":"none"}}>
       <div style={{padding:col&&!mob?"18px 12px":"18px 20px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid rgba(255,255,255,0.06)"}}><div style={{width:34,height:34,borderRadius:8,background:`linear-gradient(135deg,${P},#4589FF)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Truck size={18} color="#fff"/></div>{(!col||mob)&&<div><div style={{fontSize:16,fontWeight:700,color:"#fff"}}>FleetPro</div><div style={{fontSize:9,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Fleet Management</div></div>}</div>
-      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{(()=>{const items=NAV.filter(item=>(item.id!=="gas"||gasReady)&&(isStoreStaff?["staff-dashboard","diesel","diesel-mgmt","generators","gas","settings"].includes(item.id):true));return items.map((item,idx)=>{const active=page===item.id;const Icon=item.icon;const newGroup=idx===0||items[idx-1].group!==item.group;return(<div key={item.id}>{newGroup&&((!col||mob)?<div style={{fontSize:9,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.25)",padding:idx===0?"2px 12px 4px":"12px 12px 4px",textTransform:"uppercase"}}>{item.group}</div>:idx>0&&<div style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 6px"}}/>)}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}{item.id==="gas"&&gasToAccept>0&&<span title="Gas sent to you - accept it" style={{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:"#E8590C",color:"#fff",fontSize:10,fontWeight:700,display:"inline-flex",alignItems:"center",justifyContent:"center",padding:"0 5px"}}>{gasToAccept}</span>}</button></div>);});})()}</nav>
+      <nav style={{padding:"10px 8px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto",maxHeight:"calc(100vh - 120px)"}}>{(()=>{const items=NAV.filter(item=>(item.id!=="gas"||gasReady)&&(item.id!=="imprest"||(impCanSee(user)&&(imprestReady||user?.role==="Super Admin")))&&(isStoreStaff?["staff-dashboard","diesel","diesel-mgmt","generators","gas","settings"].includes(item.id):true));return items.map((item,idx)=>{const active=page===item.id;const Icon=item.icon;const newGroup=idx===0||items[idx-1].group!==item.group;return(<div key={item.id}>{newGroup&&((!col||mob)?<div style={{fontSize:9,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.25)",padding:idx===0?"2px 12px 4px":"12px 12px 4px",textTransform:"uppercase"}}>{item.group}</div>:idx>0&&<div style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 6px"}}/>)}<button onClick={()=>{setPage(item.id);if(mob)setShowNav(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",width:"100%",textAlign:"left",background:active?"rgba(15,98,254,0.15)":"transparent",color:active?"#78A9FF":"rgba(255,255,255,0.5)",fontSize:13,fontWeight:active?600:400,position:"relative"}}>{active&&<div style={{position:"absolute",left:0,top:"50%",transform:"translateY(-50%)",width:3,height:18,borderRadius:2,background:P}}/>}<Icon size={17} style={{flexShrink:0}}/>{(!col||mob)&&item.label}{item.id==="gas"&&gasToAccept>0&&<span title="Gas sent to you - accept it" style={{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:"#E8590C",color:"#fff",fontSize:10,fontWeight:700,display:"inline-flex",alignItems:"center",justifyContent:"center",padding:"0 5px"}}>{gasToAccept}</span>}{item.id==="imprest"&&impBadge>0&&<span title="Imprest waiting for you" style={{marginLeft:"auto",minWidth:18,height:18,borderRadius:9,background:"#DA1E28",color:"#fff",fontSize:10,fontWeight:700,display:"inline-flex",alignItems:"center",justifyContent:"center",padding:"0 5px"}}>{impBadge}</span>}</button></div>);});})()}</nav>
       {!mob&&<div style={{position:"absolute",bottom:0,left:0,right:0,padding:"10px 8px",borderTop:"1px solid rgba(255,255,255,0.06)"}}><button onClick={()=>setCol(!col)} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:8,borderRadius:7,border:"none",cursor:"pointer",width:"100%",background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.35)",fontSize:12}}>{col?<ChevronRight size={15}/>:<><ChevronLeft size={15}/> Collapse</>}</button></div>}
     </div>
     <header style={{height:56,background:"#fff",borderBottom:"1px solid #E8ECF1",display:"flex",alignItems:"center",justifyContent:"space-between",padding:mob?"0 12px":"0 24px",position:"sticky",top:0,zIndex:50,marginLeft:sw,transition:"margin-left 0.2s"}}>
@@ -4576,7 +4936,7 @@ function FleetProAppInner(){
     </header>
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
-        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders}/>}/>
+        <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders} imprestAlerts={imprestAlerts}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady} pansReady={pansReady}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasSupplyReady={gasSupplyReady}/>}/>
         <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
@@ -4592,8 +4952,9 @@ function FleetProAppInner(){
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
+        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} vouchers={imprest} setVouchers={setImprest} chain={imprestChain} vehicles={vehicles} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady}/>:<Navigate to="/" replace/>}/>
         <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady} gasPurchases={gasPurchases} setGasPurchases={setGasPurchases} supplyReady={gasSupplyReady} gasCounts={gasCounts} setGasCounts={setGasCounts} countsReady={gasCountsReady}/>}/>
-        <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks}/>}/>
+        <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks} imprestChain={imprestChain} setImprestChain={setImprestChain} imprestReady={imprestReady}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
     </main>

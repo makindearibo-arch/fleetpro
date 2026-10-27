@@ -355,4 +355,20 @@ export const db = {
   async addGasStockCount(c) { return insertRow('gas_stock_counts', c); },
   async updateGasStockCount(id, c) { return updateRow('gas_stock_counts', id, c); },
   async deleteGasStockCount(id) { return deleteRow('gas_stock_counts', id); },
+  // Fleet imprest (20261027_imprest.sql)
+  async getImprestVouchers() { return fetchAll('imprest_vouchers', 'week_start', false); },
+  async getImprestVoucher(id) {
+    const { data, error } = await supabase.from('imprest_vouchers').select('*').eq('id', id).maybeSingle();
+    if (error) throw friendlyError(error, 'read');
+    return data;
+  },
+  async addImprestVoucher(v) { return insertRow('imprest_vouchers', v); },
+  async updateImprestVoucher(id, v) { return updateRow('imprest_vouchers', id, v); },
+  async deleteImprestVoucher(id) { return deleteRow('imprest_vouchers', id); },
+  async getImprestChain() {
+    const { data, error } = await supabase.from('imprest_config').select('chain').eq('id', 1).maybeSingle();
+    if (error) throw friendlyError(error, 'read');
+    return data?.chain || null;
+  },
+  async setImprestChain(chain) { return updateRow('imprest_config', 1, { chain }); },
 };
