@@ -3004,6 +3004,13 @@ const impName=v=>(v.kind==="weekly"?"Weekly imprest":"Mid-week: "+(v.title||"req
 const impCarry=(vouchers,week,exceptId)=>{const prev=(vouchers||[]).filter(v=>v.status==="approved"&&v.weekStart<week&&v.id!==exceptId);
   if(!prev.length)return{week:null,bal:0,list:[]};const w=prev.reduce((a,v)=>v.weekStart>a?v.weekStart:a,"");const list=prev.filter(v=>v.weekStart===w);
   return{week:w,bal:list.reduce((a,v)=>a+impCashHeld(v)-(v.spentTotal||0),0),list};};
+// last week OVERSPENT -> the fleet office is owed it: one locked 'owed' line on the next
+// weekly voucher for exactly that amount (20261027_imprest_owed.sql checks it). Approvers
+// can lower it like any line; what they allow is paid out, and it counts as spent (repaid).
+const IMP_OWED_DESC="OWED TO THE FLEET OFFICE FROM LAST WEEK";
+const impSyncOwed=(lines,vouchers,week,id)=>{const owed=Math.max(0,-impCarry(vouchers,week,id).bal);const rest=(lines||[]).filter(l=>l.type!=="owed");
+  if(!owed)return rest;const old=(lines||[]).find(l=>l.type==="owed")||{};
+  return[...rest,{...old,id:old.id||impId(),desc:IMP_OWED_DESC,name:"Fleet office",date:week,category:"Owed from last week",vehicleId:"",type:"owed",qty:1,unitPrice:owed}];};
 const impStatus=v=>v.status==="draft"?["Draft","#525252","#F4F4F4"]:v.status==="returned"?["Sent back","#DA1E28","#FFF1F1"]:v.status==="in_approval"?["With "+(v.chain[v.step]||"approvers"),"#B45309","#FFF8E1"]:v.retired?["Approved - retired","#0043CE","#EDF5FF"]:["Approved","#24A148","#DEFBE6"];
 const toIV=r=>({id:r.id,kind:r.kind,weekStart:r.week_start,title:r.title||"",status:r.status,chain:Array.isArray(r.chain)?r.chain:[],step:Number(r.step)||0,
   lines:Array.isArray(r.lines)?r.lines:[],history:Array.isArray(r.history)?r.history:[],requestedTotal:Number(r.requested_total)||0,
@@ -3027,7 +3034,7 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
   const open=all.find(v=>v.id===openId)||null;
   useEffect(()=>{setNote("");setMsg("");},[openId]);
   // reload the working copy whenever the saved voucher changes (keeps any message on screen)
-  useEffect(()=>{setEd(open?{lines:open.lines.map(l=>({...l})),title:open.title}:null);},[openId,open?.updatedAt]);   // eslint-disable-line
+  useEffect(()=>{setEd(open?{lines:(open.kind==="weekly"&&(open.status==="draft"||open.status==="returned")&&isImpOffice(user)?impSyncOwed(open.lines,all,open.weekStart,open.id):open.lines).map(l=>({...l})),title:open.title}:null);},[openId,open?.updatedAt]);   // eslint-disable-line
   const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
   const btn=(bg,fg,border)=>({padding:"8px 14px",borderRadius:9,border:border||"none",background:bg,color:fg||"#fff",fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.7:1});
   const pill=(t,c,bg)=><span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:bg,color:c,whiteSpace:"nowrap"}}>{t}</span>;
@@ -3050,14 +3057,14 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
     const prev=all.filter(v=>v.kind==="weekly"&&v.weekStart<week).sort((a,b)=>b.weekStart.localeCompare(a.weekStart))[0];
     const shift=prev?Math.round((new Date(week+"T12:00:00Z")-new Date(prev.weekStart+"T12:00:00Z"))/864e5):0;
     const reg=(prev?prev.lines.filter(l=>l.type==="regular"):[]).map(l=>({id:impId(),desc:l.desc,name:l.name||"",date:l.date?impAddDays(l.date,shift):"",category:l.category,vehicleId:l.vehicleId||"",type:"regular",qty:l.qty,unitPrice:l.unitPrice}));
-    const lines=reg.length?reg:[blank("regular")];
+    const lines=impSyncOwed(reg.length?reg:[blank("regular")],all,week,null);
     const v=local(await db.addImprestVoucher({kind:"weekly",week_start:week,lines,requested_total:impSum(lines,impAmt)}));setOpenId(v.id);});
   const createMidweek=title=>run(async()=>{if(!title.trim())throw new Error("Give the request a title, e.g. \"Battery for AKR 11 XC\".");
     const lines=[blank("oneoff")];
     const v=local(await db.addImprestVoucher({kind:"midweek",week_start:week,title:title.trim(),lines,requested_total:0}));setModal(null);setOpenId(v.id);});
-  const saveDraft=()=>run(async()=>{await fresh(open);const lines=clean(ed.lines);
+  const saveDraft=()=>run(async()=>{await fresh(open);const lines=open.kind==="weekly"?impSyncOwed(clean(ed.lines),all,open.weekStart,open.id):clean(ed.lines);
     local(await db.updateImprestVoucher(open.id,{lines,title:ed.title,requested_total:impSum(lines,impAmt)}));});
-  const submit=()=>run(async()=>{const lines=clean(ed.lines);
+  const submit=()=>run(async()=>{const lines=open.kind==="weekly"?impSyncOwed(clean(ed.lines),all,open.weekStart,open.id):clean(ed.lines);
     if(!lines.length)throw new Error("Add at least one line.");
     const bad=lines.find(l=>!l.desc||!(impAmt(l)>0));if(bad)throw new Error("Every line needs a description, a quantity and a unit price.");
     const noND=lines.filter(l=>!l.name||!l.date);if(noND.length)throw new Error("Every line needs a name and a date: "+noND.map(l=>l.desc).join(", ")+".");
@@ -3067,7 +3074,8 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
     if(open.kind==="weekly"){const un=all.filter(v=>v.status==="approved"&&!v.retired&&v.weekStart<open.weekStart);
       if(un.length)throw new Error("First record how the earlier imprest was spent and retire it: "+un.map(impName).join("; ")+".");}
     const req=impSum(lines,impAmt);const c=open.kind==="weekly"?impCarry(all,open.weekStart,open.id):null;const bf=c?Math.max(0,c.bal):0;
-    if(!confirm("Submit for approval?\n\nRequested: "+fmt(req)+(bf?"\nLess unspent from last week: "+fmt(bf):"")+"\nTo pay out if all of it is approved: "+fmt(Math.max(0,req-bf))+"\n\nIt goes to "+(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ")+"."))return;
+    const owedAmt=impSum(lines.filter(l=>l.type==="owed"),impAmt);
+    if(!confirm("Submit for approval?\n\nRequested: "+fmt(req)+(owedAmt?"\n(includes "+fmt(owedAmt)+" owed to the fleet office - last week was overspent)":"")+(bf?"\nLess unspent from last week: "+fmt(bf):"")+"\nTo pay out if all of it is approved: "+fmt(Math.max(0,req-bf))+"\n\nIt goes to "+(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ")+"."))return;
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{lines,title:ed.title,requested_total:req,status:"in_approval",history:hist(r,open.status==="returned"?"Resubmitted":"Submitted")}));});
   const approve=()=>run(async()=>{
@@ -3075,19 +3083,19 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
     const why=ed.lines.filter(l=>impAllowed(l)<impAmt(l)&&!String(l.cutNote||"").trim());if(why.length)throw new Error("Give a reason for each amount you lowered: "+why.map(l=>l.desc).join(", ")+".");
     const lines=ed.lines.map(l=>{const o={...l};delete o.allowed;delete o.cutNote;const a=impAllowed(l);if(a<impAmt(l)){o.allowed=a;o.cutNote=String(l.cutNote).trim();}return o;});
     const last=open.step>=open.chain.length-1;
-    if(last){const tot=impSum(lines,impAllowed);let t2="";if(open.kind==="weekly"){const c=impCarry(all,open.weekStart,open.id);const bf=Math.max(0,c.bal);t2=(bf?"\nLess unspent from last week: "+fmt(bf):"")+(c.bal<0?"\nLast week was OVERSPENT by "+fmt(-c.bal)+" (not added).":"")+"\nTo pay out: "+fmt(Math.max(0,tot-bf));}
+    if(last){const tot=impSum(lines,impAllowed);let t2="";if(open.kind==="weekly"){const c=impCarry(all,open.weekStart,open.id);const bf=Math.max(0,c.bal);t2=(bf?"\nLess unspent from last week: "+fmt(bf):"")+(c.bal<0?"\nIncludes "+fmt(impSum(lines.filter(l=>l.type==="owed"),impAllowed))+" owed to the fleet office (last week was overspent by "+fmt(-c.bal)+").":"")+"\nTo pay out: "+fmt(Math.max(0,tot-bf));}
       if(!confirm("Final approval.\n\nApproved: "+fmt(tot)+t2+"\n\nAfter this the amounts are fixed."))return;}
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{lines,history:hist(r,last?"Approved - final":"Approved",note.trim()),...(last?{status:"approved"}:{step:open.step+1})}));setNote("");});
   const sendBack=()=>run(async()=>{if(!note.trim())throw new Error("Say why you are sending it back (in the comment box).");
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{status:"returned",history:hist(r,"Sent back",note.trim())}));setNote("");});
-  const spendLines=()=>ed.lines.map(l=>{const o={...l};if(l.spent===""||l.spent==null)delete o.spent;else o.spent=Number(l.spent)||0;if(!String(l.spentNote||"").trim())delete o.spentNote;if(!l.receipt)delete o.receipt;return o;});
+  const spendLines=()=>ed.lines.map(l=>{const o={...l};if(l.type==="owed")o.spent=impAllowed(l);else if(l.spent===""||l.spent==null)delete o.spent;else o.spent=Number(l.spent)||0;if(!String(l.spentNote||"").trim())delete o.spentNote;if(!l.receipt)delete o.receipt;return o;});
   const saveSpending=()=>run(async()=>{await fresh(open);local(await db.updateImprestVoucher(open.id,{lines:spendLines()}));});
   const retire=()=>run(async()=>{const lines=spendLines();const miss=lines.filter(l=>l.spent==null);
     if(miss.length)throw new Error("Enter what was spent on every line (0 if nothing): "+miss.map(l=>l.desc).join(", ")+".");
     const spent=impSum(lines,impSpent);const held=impCashHeld(open);
-    if(!confirm("Retire this voucher?\n\nCash held: "+fmt(held)+"\nSpent: "+fmt(spent)+"\n"+(held-spent>=0?"Left over (comes off next week's pay-out): "+fmt(held-spent):"OVERSPENT by "+fmt(spent-held))+"\n\nAfter this the spending is locked."))return;
+    if(!confirm("Retire this voucher?\n\nCash held: "+fmt(held)+"\nSpent: "+fmt(spent)+"\n"+(held-spent>=0?"Left over (comes off next week's pay-out): "+fmt(held-spent):"OVERSPENT by "+fmt(spent-held)+" - it goes on next week's voucher as owed to the fleet office, for the approvers to check")+"\n\nAfter this the spending is locked."))return;
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{lines,retired:true,history:hist(r,"Retired","Spent "+fmt(spent))}));});
   const markPaid=(date,txt)=>run(async()=>{if(!date)throw new Error("Enter the date it was paid out.");const r=await fresh(open);
@@ -3132,7 +3140,7 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
     const bf=approved?(v.balanceBf||0):carry?Math.max(0,carry.bal):0;const overBf=approved?(v.overspentBf||0):carry?Math.max(0,-carry.bal):0;
     const payOut=approved?(v.toPayOut||0):Math.max(0,allowed-bf);
     const unretired=v.kind==="weekly"&&(v.status==="draft"||v.status==="returned")?all.filter(x=>x.status==="approved"&&!x.retired&&x.weekStart<v.weekStart):[];
-    const cats=IMP_CATS.map(c=>[c,impSum(lines.filter(l=>l.category===c),approved||v.status==="in_approval"?impAllowed:impAmt)]).filter(([,t])=>t>0);
+    const cats=[...IMP_CATS,"Owed from last week"].map(c=>[c,impSum(lines.filter(l=>l.category===c),approved||v.status==="in_approval"?impAllowed:impAmt)]).filter(([,t])=>t>0);
     const steps=["Submitted",...(v.chain.length?v.chain:(chain||IMP_DEFAULT_CHAIN))];
     const stepState=i=>{if(v.status==="draft")return"todo";if(v.status==="returned")return i===0?"back":"todo";if(v.status==="approved")return"done";if(i===0)return"done";return i-1<v.step?"done":i-1===v.step?"now":"todo";};
     const cellIn={...inp,padding:"6px 8px",fontSize:12};
@@ -3156,7 +3164,7 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
         <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Last imprest (week of {dayTxt(carry.week)}) - how it was spent</h3>
         <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:520}}><thead><tr style={{background:"#F4F4F4"}}>{["Voucher","Cash held","Spent","Left"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
           <tbody>{carry.list.map(x=>{const left=impCashHeld(x)-(x.spentTotal||0);return(<tr key={x.id} onClick={()=>setOpenId(x.id)} style={{cursor:"pointer"}}><td style={tc}>{x.kind==="weekly"?"Weekly":"Mid-week: "+x.title}{!x.retired&&<span style={{marginLeft:6}}>{pill("not retired","#B45309","#FFF8E1")}</span>}</td><td style={tc}>{fmt(impCashHeld(x))}</td><td style={tc}>{fmt(x.spentTotal||0)}</td><td style={{...tc,fontWeight:700,color:left<0?"#DA1E28":"#161616"}}>{left<0?"overspent "+fmt(-left):fmt(left)}</td></tr>);})}</tbody></table></div>
-        <div style={{fontSize:12,color:carry.bal<0?"#A2191F":"#525252",marginTop:8}}>{carry.bal>0?<>Unspent <b>{fmt(carry.bal)}</b> comes off this week's pay-out.</>:carry.bal<0?<>Last week was <b>overspent by {fmt(-carry.bal)}</b>. It is not added to this week - the approvers decide.</>:"Nothing left over."}</div>
+        <div style={{fontSize:12,color:carry.bal<0?"#A2191F":"#525252",marginTop:8}}>{carry.bal>0?<>Unspent <b>{fmt(carry.bal)}</b> comes off this week's pay-out.</>:carry.bal<0?<>Last week was <b>overspent by {fmt(-carry.bal)}</b>. That is owed to the fleet office: it is added to this voucher as a line the approvers check, and whatever they allow is paid back.</>:"Nothing left over."}</div>
       </div>}
 
       <div style={card}>
@@ -3168,25 +3176,25 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
         {spending&&<div style={{fontSize:12,color:"#525252",marginBottom:8}}>Enter what was actually spent on each line (0 if nothing){docReady?" and attach the receipt":""}, then <b>Retire</b>.</div>}
         <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:editing?1220:1020}}>
           <thead><tr style={{background:"#F4F4F4"}}>{["#","Description","Name","Date","Category","Vehicle","Type","Qty","Unit price",...(carry?["Last week"]:[]),"Requested","Allowed","Spent",...(editing?[""]:[])].map((h,i)=>(<th key={h+i} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
-          <tbody>{lines.map((l,i)=>{const amt=impAmt(l);const al=impAllowed(l);const cut=l.allowed!=null&&l.allowed!==""&&al<amt;const lw=carry?lastAmt(l.desc):null;return(<tr key={l.id||i}>
+          <tbody>{lines.map((l,i)=>{const amt=impAmt(l);const al=impAllowed(l);const cut=l.allowed!=null&&l.allowed!==""&&al<amt;const lw=carry?lastAmt(l.desc):null;const rowEdit=editing&&l.type!=="owed";return(<tr key={l.id||i}>
             <td style={tc}>{i+1}</td>
-            <td style={{...tc,minWidth:160}}>{editing?<input style={cellIn} value={l.desc} placeholder="e.g. TRANSPORT TO OWO" onChange={e=>setLine(i,{desc:e.target.value})}/>:<b>{l.desc}</b>}</td>
-            <td style={{...tc,minWidth:130}}>{editing?<input style={cellIn} value={l.name||""} list="imp-names" placeholder="e.g. driver's name" onChange={e=>setLine(i,{name:e.target.value})}/>:(l.name||"-")}</td>
-            <td style={{...tc,minWidth:editing?140:80,whiteSpace:"nowrap"}}>{editing?<input type="date" style={cellIn} value={l.date||""} min={v.weekStart} max={impAddDays(v.weekStart,6)} onChange={e=>setLine(i,{date:e.target.value})}/>:(l.date?fmtDayLabel(l.date):"-")}</td>
-            <td style={tc}>{editing?<select style={cellIn} value={l.category} onChange={e=>setLine(i,{category:e.target.value})}>{IMP_CATS.map(c=>(<option key={c}>{c}</option>))}</select>:l.category}</td>
-            <td style={tc}>{editing?<select style={cellIn} value={l.vehicleId||""} onChange={e=>setLine(i,{vehicleId:e.target.value})}><option value="">-</option>{(vehicles||[]).map(x=>(<option key={x.id} value={x.id}>{vehName(x.id)}</option>))}</select>:(vehName(l.vehicleId)||"-")}</td>
-            <td style={tc}>{editing?<select style={cellIn} value={l.type} onChange={e=>setLine(i,{type:e.target.value})}><option value="regular">Every week</option><option value="oneoff">One-off</option></select>:(l.type==="regular"?"Every week":"One-off")}</td>
-            <td style={{...tc,width:70}}>{editing?<input type="number" min="0" style={cellIn} value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})}/>:(Number(l.qty)||0)}</td>
-            <td style={{...tc,width:110}}>{editing?<input type="number" min="0" style={cellIn} value={l.unitPrice} onChange={e=>setLine(i,{unitPrice:e.target.value})}/>:fmt(Number(l.unitPrice)||0)}</td>
+            <td style={{...tc,minWidth:160}}>{rowEdit?<input style={cellIn} value={l.desc} placeholder="e.g. TRANSPORT TO OWO" onChange={e=>setLine(i,{desc:e.target.value})}/>:<><b>{l.desc}</b>{l.type==="owed"&&<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>added automatically - last week was overspent</div>}</>}</td>
+            <td style={{...tc,minWidth:130}}>{rowEdit?<input style={cellIn} value={l.name||""} list="imp-names" placeholder="e.g. driver's name" onChange={e=>setLine(i,{name:e.target.value})}/>:(l.name||"-")}</td>
+            <td style={{...tc,minWidth:editing?140:80,whiteSpace:"nowrap"}}>{rowEdit?<input type="date" style={cellIn} value={l.date||""} min={v.weekStart} max={impAddDays(v.weekStart,6)} onChange={e=>setLine(i,{date:e.target.value})}/>:(l.date?fmtDayLabel(l.date):"-")}</td>
+            <td style={tc}>{rowEdit?<select style={cellIn} value={l.category} onChange={e=>setLine(i,{category:e.target.value})}>{IMP_CATS.map(c=>(<option key={c}>{c}</option>))}</select>:l.category}</td>
+            <td style={tc}>{rowEdit?<select style={cellIn} value={l.vehicleId||""} onChange={e=>setLine(i,{vehicleId:e.target.value})}><option value="">-</option>{(vehicles||[]).map(x=>(<option key={x.id} value={x.id}>{vehName(x.id)}</option>))}</select>:(vehName(l.vehicleId)||"-")}</td>
+            <td style={tc}>{rowEdit?<select style={cellIn} value={l.type} onChange={e=>setLine(i,{type:e.target.value})}><option value="regular">Every week</option><option value="oneoff">One-off</option></select>:(l.type==="regular"?"Every week":l.type==="owed"?"Owed":"One-off")}</td>
+            <td style={{...tc,width:70}}>{rowEdit?<input type="number" min="0" style={cellIn} value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})}/>:(Number(l.qty)||0)}</td>
+            <td style={{...tc,width:110}}>{rowEdit?<input type="number" min="0" style={cellIn} value={l.unitPrice} onChange={e=>setLine(i,{unitPrice:e.target.value})}/>:fmt(Number(l.unitPrice)||0)}</td>
             {carry&&<td style={{...tc,color:"#0043CE"}}>{lw!=null?fmt(lw):"-"}</td>}
             <td style={{...tc,fontWeight:600}}>{fmt(amt)}</td>
             <td style={{...tc,minWidth:approving?150:90}}>{approving?<><input type="number" min="0" style={cellIn} value={l.allowed!=null?l.allowed:amt} onChange={e=>setLine(i,{allowed:e.target.value})}/>{al<amt&&<input style={{...cellIn,marginTop:4}} value={l.cutNote||""} placeholder="Reason (required)" onChange={e=>setLine(i,{cutNote:e.target.value})}/>}</>
               :v.status==="draft"?"-":<>{fmt(al)}{cut&&<div style={{fontSize:10,color:"#DA1E28"}}>lowered: {l.cutNote}</div>}</>}</td>
-            <td style={{...tc,minWidth:spending?170:90}}>{spending?<><input type="number" min="0" style={cellIn} value={l.spent??""} placeholder="spent" onChange={e=>setLine(i,{spent:e.target.value})}/>
+            <td style={{...tc,minWidth:spending?170:90}}>{spending&&l.type==="owed"?<>{fmt(impAllowed(l))}<div style={{fontSize:10,color:"#8D8D8D"}}>paid back to the fleet office</div></>:spending?<><input type="number" min="0" style={cellIn} value={l.spent??""} placeholder="spent" onChange={e=>setLine(i,{spent:e.target.value})}/>
                 <input style={{...cellIn,marginTop:4}} value={l.spentNote||""} placeholder="note (optional)" onChange={e=>setLine(i,{spentNote:e.target.value})}/>
                 {docReady&&<div style={{marginTop:4}}><DocUpload folder="imprest" value={l.receipt||""} onChange={p=>setLine(i,{receipt:p||""})}/></div>}</>
               :approved?<>{l.spent!=null?fmt(impSpent(l)):"-"}{l.spentNote?<div style={{fontSize:10,color:"#8D8D8D"}}>{l.spentNote}</div>:null}{l.receipt?<div><DocLink path={l.receipt} title="Receipt"/></div>:null}</>:"-"}</td>
-            {editing&&<td style={tc}><button onClick={()=>setEd({...ed,lines:lines.filter((_,j)=>j!==i)})} title="Remove line" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={14} color="#DA1E28"/></button></td>}
+            {editing&&<td style={tc}>{rowEdit&&<button onClick={()=>setEd({...ed,lines:lines.filter((_,j)=>j!==i)})} title="Remove line" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={14} color="#DA1E28"/></button>}</td>}
           </tr>);})}</tbody>
           <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc} colSpan={carry?10:9}>Total</td><td style={tc}>{fmt(req)}</td><td style={tc}>{v.status==="draft"?"-":fmt(allowed)}</td><td style={tc}>{approved?fmt(spent):"-"}</td>{editing&&<td style={tc}/>}</tr></tfoot>
         </table></div>
@@ -3200,7 +3208,7 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
           {sumRow("Requested",fmt(req))}
           {v.status!=="draft"&&sumRow(approved?"Approved":"Allowed so far",fmt(allowed))}
           {v.kind==="weekly"&&sumRow("Less unspent from last week"+(approved?"":" (estimate)"),bf?"- "+fmt(bf):fmt(0))}
-          {v.kind==="weekly"&&overBf>0&&sumRow("Last week overspent (not added)",fmt(overBf),{color:"#DA1E28"})}
+          {v.kind==="weekly"&&overBf>0&&sumRow("Last week overspent (owed to the fleet office - see the lines)",fmt(overBf),{color:"#B45309"})}
           {sumRow("To pay out"+(approved?"":" (if approved as it stands)"),fmt(payOut),{color:P,style:{fontSize:14}})}
           {approved&&sumRow("Paid out",v.paidAt?dayTxt(ngDate(v.paidAt))+(v.paidNote?" - "+v.paidNote:""):"Not yet",{color:v.paidAt?"#24A148":"#B45309"})}
           {approved&&sumRow("Spent",fmt(spent))}
@@ -3220,7 +3228,7 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,
               <button disabled={busy} onClick={sendBack} style={btn("#fff","#DA1E28","1.5px solid #FFB3B8")}>↩ Send back to fleet office</button></div></>}
           {spending&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button disabled={busy} onClick={saveSpending} style={btn("#fff",P,"1.5px solid "+P)}>Save spending</button><button disabled={busy} onClick={retire} style={btn(P)}>Retire</button></div>}
           {approved&&!v.paidAt&&(role==="HQ Accounts"||isSA)&&<div style={{marginTop:10}}><button disabled={busy} onClick={()=>setModal({mode:"paid",date:todayStr,note:""})} style={btn("#24A148")}>Mark as paid out</button></div>}
-          {!editing&&!approving&&!spending&&!(approved&&!v.paidAt&&(role==="HQ Accounts"||isSA))&&<div style={{fontSize:12,color:"#8D8D8D"}}>{v.status==="in_approval"?"Waiting for "+v.chain[v.step]+".":v.status==="draft"||v.status==="returned"?"The fleet office is preparing it.":v.retired?"Approved, paid and retired - nothing left to do.":"Approved. The fleet office records the spending and retires it."}</div>}
+          {!editing&&!approving&&!spending&&!(approved&&!v.paidAt&&(role==="HQ Accounts"||isSA))&&<div style={{fontSize:12,color:"#8D8D8D"}}>{v.status==="in_approval"?"Waiting for "+v.chain[v.step]+".":v.status==="draft"||v.status==="returned"?"The fleet office is preparing it.":v.retired?(v.paidAt?"Approved, paid out and retired - nothing left to do.":"Retired. Waiting for HQ Accounts to mark it paid out."):"Approved. The fleet office records the spending and retires it."}</div>}
         </div>
       </div>
 
