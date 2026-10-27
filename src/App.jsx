@@ -3012,7 +3012,7 @@ const toIV=r=>({id:r.id,kind:r.kind,weekStart:r.week_start,title:r.title||"",sta
   submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,paidAt:r.paid_at||null,paidNote:r.paid_note||"",retired:!!r.retired,retiredAt:r.retired_at||null,
   createdAt:r.created_at,updatedAt:r.updated_at});
 
-function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
+function ImprestPage({user,vouchers,setVouchers,chain,vehicles,drivers,docReady,ready}){
   const role=user?.role;const office=isImpOffice(user);const isSA=role==="Super Admin";
   const todayStr=ngDate(Date.now());const thisWeek=impMonday(todayStr);
   const [view,setView]=useState(()=>IMP_APPROVER_ROLES.includes(role)?"waiting":"vouchers");
@@ -3043,12 +3043,13 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
   const fresh=async v=>{const r=await db.getImprestVoucher(v.id);if(!r)throw new Error("This voucher no longer exists.");
     if(r.updated_at!==v.updatedAt){local(r);throw new Error("Someone else changed this voucher a moment ago. It has been refreshed - check it and try again.");}return toIV(r);};
   const hist=(v,action,text)=>[...v.history,{at:new Date().toISOString(),by:user?.name||user?.email||"?",role,action,note:text||""}];
-  const blank=type=>({id:impId(),desc:"",category:type==="regular"?"Transport":"Others",vehicleId:"",type,qty:1,unitPrice:""});
-  const clean=lines=>lines.map(l=>({...l,desc:String(l.desc||"").trim().toUpperCase(),qty:Number(l.qty)||0,unitPrice:Number(l.unitPrice)||0}));
+  const blank=type=>({id:impId(),desc:"",name:"",date:"",category:type==="regular"?"Transport":"Others",vehicleId:"",type,qty:1,unitPrice:""});
+  const clean=lines=>lines.map(l=>({...l,desc:String(l.desc||"").trim().toUpperCase(),name:String(l.name||"").trim(),date:l.date||"",qty:Number(l.qty)||0,unitPrice:Number(l.unitPrice)||0}));
 
   const createWeekly=()=>run(async()=>{
     const prev=all.filter(v=>v.kind==="weekly"&&v.weekStart<week).sort((a,b)=>b.weekStart.localeCompare(a.weekStart))[0];
-    const reg=(prev?prev.lines.filter(l=>l.type==="regular"):[]).map(l=>({id:impId(),desc:l.desc,category:l.category,vehicleId:l.vehicleId||"",type:"regular",qty:l.qty,unitPrice:l.unitPrice}));
+    const shift=prev?Math.round((new Date(week+"T12:00:00Z")-new Date(prev.weekStart+"T12:00:00Z"))/864e5):0;
+    const reg=(prev?prev.lines.filter(l=>l.type==="regular"):[]).map(l=>({id:impId(),desc:l.desc,name:l.name||"",date:l.date?impAddDays(l.date,shift):"",category:l.category,vehicleId:l.vehicleId||"",type:"regular",qty:l.qty,unitPrice:l.unitPrice}));
     const lines=reg.length?reg:[blank("regular")];
     const v=local(await db.addImprestVoucher({kind:"weekly",week_start:week,lines,requested_total:impSum(lines,impAmt)}));setOpenId(v.id);});
   const createMidweek=title=>run(async()=>{if(!title.trim())throw new Error("Give the request a title, e.g. \"Battery for AKR 11 XC\".");
@@ -3059,6 +3060,9 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
   const submit=()=>run(async()=>{const lines=clean(ed.lines);
     if(!lines.length)throw new Error("Add at least one line.");
     const bad=lines.find(l=>!l.desc||!(impAmt(l)>0));if(bad)throw new Error("Every line needs a description, a quantity and a unit price.");
+    const noND=lines.filter(l=>!l.name||!l.date);if(noND.length)throw new Error("Every line needs a name and a date: "+noND.map(l=>l.desc).join(", ")+".");
+    const wkEnd=impAddDays(open.weekStart,6);const outWk=lines.filter(l=>l.date<open.weekStart||l.date>wkEnd);
+    if(outWk.length)throw new Error("Dates must be in this voucher's week ("+dayTxt(open.weekStart)+" - "+dayTxt(wkEnd)+"): "+outWk.map(l=>l.desc).join(", ")+".");
     if(open.kind==="midweek"&&!String(ed.title||"").trim())throw new Error("Give the mid-week request a title.");
     if(open.kind==="weekly"){const un=all.filter(v=>v.status==="approved"&&!v.retired&&v.weekStart<open.weekStart);
       if(un.length)throw new Error("First record how the earlier imprest was spent and retire it: "+un.map(impName).join("; ")+".");}
@@ -3091,12 +3095,12 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
   const del=()=>run(async()=>{if(!confirm("Delete this "+(open.kind==="weekly"?"weekly voucher":"mid-week request")+"?"))return;
     await db.deleteImprestVoucher(open.id);setVouchers(prev=>prev.filter(x=>x.id!==open.id));setOpenId(null);});
   const printV=v=>{const w=window.open("","_blank");if(!w)return;const esc=s=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-    const rows=v.lines.map((l,i)=>"<tr><td>"+(i+1)+"</td><td>"+esc(l.desc)+"</td><td>"+esc(l.category)+"</td><td>"+esc(vehName(l.vehicleId))+"</td><td class=r>"+(Number(l.qty)||0)+"</td><td class=r>"+fmt(Number(l.unitPrice)||0)+"</td><td class=r>"+fmt(impAmt(l))+"</td><td class=r>"+fmt(impAllowed(l))+"</td><td class=r>"+(l.spent!=null?fmt(impSpent(l)):"")+"</td></tr>").join("");
+    const rows=v.lines.map((l,i)=>"<tr><td>"+(i+1)+"</td><td>"+esc(l.desc)+"</td><td>"+esc(l.name)+"</td><td>"+esc(l.date?dayTxt(l.date):"")+"</td><td>"+esc(l.category)+"</td><td>"+esc(vehName(l.vehicleId))+"</td><td class=r>"+(Number(l.qty)||0)+"</td><td class=r>"+fmt(Number(l.unitPrice)||0)+"</td><td class=r>"+fmt(impAmt(l))+"</td><td class=r>"+fmt(impAllowed(l))+"</td><td class=r>"+(l.spent!=null?fmt(impSpent(l)):"")+"</td></tr>").join("");
     const app=v.history.filter(h=>/^Approved|^Submitted|^Resubmitted|^Paid/.test(h.action)).map(h=>"<div>"+esc(h.action)+": <b>"+esc(h.by)+"</b> ("+esc(h.role)+"), "+esc(whenTxt(h.at))+"</div>").join("");
     w.document.write("<html><head><title>Petty cash voucher</title><style>body{font-family:Arial,sans-serif;padding:24px;font-size:13px}table{border-collapse:collapse;width:100%;margin:12px 0}td,th{border:1px solid #999;padding:5px 7px;text-align:left}.r{text-align:right}h2{margin:0}</style></head><body>"
       +"<h2>MICMAKIN - FLEET PETTY CASH VOUCHER</h2><div>"+esc(impName(v))+" ("+esc(dayTxt(v.weekStart))+" - "+esc(dayTxt(impAddDays(v.weekStart,6)))+")</div>"
-      +"<table><tr><th>#</th><th>Description</th><th>Category</th><th>Vehicle</th><th class=r>Qty</th><th class=r>Unit</th><th class=r>Requested</th><th class=r>Approved</th><th class=r>Spent</th></tr>"+rows
-      +"<tr><th colspan=6>TOTAL</th><th class=r>"+fmt(impSum(v.lines,impAmt))+"</th><th class=r>"+fmt(impSum(v.lines,impAllowed))+"</th><th class=r>"+fmt(impSum(v.lines,impSpent))+"</th></tr></table>"
+      +"<table><tr><th>#</th><th>Description</th><th>Name</th><th>Date</th><th>Category</th><th>Vehicle</th><th class=r>Qty</th><th class=r>Unit</th><th class=r>Requested</th><th class=r>Approved</th><th class=r>Spent</th></tr>"+rows
+      +"<tr><th colspan=8>TOTAL</th><th class=r>"+fmt(impSum(v.lines,impAmt))+"</th><th class=r>"+fmt(impSum(v.lines,impAllowed))+"</th><th class=r>"+fmt(impSum(v.lines,impSpent))+"</th></tr></table>"
       +(v.status==="approved"?"<div>APPROVED: <b>"+fmt(v.approvedTotal||0)+"</b></div><div>LESS BALANCE B/F: <b>"+fmt(v.balanceBf||0)+"</b></div><div>TO PAY OUT: <b>"+fmt(v.toPayOut||0)+"</b></div>":"<div>Status: "+esc(impStatus(v)[0])+"</div>")
       +"<div style='margin-top:14px'>"+app+"</div><script>window.print()</"+"script></body></html>");w.document.close();};
 
@@ -3162,11 +3166,13 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
         </div>
         {approving&&<div style={{fontSize:12,color:"#525252",marginBottom:8}}>To refuse or reduce a line, lower its <b>Allowed</b> amount (0 refuses it) and give a reason.</div>}
         {spending&&<div style={{fontSize:12,color:"#525252",marginBottom:8}}>Enter what was actually spent on each line (0 if nothing){docReady?" and attach the receipt":""}, then <b>Retire</b>.</div>}
-        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:editing?980:860}}>
-          <thead><tr style={{background:"#F4F4F4"}}>{["#","Description","Category","Vehicle","Type","Qty","Unit price",...(carry?["Last week"]:[]),"Requested","Allowed","Spent",...(editing?[""]:[])].map((h,i)=>(<th key={h+i} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:editing?1220:1020}}>
+          <thead><tr style={{background:"#F4F4F4"}}>{["#","Description","Name","Date","Category","Vehicle","Type","Qty","Unit price",...(carry?["Last week"]:[]),"Requested","Allowed","Spent",...(editing?[""]:[])].map((h,i)=>(<th key={h+i} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
           <tbody>{lines.map((l,i)=>{const amt=impAmt(l);const al=impAllowed(l);const cut=l.allowed!=null&&l.allowed!==""&&al<amt;const lw=carry?lastAmt(l.desc):null;return(<tr key={l.id||i}>
             <td style={tc}>{i+1}</td>
             <td style={{...tc,minWidth:160}}>{editing?<input style={cellIn} value={l.desc} placeholder="e.g. TRANSPORT TO OWO" onChange={e=>setLine(i,{desc:e.target.value})}/>:<b>{l.desc}</b>}</td>
+            <td style={{...tc,minWidth:130}}>{editing?<input style={cellIn} value={l.name||""} list="imp-names" placeholder="e.g. driver's name" onChange={e=>setLine(i,{name:e.target.value})}/>:(l.name||"-")}</td>
+            <td style={{...tc,minWidth:editing?140:80,whiteSpace:"nowrap"}}>{editing?<input type="date" style={cellIn} value={l.date||""} min={v.weekStart} max={impAddDays(v.weekStart,6)} onChange={e=>setLine(i,{date:e.target.value})}/>:(l.date?fmtDayLabel(l.date):"-")}</td>
             <td style={tc}>{editing?<select style={cellIn} value={l.category} onChange={e=>setLine(i,{category:e.target.value})}>{IMP_CATS.map(c=>(<option key={c}>{c}</option>))}</select>:l.category}</td>
             <td style={tc}>{editing?<select style={cellIn} value={l.vehicleId||""} onChange={e=>setLine(i,{vehicleId:e.target.value})}><option value="">-</option>{(vehicles||[]).map(x=>(<option key={x.id} value={x.id}>{vehName(x.id)}</option>))}</select>:(vehName(l.vehicleId)||"-")}</td>
             <td style={tc}>{editing?<select style={cellIn} value={l.type} onChange={e=>setLine(i,{type:e.target.value})}><option value="regular">Every week</option><option value="oneoff">One-off</option></select>:(l.type==="regular"?"Every week":"One-off")}</td>
@@ -3182,8 +3188,9 @@ function ImprestPage({user,vouchers,setVouchers,chain,vehicles,docReady,ready}){
               :approved?<>{l.spent!=null?fmt(impSpent(l)):"-"}{l.spentNote?<div style={{fontSize:10,color:"#8D8D8D"}}>{l.spentNote}</div>:null}{l.receipt?<div><DocLink path={l.receipt} title="Receipt"/></div>:null}</>:"-"}</td>
             {editing&&<td style={tc}><button onClick={()=>setEd({...ed,lines:lines.filter((_,j)=>j!==i)})} title="Remove line" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={14} color="#DA1E28"/></button></td>}
           </tr>);})}</tbody>
-          <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc} colSpan={carry?8:7}>Total</td><td style={tc}>{fmt(req)}</td><td style={tc}>{v.status==="draft"?"-":fmt(allowed)}</td><td style={tc}>{approved?fmt(spent):"-"}</td>{editing&&<td style={tc}/>}</tr></tfoot>
+          <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc} colSpan={carry?10:9}>Total</td><td style={tc}>{fmt(req)}</td><td style={tc}>{v.status==="draft"?"-":fmt(allowed)}</td><td style={tc}>{approved?fmt(spent):"-"}</td>{editing&&<td style={tc}/>}</tr></tfoot>
         </table></div>
+        {editing&&<datalist id="imp-names">{[...new Set([...(drivers||[]).map(d=>d.name),...all.flatMap(x=>x.lines.map(l=>l.name))].filter(Boolean))].sort().map(n=>(<option key={n} value={n}/>))}</datalist>}
         {cats.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>{cats.map(([c,t])=>(<span key={c} style={{fontSize:11,padding:"3px 9px",borderRadius:10,background:"#F4F4F4",color:"#525252"}}>{c}: <b>{fmt(t)}</b></span>))}</div>}
       </div>
 
@@ -4959,7 +4966,7 @@ function FleetProAppInner(){
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
-        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} vouchers={imprest} setVouchers={setImprest} chain={imprestChain} vehicles={vehicles} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady}/>:<Navigate to="/" replace/>}/>
+        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} vouchers={imprest} setVouchers={setImprest} chain={imprestChain} vehicles={vehicles} drivers={drivers} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady}/>:<Navigate to="/" replace/>}/>
         <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady} gasPurchases={gasPurchases} setGasPurchases={setGasPurchases} supplyReady={gasSupplyReady} gasCounts={gasCounts} setGasCounts={setGasCounts} countsReady={gasCountsReady}/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks} imprestChain={imprestChain} setImprestChain={setImprestChain} imprestReady={imprestReady}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
