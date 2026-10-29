@@ -32,6 +32,7 @@ import json
 import os
 import sys
 import datetime
+import itertools
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -98,6 +99,69 @@ def connect():
     return Supabase(url, key)
 
 
+def tank_key_fn(gens):
+    """ONE TANK PER STORE FOR ITS GENERATORS -- the same rule as App.jsx
+    tankKeyFn (2026-10-29): all the generators at a store draw from one tank
+    (Ikare CR switches between two; Akure 1 runs two and logs both daily), an
+    oven has its own, and a transfer saved without a source came out of the
+    store's generator tank (at an oven-only store, its oven)."""
+    by_id = {g["id"]: g for g in gens}
+
+    def tank_of(gid, store):
+        g = by_id.get(gid) if gid else None
+        if g:
+            return gid if g.get("asset_type") == "oven" else "gens:" + (store or g.get("loc") or "")
+        if gid:
+            return gid   # an asset no longer on file keeps its own tank
+        at = [x for x in gens if x.get("loc") == store]
+        return at[0]["id"] if len(at) == 1 and at[0].get("asset_type") == "oven" else "gens:" + (store or "")
+    return tank_of
+
+
+def tank_pairs(sb, gens, tank_of, tr_map):
+    """(actual litres, hours, date) day-pairs per generator, measured on its TANK.
+    The level change is the tank's from one logged day to the next; when two of
+    a store's generators ran that day the litres are shared by the hours each
+    ran. Only a day whose previous logged level is the calendar day before
+    counts: a multi-day logging gap lumps several days' consumption against one
+    day's hours (a 50 L/hr phantom)."""
+    ovens = {g["id"] for g in gens if g.get("asset_type") == "oven"}
+    rows = sb.select_all("diesel_readings",
+                         "id,generator_id,store_location,date,created_at,gen_hours_opening,gen_hours_closing,diesel_level_actual,diesel_added",
+                         order="date.asc,created_at.asc,id.asc")
+    tanks = {}
+    for r in rows:
+        if r["generator_id"] in ovens or not r.get("date"):
+            continue
+        tanks.setdefault(tank_of(r["generator_id"], r.get("store_location")), []).append(r)
+    out = {}
+    for key, arr in tanks.items():
+        prev = prev_date = None
+        for date, rs in itertools.groupby(arr, key=lambda r: r["date"]):
+            rs = list(rs)
+            cur_date = datetime.date.fromisoformat(date)
+            levels = [r["diesel_level_actual"] for r in rs if r.get("diesel_level_actual") is not None]
+            close = levels[-1] if levels else None
+            added = sum(r.get("diesel_added") or 0 for r in rs)
+            hrs = {}
+            for r in rs:
+                ho, hc = r.get("gen_hours_opening"), r.get("gen_hours_closing")
+                if ho is not None and hc is not None and hc - ho > 0:
+                    hrs[r["generator_id"]] = hrs.get(r["generator_id"], 0) + (hc - ho)
+            total_h = sum(hrs.values())
+            consecutive = prev_date is not None and (cur_date - prev_date).days == 1
+            if total_h > 0 and close is not None and prev is not None and consecutive:
+                actual = prev + added - tr_map.get((key, date), 0) - close
+                # Guards: negative actual = an unlogged refill; >100 L/hr = a
+                # data error. Both excluded entirely.
+                if actual >= 0 and actual / total_h <= 100:
+                    for gid, h in hrs.items():
+                        out.setdefault(gid, []).append((actual * h / total_h, h, cur_date))
+            if close is not None:
+                prev, prev_date = close, cur_date
+    return out
+
+
 RECENT_DAYS = 90       # learn from this many recent days...
 MIN_RECENT_PAIRS = 30  # ...or from the latest 30 day-pairs if the window has fewer
 
@@ -107,24 +171,23 @@ def compute(sb, recent_days=RECENT_DAYS):
     recent_days=None learns from the whole history.
     Returns (updates, old_baselines_by_generator_id). Used by main() and by
     monthly_baseline_refresh.py, which vets the updates before writing them."""
-    gens =sb.select_all("generators", "id,name,loc,asset_type")
+    gens = sb.select_all("generators", "id,name,loc,asset_type")
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
-    transfers = sb.select_all("diesel_transfers", "date,source_generator_id,litres")
+    tank_of = tank_key_fn(gens)
+    # Transfers out per (TANK, date) -- moved diesel is not generator consumption
+    transfers = sb.select_all("diesel_transfers", "date,store_location,source_generator_id,litres")
     tr_map = {}
     for t in transfers:
-        if t.get("source_generator_id"):
-            k = (t["source_generator_id"], t["date"])
-            tr_map[k] = tr_map.get(k, 0) + (t.get("litres") or 0)
+        k = (tank_of(t.get("source_generator_id"), t.get("store_location")), t["date"])
+        tr_map[k] = tr_map.get(k, 0) + (t.get("litres") or 0)
     print(f"Generators: {len(gens)} | transfers loaded: {len(transfers)}\n")
+    pairs_by_gen = tank_pairs(sb, gens, tank_of, tr_map)
 
     updates = []
     print(f"  {'Generator':<30} {'old L/hr':>9} {'new L/hr':>9}  pairs  ~flag%")
     for g in gens:
         if g.get("asset_type") == "oven":
             continue
-        rows = sb.select_all("diesel_readings",
-                             "date,gen_hours_opening,gen_hours_closing,diesel_level_actual,diesel_added",
-                             filters={"generator_id": f"eq.{g['id']}"}, order="date.asc")
         # POOLED AGGREGATE estimator: avg = sum(actual litres) / sum(hours) over
         # consecutive-day pairs — NOT the mean of per-day rates. Stores whose
         # dipstick only resolves ~35-40 L steps (e.g. Ado 1) read "0 consumed"
@@ -140,29 +203,7 @@ def compute(sb, recent_days=RECENT_DAYS):
         # logged with zero level change — physically impossible) pool huge
         # hours against no litres and collapse to ~0 L/hr.
         RESOLUTION_L = 40.0
-        pairs = []   # (actual, hrs) for valid consecutive pairs
-        prev = None
-        prev_date = None
-        for r in rows:
-            ho, hc, lvl = r.get("gen_hours_opening"), r.get("gen_hours_closing"), r.get("diesel_level_actual")
-            added = r.get("diesel_added") or 0
-            tr = tr_map.get((g["id"], r["date"]), 0)
-            hrs = (hc - ho) if (ho is not None and hc is not None) else None
-            cur_date = datetime.date.fromisoformat(r["date"]) if r.get("date") else None
-            # Only trust a level-delta when the previous reading is the day
-            # before: a multi-day logging gap lumps several days' consumption
-            # against one day's hours (a 50 L/hr phantom). Skip those pairs.
-            consecutive = (prev_date is not None and cur_date is not None
-                           and (cur_date - prev_date).days == 1)
-            if hrs is not None and hrs > 0 and lvl is not None and prev is not None and consecutive:
-                actual = prev + added - tr - lvl
-                # Guards: negative actual = an unlogged refill; >100 L/hr = a
-                # data error. Both excluded entirely.
-                if actual >= 0 and actual / hrs <= 100:
-                    pairs.append((actual, hrs, cur_date))
-            if lvl is not None:
-                prev = lvl
-                prev_date = cur_date
+        pairs = list(pairs_by_gen.get(g["id"], []))   # (actual, hrs, date), see tank_pairs
         if recent_days:
             cutoff = datetime.date.today() - datetime.timedelta(days=recent_days)
             recent = [p for p in pairs if p[2] >= cutoff]

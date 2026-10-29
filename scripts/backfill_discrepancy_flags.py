@@ -28,6 +28,7 @@ Reads SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from .env / SupabaseCreds.env / e
 """
 import json
 import os
+import itertools
 import sys
 import urllib.error
 import urllib.parse
@@ -98,6 +99,25 @@ class Supabase:
                          extra_headers={"Prefer": "return=minimal"})
 
 
+def tank_key_fn(gens):
+    """ONE TANK PER STORE FOR ITS GENERATORS -- the same rule as App.jsx
+    tankKeyFn (2026-10-29): all the generators at a store draw from one tank
+    (Ikare CR switches between two; Akure 1 runs two and logs both daily), an
+    oven has its own, and a transfer saved without a source came out of the
+    store's generator tank (at an oven-only store, its oven)."""
+    by_id = {g["id"]: g for g in gens}
+
+    def tank_of(gid, store):
+        g = by_id.get(gid) if gid else None
+        if g:
+            return gid if g.get("asset_type") == "oven" else "gens:" + (store or g.get("loc") or "")
+        if gid:
+            return gid   # an asset no longer on file keeps its own tank
+        at = [x for x in gens if x.get("loc") == store]
+        return at[0]["id"] if len(at) == 1 and at[0].get("asset_type") == "oven" else "gens:" + (store or "")
+    return tank_of
+
+
 def connect():
     load_env_file()
     url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -113,18 +133,19 @@ def compute(sb, rates=None):
     stored values differ. `rates` ({generator_id: L/hr}) scores against
     PROPOSED baselines instead of the stored ones, so a baseline change can be
     previewed before it is written (monthly_baseline_refresh.py does this)."""
-    gens = {g["id"]: g for g in sb.select_all("generators", "id,name,loc")}
+    gen_list = sb.select_all("generators", "id,name,loc,asset_type")
+    gens = {g["id"]: g for g in gen_list}
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
     for gid, rate in (rates or {}).items():
         baselines[gid] = {**baselines.get(gid, {}), "generator_id": gid, "avg_litres_per_hour": rate}
     with_baseline = [gid for gid in gens if baselines.get(gid, {}).get("avg_litres_per_hour")]
-    # Transfers out per (generator, date) — moved diesel is not generator consumption
-    transfers = sb.select_all("diesel_transfers", "date,source_generator_id,litres")
+    tank_of = tank_key_fn(gen_list)
+    # Transfers out per (TANK, date) — moved diesel is not generator consumption
+    transfers = sb.select_all("diesel_transfers", "date,store_location,source_generator_id,litres")
     tr_map = {}
     for t in transfers:
-        if t.get("source_generator_id"):
-            k = (t["source_generator_id"], t["date"])
-            tr_map[k] = tr_map.get(k, 0) + (t.get("litres") or 0)
+        k = (tank_of(t.get("source_generator_id"), t.get("store_location")), t["date"])
+        tr_map[k] = tr_map.get(k, 0) + (t.get("litres") or 0)
     print(f"=== SETUP ===")
     print(f"  Generators: {len(gens)}, with learned baseline: {len(with_baseline)}, transfers loaded: {len(transfers)}")
 
@@ -132,54 +153,77 @@ def compute(sb, rates=None):
     updates = []  # (id, litres, flag)
     per_store = {}
 
-    for gid in with_baseline:
-        bl = baselines[gid]
-        rate = float(bl["avg_litres_per_hour"])
-        threshold = float(bl.get("threshold_pct") or DEFAULT_THRESHOLD_PCT)
-        rows = sb.select_all(
-            "diesel_readings",
-            "id,date,store_location,gen_hours_opening,gen_hours_closing,diesel_level_actual,diesel_added,discrepancy_litres,discrepancy_flag",
-            filters={"generator_id": f"eq.{gid}"},
-            order="date.asc",
-        )
+    def rate_of(gid):
+        b = baselines.get(gid, {}).get("avg_litres_per_hour")
+        return float(b) if b else None
+
+    # Walk each TANK a day at a time (a store's generators share one, see
+    # tank_key_fn). One reading that day: the app's save-time check. Two of the
+    # store's generators logged that day: judge the DAY -- the tank before it +
+    # everything received - everything moved out - both generators' expected
+    # burn -- share the gap between the readings by expected burn, and flag the
+    # day ONCE, on the generator that should have burned most (App.jsx handleSave).
+    rows = sb.select_all(
+        "diesel_readings",
+        "id,generator_id,date,created_at,store_location,gen_hours_opening,gen_hours_closing,diesel_level_actual,diesel_added,discrepancy_litres,discrepancy_flag",
+        order="date.asc,created_at.asc,id.asc",
+    )
+    tanks = {}
+    for r in rows:
+        if (gens.get(r["generator_id"]) or {}).get("asset_type") == "oven" or not r.get("date"):
+            continue   # ovens are judged per batch, not flagged here
+        tanks.setdefault(tank_of(r["generator_id"], r.get("store_location")), []).append(r)
+    for key, arr in tanks.items():
         prev_level = None
         g_eval = g_flag = 0
-        for r in rows:
-            actual = r.get("diesel_level_actual")
-            ho, hc = r.get("gen_hours_opening"), r.get("gen_hours_closing")
-            hrs = (hc - ho) if (ho is not None and hc is not None) else None
-            added = r.get("diesel_added") or 0
-            if hrs and hrs > 0 and actual is not None and prev_level is not None:
-                theoretical = hrs * rate
-                if theoretical > 0:
-                    tr = tr_map.get((gid, r["date"]), 0)
-                    expected = prev_level + added - tr - theoretical
-                    disc = actual - expected
-                    pct = abs(disc) / theoretical * 100
-                    # Min-GAP floor: only flag when the discrepancy itself is
-                    # above dipstick resolution (~25 L). Keying off the gap (not
-                    # the expected burn) means a short run with a large actual
-                    # drop is no longer suppressed while a smaller gap flags
-                    # (Ado 1 Jul 6: used 41 vs expected 22, gap 20 L, was hidden
-                    # because expected < 25 while Jul 4's gap of 9 L flagged).
-                    flag = pct > threshold and abs(disc) >= MIN_DISCREPANCY_L
-                    g_eval += 1
-                    if flag:
-                        g_flag += 1
-                    new_litres = round(disc)
+        store = arr[0].get("store_location") or "?"
+        for date, rs in itertools.groupby(arr, key=lambda r: r["date"]):
+            rs = list(rs)
+            levels = [r["diesel_level_actual"] for r in rs if r.get("diesel_level_actual") is not None]
+            close = levels[-1] if levels else None
+            parts = []   # (reading, expected burn)
+            known = True
+            for r in rs:
+                ho, hc = r.get("gen_hours_opening"), r.get("gen_hours_closing")
+                hrs = (hc - ho) if (ho is not None and hc is not None) else None
+                rate = rate_of(r["generator_id"])
+                if hrs and hrs > 0 and not rate:
+                    known = False   # ran, but no learned baseline: can't be judged
+                parts.append((r, hrs * rate if (hrs and hrs > 0 and rate) else 0.0))
+            day_theo = sum(th for _, th in parts)
+            if known and close is not None and prev_level is not None and day_theo > 0:
+                added = sum(r.get("diesel_added") or 0 for r in rs)
+                tr = tr_map.get((key, date), 0)
+                disc = close - (prev_level + added - tr - day_theo)
+                pct = abs(disc) / day_theo * 100
+                # Min-GAP floor: only flag when the discrepancy itself is
+                # above dipstick resolution (~25 L). Keying off the gap (not
+                # the expected burn) means a short run with a large actual
+                # drop is no longer suppressed while a smaller gap flags
+                # (Ado 1 Jul 6: used 41 vs expected 22, gap 20 L, was hidden
+                # because expected < 25 while Jul 4's gap of 9 L flagged).
+                day_flag = pct > DEFAULT_THRESHOLD_PCT and abs(disc) >= MIN_DISCREPANCY_L
+                lead = max(reversed(parts), key=lambda x: x[1])[0]   # ties: the last saved, as the app
+                g_eval += 1
+                if day_flag:
+                    g_flag += 1
+                for r, th in parts:
+                    new_litres = round(disc * th / day_theo) if th > 0 else None
+                    flag = day_flag and r is lead
                     old_litres = r.get("discrepancy_litres")
                     old_flag = bool(r.get("discrepancy_flag"))
                     if old_flag != flag or old_litres != new_litres:
                         updates.append((r["id"], new_litres, flag, old_litres, old_flag, r.get("store_location"), r["date"]))
-            if actual is not None:
-                prev_level = actual
+            if close is not None:
+                prev_level = close
         total_eval += g_eval
         total_flag += g_flag
-        store = gens[gid].get("loc") or "?"
         s = per_store.setdefault(store, {"eval": 0, "flag": 0})
         s["eval"] += g_eval
         s["flag"] += g_flag
-        print(f"  {gens[gid]['name']:<30} rate={rate:>6.2f} thr={threshold:.0f}%  evaluated={g_eval:>4}  flagged={g_flag:>4}")
+        names = sorted({(gens.get(r["generator_id"]) or {}).get("name") or r["generator_id"] for r in arr})
+        if g_eval:
+            print(f"  {' + '.join(names)[:48]:<48} evaluated={g_eval:>4}  flagged={g_flag:>4}")
 
     total_change = len(updates)
     print(f"\n=== SUMMARY ===")

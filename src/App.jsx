@@ -59,13 +59,31 @@ const fromDD2=(d)=>({purchase_id:d.purchaseId||null,date:d.date,store_location:d
 // count there -- added to that day's reading (same back-fill as a delivery).
 // The sending store's tank went down when it was sent (a transfer out).
 const isIncoming=(t,store)=>t.destType==="store"&&!!store&&t.destStore===store;
+// ONE TANK PER STORE FOR ITS GENERATORS (2026-10-29). All the generators at a
+// store draw from the same tank -- Ikare CR switches between its two, and
+// Akure 1 has run two since 12 Oct with staff typing the same level on both --
+// so tank figures (used, levels, the stock sheet, Diesel in Tank, gaps) follow
+// the TANK. Measured per generator, a switch measured the returning generator
+// from its own reading weeks earlier (Ikare CR 17 Aug: 1,778 L "used" for about
+// 143 L) and a store logging both generators counted every litre twice. An oven
+// keeps its own tank (filled from the generator's by a transfer). A transfer
+// saved without a source came out of the store's generator tank (at an
+// oven-only store, its oven). tankKeyFn(generators)(assetId, store) -> key.
+const tankKeyFn=(generators)=>{const m=new Map((generators||[]).map(g=>[g.id,g]));
+  return(genId,store)=>{const g=genId?m.get(genId):null;
+    if(g)return g.assetType==="oven"?g.id:"gens:"+(store||g.loc||"");
+    if(genId)return genId;   // an asset no longer on file keeps its own tank
+    const at=(generators||[]).filter(x=>x.loc===store);
+    return(at.length===1&&at[0].assetType==="oven")?at[0].id:"gens:"+(store||"");};};
 // The tanks a store actually uses: assets with a reading in the last 30 days
-// (Ikare CR and Okitipupa CR keep an idle second generator on file). Generators
-// first. Where two or more are in use (Ondo / Owo / Oye Bakery: generator +
-// oven), the receiving store says which tank a transfer went into on Accept.
+// (Okitipupa CR keeps an idle second generator on file), and only ONE generator
+// per store -- they share the tank. Generators first. Where two or more tanks
+// are in use (Ondo / Owo / Oye Bakery: generator + oven), the receiving store
+// says which tank a transfer went into on Accept.
 const activeTanks=(store,generators,readings)=>{const all=(generators||[]).filter(g=>g.loc===store);const cut=ngDate(Date.now()-30*864e5);
   const used=new Set((readings||[]).filter(r=>r.storeLoc===store&&r.date>=cut).map(r=>r.generatorId));const act=all.filter(g=>used.has(g.id));
-  return(act.length?act:all).slice().sort((a,b)=>(a.assetType==="oven")-(b.assetType==="oven"));};
+  const list=(act.length?act:all).slice().sort((a,b)=>(a.assetType==="oven")-(b.assetType==="oven"));
+  return list.filter((g,i)=>g.assetType==="oven"||list.findIndex(x=>x.assetType!=="oven")===i);};
 const defaultTankOf=(store,generators)=>((generators||[]).find(g=>g.loc===store&&g.assetType!=="oven")||(generators||[]).find(g=>g.loc===store)||{}).id||null;
 // the tank an incoming store transfer is counted on: the one the receiver chose, else the store's main tank
 const transferTankOf=(t,generators)=>(t.destId&&(generators||[]).some(g=>g.id===t.destId&&g.loc===t.destStore))?t.destId:defaultTankOf(t.destStore,generators);
@@ -104,9 +122,9 @@ async function shiftReadingAdded({storeLoc,date,delta,targetGenId},dieselReading
     const rs=(dieselReadings||[]).filter(r=>r.storeLoc===storeLoc&&r.date===date);
     if(!rs.length)return null;
     const isOven=r=>((generators||[]).find(g=>g.id===r.generatorId)?.assetType)==="oven";
-    // a store transfer goes on the reading of the tank it went into (none that day: nothing to back-fill);
-    // an admin delivery goes on the generator's
-    const target=targetGenId?rs.find(r=>r.generatorId===targetGenId):(rs.find(r=>!isOven(r))||rs[0]);
+    // a store transfer goes on the reading of the tank it went into -- for the generator tank, any of the
+    // store's generators (one tank); none that day: nothing to back-fill. An admin delivery goes on the generator's
+    const target=targetGenId?(rs.find(r=>r.generatorId===targetGenId)||(isOven({generatorId:targetGenId})?null:rs.find(r=>!isOven(r)))):(rs.find(r=>!isOven(r))||rs[0]);
     if(!target)return null;
     const oldAdded=target.dieselAdded||0;const newAdded=Math.max(0,oldAdded+delta);const d=newAdded-oldAdded;
     if(!d)return null;
@@ -216,33 +234,51 @@ const suggestDecimal=(open,close,maxHours)=>{for(const d of [10,100,1000]){const
 // transfer logged on a day the store took no reading is not counted as "used"
 // (6 such transfers, 790 L, by Oct 2026); those before a tank's first reading
 // are skipped.
+// Tanks, not generators (tankKeyFn): a store's generators are chained as one
+// tank in the order their readings were saved, and when two were logged on one
+// day that day's drop is shared between them by their expected burn (hours x
+// usual rate), so each one's L/hr stays meaningful and Used - Expected = the
+// gap. openEst = the tank level the reading measured from; tfL = the transfers
+// counted on it (signed: out is negative); tank = its tank key.
 // An oven's diesel is spread over the bread batches AND the pans it fired; a pan
 // fired counts like a batch (Makinde, 2026-10-14), so its rate is litres per
 // (batches + pans). Readings from before pans were recorded have only batches.
 const ovenUnits=r=>(Number(r.batchesProduced)||0)+(Number(r.pansFired)||0);
-const withTankUsed=(readings,transfers)=>{
+const withTankUsed=(readings,transfers,generators,baselines)=>{
+  const K=tankKeyFn(generators);
+  const gm=new Map((generators||[]).map(g=>[g.id,g]));const bl={};(baselines||[]).forEach(b=>{bl[b.generator_id]=Number(b.avg_litres_per_hour)||null;});
   const ev={};
   (transfers||[]).forEach(t=>{const L=t.litres||0;
-    if(t.sourceGenId)(ev[t.sourceGenId]=ev[t.sourceGenId]||[]).push({date:t.date,d:-L});
-    if(t.destType==="oven"&&t.destId)(ev[t.destId]=ev[t.destId]||[]).push({date:t.date,d:L});});
+    if(t.sourceGenId||t.storeLoc){const k=K(t.sourceGenId,t.storeLoc);(ev[k]=ev[k]||[]).push({date:t.date,d:-L});}
+    if(t.destType==="oven"&&t.destId){const k=K(t.destId,t.storeLoc);(ev[k]=ev[k]||[]).push({date:t.date,d:L});}});
   Object.values(ev).forEach(a=>a.sort((x,y)=>(x.date||"").localeCompare(y.date||"")));
-  const by={};(readings||[]).forEach(r=>{(by[r.generatorId]=by[r.generatorId]||[]).push(r);});
+  const by={};(readings||[]).forEach(r=>{const k=K(r.generatorId,r.storeLoc);(by[k]=by[k]||[]).push(r);});
   const res=new Map();
-  Object.values(by).forEach(arr=>{
-    arr.sort((a,b)=>(a.date||"").localeCompare(b.date||"")||String(a.id).localeCompare(String(b.id)));
-    let est=null,prevDate=null;const evs=ev[arr[0].generatorId]||[];let i=0;
+  Object.entries(by).forEach(([k,arr])=>{
+    arr.sort((a,b)=>(a.date||"").localeCompare(b.date||"")||String(a.createdAt||"").localeCompare(String(b.createdAt||""))||String(a.id).localeCompare(String(b.id)));
+    let est=null,prevDate=null;const evs=ev[k]||[];let i=0;const genLast={};
     arr.forEach(r=>{let tf=0;
       while(i<evs.length&&evs[i].date<=r.date){if(prevDate!=null||evs[i].date===r.date)tf+=evs[i].d;i++;}
       const flow=(r.dieselAdded||0)+tf;
       const lvl=r.dieselLevelActual;
+      const openEst=est;
       const usedL=(est!=null&&lvl!=null)?Math.round(est+flow-lvl):(r.consumptionLitres??null);
       est=lvl!=null?lvl:(est!=null?est+flow-(usedL||0):null);
-      const days=prevDate?Math.max(1,Math.round((new Date(r.date)-new Date(prevDate))/864e5)):1;
-      prevDate=r.date;
-      const h=r.hoursRun;
-      const rateL=(usedL==null||usedL<0)?null:ovenUnits(r)>0?Math.round(usedL/ovenUnits(r)*100)/100:(h>0&&h<=48*days)?Math.round(usedL/h*100)/100:null;
-      res.set(r,{usedL,rateL,levelEst:est==null?null:Math.round(est)});});});
-  return (readings||[]).map(r=>({...r,...res.get(r)}));
+      const pg=genLast[r.generatorId];   // hours come from the generator's own meter
+      const days=pg?Math.max(1,Math.round((new Date(r.date)-new Date(pg))/864e5)):1;
+      prevDate=r.date;genLast[r.generatorId]=r.date;
+      res.set(r,{usedL,days,tank:k,tfL:tf,openEst:openEst==null?null:Math.round(openEst),levelEst:est==null?null:Math.round(est)});});
+    // two of the store's generators logged on one day: share the day's drop by expected burn
+    if(k.startsWith("gens:")){const day={};arr.forEach(r=>{(day[r.date]=day[r.date]||[]).push(r);});
+      Object.values(day).forEach(rs=>{if(rs.length<2)return;const o=rs.map(r=>res.get(r));if(o.some(x=>x.usedL==null))return;
+        const w=rs.map((r,j)=>{const g=gm.get(r.generatorId);return(r.hoursRun>0&&r.hoursRun<=48*o[j].days)?r.hoursRun*(bl[r.generatorId]||(g&&g.tank?g.tank/10:15)):0;});
+        const W=w.reduce((a,x)=>a+x,0);if(!(W>0))return;
+        const tot=o.reduce((a,x)=>a+x.usedL,0);let left=tot;
+        o.forEach((x,j)=>{const u=j===o.length-1?left:Math.round(tot*w[j]/W);left-=u;x.usedL=u;});});}
+  });
+  return (readings||[]).map(r=>{const x=res.get(r);const h=r.hoursRun;const u=x.usedL;
+    const rateL=(u==null||u<0)?null:ovenUnits(r)>0?Math.round(u/ovenUnits(r)*100)/100:(h>0&&h<=48*x.days)?Math.round(u/h*100)/100:null;
+    return{...r,usedL:u,rateL,levelEst:x.levelEst,openEst:x.openEst,tfL:x.tfL,tank:x.tank};});
 };
 // Grid (NEPA) power, from the power on/off log (power_periods). Times and
 // days are NIGERIAN (WAT = UTC+1, no daylight saving) for every viewer: the
@@ -416,27 +452,30 @@ const purchaseStock=({purchases,deliveries,losses,ledger})=>{
 // A tank with no reading that day is carried at its last level.
 const storeStockDay=({readings,transfers,distributions,generators,baselines,stores,date})=>{
   const bl={};(baselines||[]).forEach(b=>{bl[b.generator_id]=Number(b.avg_litres_per_hour)||null;});
-  const byA={};(readings||[]).forEach(r=>{(byA[r.generatorId]=byA[r.generatorId]||[]).push(r);});
-  Object.values(byA).forEach(a=>a.sort((x,y)=>x.date.localeCompare(y.date)));
+  const K=tankKeyFn(generators);   // a store's generators share one tank
+  const byT={};(readings||[]).forEach(r=>{const k=r.tank||K(r.generatorId,r.storeLoc);(byT[k]=byT[k]||[]).push(r);});
+  Object.values(byT).forEach(a=>a.sort((x,y)=>x.date.localeCompare(y.date)||String(x.createdAt||"").localeCompare(String(y.createdAt||""))));
   return(stores||[]).map(st=>{
-    const assets=(generators||[]).filter(g=>g.loc===st);
-    const row={store:st,assets:assets.length,logged:0,opening:0,received:0,movedOut:0,used:0,closing:0,expected:0,sent:0,since:null,noOpening:false,known:false,estimated:false};
-    assets.forEach(g=>{
-      const arr=byA[g.id]||[];
-      const r=arr.find(x=>x.date===date);
+    const tanks=[...new Set((generators||[]).filter(g=>g.loc===st).map(g=>K(g.id,st)))];
+    const row={store:st,assets:tanks.length,logged:0,opening:0,received:0,movedOut:0,used:0,closing:0,expected:0,sent:0,since:null,noOpening:false,known:false,estimated:false};
+    tanks.forEach(k=>{
+      const arr=byT[k]||[];
+      const rs=arr.filter(x=>x.date===date);
       const prev=[...arr].reverse().find(x=>x.date<date);
       const prevLevel=prev?(prev.levelEst??prev.dieselLevelActual):null;   // typed level, or the carried estimate
-      if(r){row.logged++;
+      if(rs.length){row.logged++;const last=rs[rs.length-1];
         if(prevLevel!=null){row.known=true;row.opening+=prevLevel;if(nextDayStr(prev.date)<date&&(!row.since||prev.date<row.since))row.since=prev.date;}else row.noOpening=true;
-        if(r.dieselLevelActual==null)row.estimated=true;
-        row.received+=r.dieselAdded||0;row.used+=r.usedL||0;row.closing+=r.levelEst??r.dieselLevelActual??0;
-        const gap=prev?daysFromTo(prev.date,date).length-1:1;
-        if(g.assetType!=="oven"&&bl[g.id]&&r.hoursRun>0&&r.hoursRun<=48*gap)row.expected+=r.hoursRun*bl[g.id];
+        if(last.dieselLevelActual==null)row.estimated=true;
+        row.closing+=last.levelEst??last.dieselLevelActual??0;
+        rs.forEach(r=>{row.received+=r.dieselAdded||0;row.used+=r.usedL||0;
+          const pg=[...arr].reverse().find(x=>x.generatorId===r.generatorId&&x.date<date);   // the generator's own hour meter
+          const gap=pg?daysFromTo(pg.date,date).length-1:1;
+          if(k.startsWith("gens:")&&bl[r.generatorId]&&r.hoursRun>0&&r.hoursRun<=48*gap)row.expected+=r.hoursRun*bl[r.generatorId];});
       }else if(prevLevel!=null){row.known=true;row.opening+=prevLevel;row.closing+=prevLevel;}
     });
-    const ids=new Set(assets.map(g=>g.id));
+    const tset=new Set(tanks);
     const from=row.since?nextDayStr(row.since):date;
-    (transfers||[]).forEach(t=>{if(ids.has(t.sourceGenId)&&t.destType!=="oven"&&t.date>=from&&t.date<=date)row.movedOut+=t.litres||0;});
+    (transfers||[]).forEach(t=>{if(tset.has(K(t.sourceGenId,t.storeLoc))&&t.destType!=="oven"&&t.date>=from&&t.date<=date)row.movedOut+=t.litres||0;});
     (distributions||[]).forEach(d=>{if(d.storeLoc===st&&d.date>=from&&d.date<=date)row.sent+=d.litres||0;});
     (transfers||[]).forEach(t=>{if(isIncoming(t,st)&&t.date>=from&&t.date<=date)row.sent+=t.litres||0;});   // from another store
     row.used=Math.round(row.used);row.expected=Math.round(row.expected);
@@ -1681,6 +1720,17 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
     const prev=dieselReadings.filter(r=>r.generatorId===genId&&r.date<entryDate).sort((a,b)=>b.date.localeCompare(a.date));
     return prev[0]||null;
   };
+  // The store's generators share one tank (tankKeyFn): the level a reading is
+  // measured from is the tank's latest earlier reading, whichever generator it
+  // was logged on. The hour meter still comes from the generator's own
+  // (getPrevReading).
+  const tankK=tankKeyFn(generators);
+  const tankOfGen=(genId)=>tankK(genId,(generators.find(x=>x.id===genId)||{}).loc);
+  const rdTank=r=>r.tank||tankK(r.generatorId,r.storeLoc);
+  const getPrevTankReading=(genId)=>{const k=tankOfGen(genId);
+    return dieselReadings.filter(r=>rdTank(r)===k&&r.date<entryDate).sort((a,b)=>b.date.localeCompare(a.date)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")))[0]||null;};
+  // the tank's other readings already saved for the entry date (the store's other generator)
+  const sameDayTank=(genId)=>{const k=tankOfGen(genId);return dieselReadings.filter(r=>rdTank(r)===k&&r.date===entryDate&&r.generatorId!==genId&&r.id!==editingId);};
 
   // Get baseline for a generator
   const getBaseline=(genId)=>{
@@ -1820,13 +1870,13 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       // reading exists on the delivery's date) — it then shows up as a phantom
       // discrepancy. Two stores hit exactly this on 2026-07-06.
       if(!editingId){
-        const gPrev=getPrevReading(selGen);
+        const gPrev=getPrevTankReading(selGen);
         if(gPrev){
           const gapDays=Math.round((new Date(entryDate)-new Date(gPrev.date))/86400000);
           if(gapDays>1){
             const gapDists=(dieselDistributions||[]).filter(d=>d.storeLoc===sForAdd&&d.date>gPrev.date&&d.date<entryDate);
             const gapL=gapDists.reduce((s,d)=>s+(d.litres||0),0);
-            let m=`The last reading for this asset was ${gPrev.date} — you are skipping ${gapDays-1} day(s). This entry will lump ${gapDays} days of usage into one reading.`;
+            let m=`The last reading for this tank was ${gPrev.date} — you are skipping ${gapDays-1} day(s). This entry will lump ${gapDays} days of usage into one reading.`;
             if(gapL>0)m+=`\n\nIMPORTANT: ${gapL.toLocaleString()} L was delivered on the skipped day(s) and will NOT be counted anywhere. Log the missed day(s) first (change the Reading Date at the top) and accept the delivery there.`;
             else m+=`\n\nBetter: log the missed day(s) first using the Reading Date picker.`;
             if(!confirm(m+`\n\nSave this reading anyway?`))return;
@@ -1885,8 +1935,14 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       // oven-only stores (no generator asset).
       const storeForAdd=g?.loc||userStore||"";
       const storeHasGenAsset=(generators||[]).some(x=>x.loc===storeForAdd&&x.assetType!=="oven");
-      const added=((g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0))
-        +(dieselTransfers||[]).filter(t=>isIncoming(t,storeForAdd)&&t.date===entryDate&&t.confirmed&&transferTankOf(t,generators)===selGen).reduce((s,t)=>s+(t.litres||0),0);   // accepted diesel from another store, on the tank it went into
+      const myTank=tankOfGen(selGen);
+      const addedDay=((g?.assetType==="oven"&&storeHasGenAsset)?0:(dieselDistributions||[]).filter(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&d.confirmed).reduce((s,d)=>s+(d.litres||0),0))
+        +(dieselTransfers||[]).filter(t=>isIncoming(t,storeForAdd)&&t.date===entryDate&&t.confirmed&&tankK(transferTankOf(t,generators),storeForAdd)===myTank).reduce((s,t)=>s+(t.litres||0),0);   // accepted diesel from another store, on the tank it went into
+      // A delivery counts ONCE per tank: when the store's other generator was
+      // already logged today, what its reading counted is not counted again
+      // (Ikare CR 16 Jul 2026: one 2,000 L delivery landed on both generators).
+      const dayRows=sameDayTank(selGen);
+      const added=Math.max(0,addedDay-dayRows.reduce((s,r)=>s+(r.dieselAdded||0),0));
       const isOven=g?.assetType==="oven";
       // Hours of grid power: from the on/off log when the store used it that day.
       const pwSave=powerReady?powerOnDay(powerPeriods,g?.loc||userStore||"",entryDate):{count:0};
@@ -1897,24 +1953,23 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       const fallbackRate=g?.tank?g.tank/10:15;
       const rate=baselineRate||fallbackRate;
       const theoretical=hrsRun?hrsRun*rate:null;
-      // Same-day transfers OUT of this tank (to vehicles/oven) are not consumption
-      // Credit transfers from THIS generator, plus any unspecified-source
-      // transfer at this store on this date (staff sometimes leave the source
-      // blank; the store has one shared tank, so it still came out of here).
-      const gStoreT=g?.loc||userStore||"";
-      const transfersOut=(dieselTransfers||[]).filter(t=>t.date===entryDate&&(t.sourceGenId===selGen||(!t.sourceGenId&&t.storeLoc===gStoreT))).reduce((s,t)=>s+(t.litres||0),0);
-      const prevRd=getPrevReading(selGen);
+      // Same-day transfers OUT of this tank (to vehicles/oven) are not consumption:
+      // from any of the store's generators, or saved with no source (it still
+      // came out of the store's tank). An oven also counts what was moved INTO it.
+      const transfersOut=(dieselTransfers||[]).filter(t=>t.date===entryDate&&tankK(t.sourceGenId,t.storeLoc)===myTank).reduce((s,t)=>s+(t.litres||0),0);
+      const tInOven=isOven?(dieselTransfers||[]).filter(t=>t.date===entryDate&&t.destType==="oven"&&t.destId===selGen).reduce((s,t)=>s+(t.litres||0),0):0;
+      const prevRd=getPrevTankReading(selGen);
       const prevLevel=prevRd?.dieselLevelActual!=null?prevRd.dieselLevelActual:null;
       // Consumption & rate:
       //  - OVEN (no hour meter): consumption = the measured tank drop
-      //    (prev level + added - transfers - current level); its rate is
+      //    (prev level + added + moved in - transfers out - current level); its rate is
       //    L/BATCH, not L/hr. Computing hours×rate here (as for a generator)
       //    left oven consumption NULL and stored a bogus 15 L/hr rate.
       //  - GENERATOR: modelled as hours × baseline rate (theoretical).
       const batchesNum=(batches!==""&&batches!=null)?parseFloat(batches):null;
       let consumptionLitres,consumptionRate;
       if(isOven){
-        consumptionLitres=(actualLevel!=null&&prevLevel!=null)?Math.max(0,Math.round(prevLevel+added-transfersOut-actualLevel)):null;
+        consumptionLitres=(actualLevel!=null&&prevLevel!=null)?Math.max(0,Math.round(prevLevel+added+tInOven-transfersOut-actualLevel)):null;
         const unitsNum=(batchesNum||0)+((pansReady&&pans!=="")?(parseFloat(pans)||0):0);
         consumptionRate=(consumptionLitres!=null&&unitsNum>0)?Math.round(consumptionLitres/unitsNum*100)/100:null;
       }else{
@@ -1923,17 +1978,32 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       }
       // Discrepancy flag — generators only (ovens track L/batch, not a
       // level-vs-hours model, so they are not flagged here).
+      // Two of the store's generators logged on one day (one tank): judge the DAY
+      // -- the tank before the day + everything received - everything moved out
+      // - both generators' expected burn -- and share the gap between the
+      // readings by expected burn; a flagged day is flagged ONCE, on the
+      // generator that should have burned most. The earlier reading's gap is
+      // rewritten after the save (otherGaps). With one reading: the usual check.
+      const rateOf=(gid)=>{const b=genBaselines?.find(x=>x.generator_id===gid)?.avg_litres_per_hour;if(b)return b;const gg=generators.find(x=>x.id===gid);return gg?.tank?gg.tank/10:15;};
+      const dayTheo=(theoretical||0)+dayRows.reduce((s,r)=>s+(r.hoursRun>0?r.hoursRun*rateOf(r.generatorId):0),0);
+      const otherGaps=[];
       let discrepancy=null;let discFlag=false;
-      if(!isOven&&actualLevel!=null&&theoretical!=null&&prevLevel!=null){
-        const expectedLevel=prevLevel+added-transfersOut-theoretical;
-        discrepancy=actualLevel-expectedLevel;
-        const pctDiff=theoretical>0?Math.abs(discrepancy)/theoretical*100:0;
+      if(!isOven&&actualLevel!=null&&prevLevel!=null&&(dayRows.length?dayTheo>0:theoretical!=null)){
+        const expectedLevel=prevLevel+addedDay-transfersOut-dayTheo;   // one reading: addedDay = added, dayTheo = theoretical
+        const dayGap=actualLevel-expectedLevel;
+        const pctDiff=dayTheo>0?Math.abs(dayGap)/dayTheo*100:0;
         // Min-GAP floor (must match backfill_discrepancy_flags.py): only flag
         // when the discrepancy itself exceeds ~25 L — below dipstick resolution
         // a gap is measurement noise. Keying the floor off the gap (not the
         // expected burn) fixes the case where a short run with a LARGE actual
         // drop was wrongly suppressed while a smaller gap flagged.
-        discFlag=pctDiff>thresholdPct&&Math.abs(discrepancy)>=25;
+        const dayFlag=pctDiff>thresholdPct&&Math.abs(dayGap)>=25;
+        if(dayRows.length){
+          const parts=[{id:null,th:theoretical||0},...dayRows.map(r=>({id:r.id,th:r.hoursRun>0?r.hoursRun*rateOf(r.generatorId):0}))];
+          const lead=parts.reduce((a,x)=>x.th>a.th?x:a,parts[0]);
+          parts.forEach(x=>{const d=x.th>0?Math.round(dayGap*x.th/dayTheo):null;const f=x===lead&&dayFlag;
+            if(x.id==null){discrepancy=d;discFlag=f;}else otherGaps.push({id:x.id,discrepancy_litres:d,discrepancy_flag:f});});
+        }else{discrepancy=dayGap;discFlag=dayFlag;}
       }
       // Tank-level sanity check (2026-10-01 sweep). Three typed-in level typos --
       // Akure 6 entered 20 for ~2,200 L -- each made a fake loss AND a fake gain,
@@ -1945,16 +2015,16 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       // prompt covers that). Drop: beyond the expected burn by more than the larger
       // of 150 L or twice that burn. Generators only for drops (ovens have no meter).
       if(actualLevel!=null&&prevLevel!=null){
-        const tIn=isOven?(dieselTransfers||[]).filter(t=>t.date===entryDate&&t.destType==="oven"&&t.destId===selGen).reduce((s,t)=>s+(t.litres||0),0):0;
-        const rise=actualLevel-prevLevel-added-tIn;
-        const drop=prevLevel+added-transfersOut-actualLevel;
+        const tIn=tInOven;
+        const rise=actualLevel-prevLevel-addedDay-tIn;
+        const drop=prevLevel+addedDay-transfersOut-actualLevel;
         const pendingToday=(dieselDistributions||[]).some(d=>d.storeLoc===storeForAdd&&d.date===entryDate&&!d.confirmed)||(dieselTransfers||[]).some(t=>isIncoming(t,storeForAdd)&&t.date===entryDate&&!t.confirmed);
         const fromTo=`${prevLevel.toLocaleString()} L on ${prevRd?.date||"the last reading"} to ${actualLevel.toLocaleString()} L`;
         let q=null;
         if(rise>100&&!pendingToday){
           q=`The tank level went UP by ${Math.round(rise).toLocaleString()} L (from ${fromTo}), but no delivery has been accepted${isOven?" and no transfer into this oven is logged":""} for ${entryDate}.\n\n- If diesel arrived, accept the delivery${isOven?" or log the transfer":""} first, then save.\n- If the level is a typo, press Cancel and correct it.\n\nPress OK only if ${actualLevel.toLocaleString()} L is right.`;
-        }else if(!isOven&&theoretical!=null&&drop>theoretical+Math.max(150,2*theoretical)){
-          q=`The tank level went DOWN by ${Math.round(drop).toLocaleString()} L (from ${fromTo}), but the generator only ran long enough to burn about ${Math.round(theoretical).toLocaleString()} L${transfersOut>0?` (and ${Math.round(transfersOut).toLocaleString()} L was transferred out)`:""}.\n\n- If the level is a typo, press Cancel and correct it.\n- If it is right, press OK. The reading will be flagged for review.\n\nIs ${actualLevel.toLocaleString()} L correct?`;
+        }else if(!isOven&&(theoretical!=null||dayTheo>0)&&drop>dayTheo+Math.max(150,2*dayTheo)){
+          q=`The tank level went DOWN by ${Math.round(drop).toLocaleString()} L (from ${fromTo}), but the generator only ran long enough to burn about ${Math.round(dayTheo).toLocaleString()} L${transfersOut>0?` (and ${Math.round(transfersOut).toLocaleString()} L was transferred out)`:""}.\n\n- If the level is a typo, press Cancel and correct it.\n- If it is right, press OK. The reading will be flagged for review.\n\nIs ${actualLevel.toLocaleString()} L correct?`;
         }
         if(q&&!confirm(q)){setSaving(false);return;}
       }
@@ -1996,6 +2066,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
         saved=await db.addDieselReading(record);
         if(saved){setDieselReadings(prev=>[toDR(saved),...prev]);}
       }
+      // the store's other generator logged today: its share of the day's gap
+      if(saved)for(const u of otherGaps){try{const{id,...body}=u;const row=await db.updateDieselReading(id,body);if(row)setDieselReadings(prev=>prev.map(r=>r.id===id?toDR(row):r));}catch(e){console.error("Same-day gap update:",e);}}
       // Update generator hours (only when entering today's reading, to avoid backwards-overwriting)
       if(hClose&&!isBackdated){
         await db.updateGenerator(selGen,{hrs:hClose});
@@ -2011,8 +2083,8 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
       // Managers only: a running mean of per-day rates drifts the pooled baseline
       // that recalc_baselines.py maintains, and since 20261005 store staff cannot
       // write baselines at all (a raised baseline would hide losses).
-      if(isAdmin&&hrsRun&&hrsRun>0&&actualLevel!=null){
-        const prev=getPrevReading(selGen);
+      if(isAdmin&&hrsRun&&hrsRun>0&&actualLevel!=null&&!dayRows.length){
+        const prev=getPrevTankReading(selGen);
         if(prev?.dieselLevelActual!=null){
           const actualConsumption=prev.dieselLevelActual+added-transfersOut-actualLevel;
           if(actualConsumption>0){
@@ -2100,7 +2172,10 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
   const dayIncoming=storeTransfersReady?(dieselTransfers||[]).filter(t=>isIncoming(t,storeForEntry)&&t.date===entryDate):[];
   const pendingIncoming=dayIncoming.filter(t=>!t.confirmed);
   const tanksHere=activeTanks(storeForEntry,generators,dieselReadings);
-  const autoAdded=(distsCountHere?dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0):0)+dayIncoming.filter(t=>t.confirmed&&selectedGen&&transferTankOf(t,generators)===selectedGen.id).reduce((s,t)=>s+(t.litres||0),0);
+  // already counted on the store's other generator's reading today (one tank)
+  const sameDayOther=selGen?sameDayTank(selGen):[];
+  const onOtherGen=sameDayOther.reduce((s,r)=>s+(r.dieselAdded||0),0);
+  const autoAdded=Math.max(0,(distsCountHere?dayDists.filter(d=>d.confirmed).reduce((s,d)=>s+(d.litres||0),0):0)+dayIncoming.filter(t=>t.confirmed&&selectedGen&&tankK(transferTankOf(t,generators),storeForEntry)===tankOfGen(selectedGen.id)).reduce((s,t)=>s+(t.litres||0),0)-onOtherGen);
   const pendingDists=dayDists.filter(d=>!d.confirmed);
 
 
@@ -2281,6 +2356,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                 <div style={{fontSize:12,fontWeight:700}}>Diesel Received Today</div>
                 <div style={{fontSize:14,fontWeight:700,color:autoAdded>0?"#24A148":"#8D8D8D"}}>{autoAdded>0?autoAdded.toLocaleString()+" L":"0 L"}</div>
               </div>
+              {onOtherGen>0&&<div style={{padding:"8px 12px",borderTop:"1px solid #F0F2F5",fontSize:11.5,color:"#525252"}}>{onOtherGen.toLocaleString()} L is already counted on {[...new Set(sameDayOther.filter(r=>r.dieselAdded>0).map(r=>(generators.find(x=>x.id===r.generatorId)||{}).name||"the other generator"))].join(", ")}'s reading today - both generators use the same tank, so it is not counted again.</div>}
               {dayIncoming.map(t=>(<div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 12px",borderTop:"1px solid #F0F2F5"}}>
                   <div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:"#FF832B"}}>{t.litres.toLocaleString()} L</div><div style={{fontSize:10,color:"#8D8D8D"}}>From {t.storeLoc} (moved between stores){t.notes?" - "+t.notes:""}</div></div>
                   {t.confirmed?<span style={{display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:"#24A148",whiteSpace:"nowrap"}}><Check size={13}/>Accepted{tanksHere.length>1?" - into "+(((generators||[]).find(x=>x.id===transferTankOf(t,generators))||{}).name||"the main tank"):""}</span>
@@ -2397,9 +2473,10 @@ function TransferSection({user,generators,vehicles,dieselTransfers,setDieselTran
   const ovenOpts=storeGens.filter(g=>g.assetType==="oven");
   // The source tank must be set, otherwise the transfer is orphaned and never
   // subtracted from that generator's consumption (readings then falsely flag).
-  // Auto-pick when the store has one obvious tank: its single generator, or —
-  // at an oven-only store — the oven.
-  const defaultSource=sourceOpts.length===1?sourceOpts[0].id:(sourceOpts.length===0&&ovenOpts.length===1?ovenOpts[0].id:"");
+  // Auto-pick the store's generator tank -- with two generators either one, as
+  // they share the tank (tankKeyFn; Akure 1's transfers went in with no source
+  // once its second generator arrived) -- or, at an oven-only store, the oven.
+  const defaultSource=sourceOpts.length>=1?sourceOpts[0].id:(ovenOpts.length===1?ovenOpts[0].id:"");
   const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||(vehicles||[]).find(v=>v.id===id)?.name||id;
 
   const dateLocked=(()=>{
@@ -2777,7 +2854,8 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   // store's real balance (what's physically there). Ledger-style balances
   // (received − consumed, added − consumed) drift from the tank and mislead —
   // especially for locally-buying stores whose purchases aren't distributions.
-  const tankRows=(()=>{const byGen={};allReadings.forEach(r=>{if(r.dieselLevelActual!=null&&(!byGen[r.generatorId]||r.date>byGen[r.generatorId].date))byGen[r.generatorId]=r;});return Object.values(byGen);})();
+  // Per TANK: a store's generators share one, so their levels are not added up.
+  const tankRows=(()=>{const byT={};allReadings.forEach(r=>{const k=r.tank||r.generatorId;const b=byT[k];if(r.dieselLevelActual!=null&&(!b||r.date>b.date||(r.date===b.date&&String(r.createdAt||"")>String(b.createdAt||""))))byT[k]=r;});return Object.values(byT);})();
   const tankTotal=tankRows.reduce((s,r)=>s+r.dieselLevelActual,0);
   const tankAsOf=tankRows.length?tankRows.map(r=>r.date).sort().slice(-1)[0]:null;
   // Per-generator breakdown
@@ -4119,7 +4197,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   // tank level. Used to spot impossible hour-meter values (negative, or more
   // than 48 h per day of gap -- same limit as the Diesel Log save guard) so
   // they are left out of totals instead of producing "-22,120,011 hours".
-  const rdPrev=useMemo(()=>{const m={};const by={};(dieselReadings||[]).forEach(r=>{(by[r.generatorId]=by[r.generatorId]||[]).push(r);});Object.values(by).forEach(a=>{a.sort((x,y)=>x.date.localeCompare(y.date));a.forEach((r,i)=>{const pv=a[i-1];m[r.id]={gapDays:pv?Math.max(1,Math.round((new Date(r.date)-new Date(pv.date))/864e5)):1,prevLevel:pv?pv.dieselLevelActual:null};});});return m;},[dieselReadings]);
+  const rdPrev=useMemo(()=>{const m={};const by={};(dieselReadings||[]).forEach(r=>{(by[r.generatorId]=by[r.generatorId]||[]).push(r);});Object.values(by).forEach(a=>{a.sort((x,y)=>x.date.localeCompare(y.date));a.forEach((r,i)=>{const pv=a[i-1];m[r.id]={gapDays:pv?Math.max(1,Math.round((new Date(r.date)-new Date(pv.date))/864e5)):1,prevLevel:r.openEst??null};});});return m;},[dieselReadings]);
   const hoursOk=(r)=>r.hoursRun==null||(r.hoursRun>=0&&r.hoursRun<=48*((rdPrev[r.id]||{}).gapDays||1));
   const [wtStore,setWtStore]=useState(null); // Watchtower drill-down store
   const [cmpMonth,setCmpMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}); // Compliance calendar month
@@ -4236,7 +4314,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   // Diesel in Tank = latest recorded level per asset, summed. This is the
   // store's real balance — a received-minus-consumed ledger misleads for
   // locally-buying stores (their purchases aren't admin distributions).
-  const staffTankRows=(()=>{const byGen={};dieselReadings.forEach(r=>{if(r.dieselLevelActual!=null&&(!byGen[r.generatorId]||r.date>byGen[r.generatorId].date))byGen[r.generatorId]=r;});return Object.values(byGen);})();
+  const staffTankRows=(()=>{const byT={};dieselReadings.forEach(r=>{const k=r.tank||r.generatorId;const b=byT[k];if(r.dieselLevelActual!=null&&(!b||r.date>b.date||(r.date===b.date&&String(r.createdAt||"")>String(b.createdAt||""))))byT[k]=r;});return Object.values(byT);})();   // per tank (a store's generators share one)
   const staffTank=staffTankRows.reduce((s,r)=>s+r.dieselLevelActual,0);
   const staffTankAsOf=staffTankRows.length?staffTankRows.map(r=>r.date).sort().slice(-1)[0]:null;
   return(<div style={{maxWidth:1000}}>
@@ -4246,16 +4324,21 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const hours=dscRow.hoursRun||0;
       const rate=bl?.avg_litres_per_hour??null;
       const expected=(rate!=null&&hours)?Math.round(hours*rate):null;   // model = hours × rate
-      const openL=dscRow.openLevel;const added=dscRow.dieselAdded||0;const closeL=dscRow.dieselLevelActual;
-      const txOut=(dieselTransfers||[]).filter(t=>t.date===dscRow.date&&(t.sourceGenId===dscRow.generatorId||(!t.sourceGenId&&t.storeLoc===dscRow.storeLoc))).reduce((s,t)=>s+(t.litres||0),0);
+      // the store's other generator logged the same day (one tank): show the whole day
+      const sameDay=(dieselReadings||[]).filter(x=>dscRow.tank&&x.tank===dscRow.tank&&x.date===dscRow.date).sort((a,b)=>String(a.createdAt||"").localeCompare(String(b.createdAt||"")));
+      const shared=sameDay.length>1;
+      const openL=shared?sameDay[0].openEst:dscRow.openLevel;const added=shared?sameDay.reduce((s,x)=>s+(x.dieselAdded||0),0):(dscRow.dieselAdded||0);const closeL=shared?sameDay[sameDay.length-1].levelEst:dscRow.dieselLevelActual;
+      const txOut=shared?Math.max(0,-sameDay.reduce((s,x)=>s+(x.tfL||0),0)):dscRow.tfL!=null?Math.max(0,-dscRow.tfL):(dieselTransfers||[]).filter(t=>t.date===dscRow.date&&(t.sourceGenId===dscRow.generatorId||(!t.sourceGenId&&t.storeLoc===dscRow.storeLoc))).reduce((s,t)=>s+(t.litres||0),0);
       const tankDrop=(openL!=null&&closeL!=null)?openL+added-closeL:null;      // raw drop (incl. transfers)
-      const genUsed=(tankDrop!=null)?Math.max(0,tankDrop-txOut):null;          // what the generator actually burned
+      const dayUsed=shared?sameDay.reduce((s,x)=>s+(x.usedL||0),0):null;
+      const genUsed=dscRow.usedL!=null?Math.max(0,dscRow.usedL):(tankDrop!=null?Math.max(0,tankDrop-txOut):null);          // what the generator actually burned
       const disc=dscRow.discrepancyLitres;
       const pct=(expected&&expected>0&&disc!=null)?Math.round(Math.abs(disc)/expected*100):null;
       const usedLess=disc!=null&&disc>0; // gen used LESS than predicted (tank higher than expected)
       const rs={display:"flex",justifyContent:"space-between",gap:12,padding:"7px 0",borderBottom:"1px solid #F4F4F4",fontSize:13};
       return(<Modal title="Why this reading is flagged" onClose={()=>setDscRow(null)}>
         <div style={{fontSize:12,color:"#8D8D8D",marginBottom:12}}>{g?.name||dscRow.generatorId} — {dscRow.storeLoc} — {dscRow.date}</div>
+        {shared&&<div style={{fontSize:12,color:"#525252",marginBottom:12,padding:"8px 10px",background:"#F4F4F4",borderRadius:8}}>{sameDay.filter(x=>x.id!==dscRow.id).map(x=>(generators||[]).find(gg=>gg.id===x.generatorId)?.name||x.generatorId).join(", ")} was logged the same day. Both generators use the same tank, so the tank figures below are for the whole day and the diesel used is shared between them by how much each should have burned.</div>}
         <div style={{marginBottom:14}}>
           <div style={rs}><span>Generator ran</span><b>{hours.toFixed(1)} h</b></div>
           <div style={rs}><span>Store's learned rate</span><b>{rate!=null?rate.toFixed(1)+" L/hr":"—"}</b></div>
@@ -4263,7 +4346,8 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <div style={{...rs,color:"#8D8D8D"}}><span>Tank level</span><b>{openL!=null?openL.toLocaleString():"?"} → {closeL!=null?closeL.toLocaleString():"?"} L{added>0?`  (+${added.toLocaleString()} received)`:""}</b></div>
           <div style={{...rs,color:"#8D8D8D"}}><span>Tank dropped</span><b>{tankDrop!=null?tankDrop.toLocaleString()+" L":"—"}</b></div>
           {txOut>0&&<div style={{...rs,color:"#8A3FFC"}}><span>… of which transferred out</span><b>−{txOut.toLocaleString()} L</b></div>}
-          <div style={rs}><span style={{fontWeight:700}}>Used by generator{txOut>0?" (drop − transfers)":""}</span><b>{genUsed!=null?genUsed.toLocaleString()+" L":"—"}</b></div>
+          {shared&&<div style={{...rs,color:"#8D8D8D"}}><span>Used by both generators{txOut>0?" (drop − transfers)":""}</span><b>{dayUsed.toLocaleString()} L</b></div>}
+          <div style={rs}><span style={{fontWeight:700}}>{shared?"This generator's share":"Used by generator"}{!shared&&txOut>0?" (drop − transfers)":""}</span><b>{genUsed!=null?genUsed.toLocaleString()+" L":"—"}</b></div>
           <div style={{...rs,borderBottom:"none"}}><span style={{fontWeight:700}}>Gap (used − expected)</span><b style={{color:"#DA1E28"}}>{disc!=null?`${Math.abs(disc).toLocaleString()} L ${usedLess?"less":"more"} than expected`:"—"}{pct!=null?` (${pct}%)`:""}</b></div>
         </div>
         <div style={{padding:"12px 14px",borderRadius:10,background:usedLess?"#EDF5FF":"#FFF1F1",border:"1px solid "+(usedLess?"#A6C8FF":"#FFB3B3"),fontSize:12.5,lineHeight:1.55,color:"#161616"}}>
@@ -4332,21 +4416,25 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     {tab==="watchtower"&&!scopeStore&&(()=>{
       const today30=new Date(Date.now()-30*864e5).toISOString().split("T")[0];
       const genName=(id)=>(generators||[]).find(g=>g.id===id)?.name||id;
-      // Per-generator chronological walk: overnight gaps (level lost between yesterday's close and today's implied opening)
-      const byGen={};dieselReadings.forEach(r=>{(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
-      // Transfers out per (generator, date) — moved diesel is accounted for, not "lost"
-      const trMap={};(dieselTransfers||[]).forEach(t=>{if(t.sourceGenId)trMap[t.sourceGenId+"|"+t.date]=(trMap[t.sourceGenId+"|"+t.date]||0)+(t.litres||0);});
+      // Per-TANK chronological walk, a day at a time (a store's generators share one
+      // tank): overnight gaps = yesterday's closing level minus today's implied opening
+      const wtK=tankKeyFn(generators);
+      const byTank={};dieselReadings.forEach(r=>{const k=r.tank||wtK(r.generatorId,r.storeLoc);const d=byTank[k]=byTank[k]||{};(d[r.date]=d[r.date]||[]).push(r);});
+      // Transfers out per (tank, date) — moved diesel is accounted for, not "lost"
+      const trMap={};(dieselTransfers||[]).forEach(t=>{if(t.sourceGenId||t.storeLoc){const kk=wtK(t.sourceGenId,t.storeLoc)+"|"+t.date;trMap[kk]=(trMap[kk]||0)+(t.litres||0);}});
       const gapsByStore={};const gapEvents=[];
-      Object.values(byGen).forEach(arr=>{
-        arr.sort((a,b)=>a.date.localeCompare(b.date));
-        let prev=null;
-        arr.forEach(r=>{
-          if(prev&&prev.dieselLevelActual!=null&&r.dieselLevelActual!=null&&r.consumptionLitres!=null){
-            const impliedOpen=r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres+(trMap[r.generatorId+"|"+r.date]||0);
-            const gap=prev.dieselLevelActual-impliedOpen;
-            if(gap>5){const s=gapsByStore[r.storeLoc]=gapsByStore[r.storeLoc]||{count:0,litres:0};s.count++;s.litres+=gap;gapEvents.push({store:r.storeLoc,gen:r.generatorId,date:r.date,litres:gap});}
+      Object.entries(byTank).forEach(([k,days])=>{
+        let prevClose=null;
+        Object.keys(days).sort().forEach(d=>{
+          const rs=days[d].slice().sort((a,b)=>String(a.createdAt||"").localeCompare(String(b.createdAt||"")));
+          const lv=rs.filter(r=>r.dieselLevelActual!=null);const close=lv.length?lv[lv.length-1].dieselLevelActual:null;
+          const cons=rs.filter(r=>r.consumptionLitres!=null);
+          if(prevClose!=null&&close!=null&&cons.length){const r=rs[rs.length-1];
+            const impliedOpen=close-rs.reduce((s,x)=>s+(x.dieselAdded||0),0)+cons.reduce((s,x)=>s+x.consumptionLitres,0)+(trMap[k+"|"+d]||0);
+            const gap=prevClose-impliedOpen;
+            if(gap>5){const s=gapsByStore[r.storeLoc]=gapsByStore[r.storeLoc]||{count:0,litres:0};s.count++;s.litres+=gap;gapEvents.push({store:r.storeLoc,gen:r.generatorId,date:d,litres:gap});}
           }
-          if(r.dieselLevelActual!=null)prev=r;
+          if(close!=null)prevClose=close;
         });
       });
       // Per-store aggregation
@@ -4583,13 +4671,14 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       // Generator options: those at the selected branch (or all gens that have readings)
       const gensWithReadings=new Set(dieselReadings.map(r=>r.generatorId));
       const genOpts=(generators||[]).filter(g=>(!rdStore||g.loc===rdStore)&&(rdStore||gensWithReadings.has(g.id)));
-      // Opening diesel level = the prior day's closing for the same generator (full history)
-      const openMap={};const byGen={};
-      dieselReadings.forEach(r=>{(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
-      Object.values(byGen).forEach(arr=>{arr.sort((a,b)=>a.date.localeCompare(b.date));arr.forEach((r,i)=>{openMap[r.id]=i>0?arr[i-1].dieselLevelActual:(r.dieselLevelActual!=null&&r.consumptionLitres!=null?r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres:null);});});
-      // Transfers OUT per (generator, date) — moved to vehicles/oven, not burned.
-      // txMap = litres; txLabelMap = human list of destinations for the tooltip.
-      const txMap={};const txLabelMap={};(dieselTransfers||[]).forEach(t=>{const gid=t.sourceGenId||((generators||[]).find(g=>g.loc===t.storeLoc&&g.assetType!=="oven")||{}).id;if(!gid)return;const kk=gid+"|"+t.date;txMap[kk]=(txMap[kk]||0)+(t.litres||0);(txLabelMap[kk]=txLabelMap[kk]||[]).push(`${(t.litres||0).toLocaleString()} L → ${t.destLabel||t.destType||"out"}`);});
+      // Opening diesel level = the TANK's level before this reading (withTankUsed;
+      // a store's generators share one tank), else worked back from the first reading
+      const openMap={};
+      dieselReadings.forEach(r=>{openMap[r.id]=r.openEst!=null?r.openEst:(r.dieselLevelActual!=null&&r.consumptionLitres!=null?r.dieselLevelActual-(r.dieselAdded||0)+r.consumptionLitres:null);});
+      // Transfers OUT per (tank, date) — moved to vehicles/oven, not burned — shown
+      // on the tank's first reading that day. txMap = litres; txLabelMap = destinations.
+      const tkK=tankKeyFn(generators);const firstOfDay={};[...dieselReadings].sort((a,b)=>String(a.createdAt||"").localeCompare(String(b.createdAt||""))).forEach(r=>{const kk=(r.tank||r.generatorId)+"|"+r.date;if(!firstOfDay[kk])firstOfDay[kk]=r.id;});
+      const txMap={};const txLabelMap={};(dieselTransfers||[]).forEach(t=>{const kk=tkK(t.sourceGenId,t.storeLoc)+"|"+t.date;txMap[kk]=(txMap[kk]||0)+(t.litres||0);(txLabelMap[kk]=txLabelMap[kk]||[]).push(`${(t.litres||0).toLocaleString()} L → ${t.destLabel||t.destType||"out"}`);});
       const isOvenId=(id)=>((generators||[]).find(g=>g.id===id)?.assetType)==="oven";
       // USED = the diesel the GENERATOR actually burned = tank drop minus what
       // was transferred out (prior close + added - transfers - close).
@@ -4620,8 +4709,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       const pageCount=Math.max(1,Math.ceil(rows.length/rdPageSize));
       const curPage=Math.min(rdPage,pageCount-1);
       const pageRows=rows.slice(curPage*rdPageSize,(curPage+1)*rdPageSize);
-      const txOf=(r)=>txMap[r.generatorId+"|"+r.date]||0;
-      const txNote=(r)=>(txLabelMap[r.generatorId+"|"+r.date]||[]).join("; ");
+      const txKey=(r)=>(r.tank||r.generatorId)+"|"+r.date;
+      const txOf=(r)=>firstOfDay[txKey(r)]===r.id?(txMap[txKey(r)]||0):0;
+      const txNote=(r)=>firstOfDay[txKey(r)]===r.id?(txLabelMap[txKey(r)]||[]).join("; "):"";
       // Grid power beside generator hours: hours from the power on/off log
       // (else the reading's own NEPA hours), units from the store's NEPA
       // meter reading for that day (Power (NEPA) tab).
@@ -4788,7 +4878,7 @@ function FleetProAppInner(){
   const [genBaselines,setGenBaselines]=useState([]);
   const [nepaPeriodLogs,setNepaPeriodLogs]=useState([]);
   const [dieselTransfers,setDieselTransfers]=useState([]);
-  const dieselReadings=useMemo(()=>withTankUsed(dieselReadingsRaw,dieselTransfers),[dieselReadingsRaw,dieselTransfers]);
+  const dieselReadings=useMemo(()=>withTankUsed(dieselReadingsRaw,dieselTransfers,generators,genBaselines),[dieselReadingsRaw,dieselTransfers,generators,genBaselines]);
   const [dieselLocks,setDieselLocks]=useState([]);
   const [appSettings,setAppSettings]=useState({diesel_auto_lock_days:1,diesel_require_photo_backdated:true});
   const canEdit=user?.role==="Super Admin"||user?.role==="Fleet Manager";
