@@ -214,8 +214,11 @@ def compute(sb, rates=None):
                     old_flag = bool(r.get("discrepancy_flag"))
                     if old_flag != flag or old_litres != new_litres:
                         updates.append((r["id"], new_litres, flag, old_litres, old_flag, r.get("store_location"), r["date"]))
-            if close is not None:
-                prev_level = close
+            # A day with no tank level typed breaks the chain, as in the app (handleSave
+            # judges only from the previous reading's TYPED level): jumping back to an
+            # older level would drop the skipped day's deliveries, transfers and burn
+            # (Akure 1 13 Oct: -194 L, 100 L of it moved out on 12 Oct, no level that day).
+            prev_level = close
         total_eval += g_eval
         total_flag += g_flag
         s = per_store.setdefault(store, {"eval": 0, "flag": 0})
