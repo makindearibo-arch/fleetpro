@@ -1882,6 +1882,23 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
             if(!confirm(m+`\n\nSave this reading anyway?`))return;
           }
         }
+        // Per GENERATOR: the tank check above passes when the store's OTHER
+        // generator was logged, yet a generator skipped for a day still lumps
+        // its hours onto its next reading, while the tank's drop on the skipped
+        // day was booked on the other generator's reading. Akure 1 Generator 2,
+        // not logged 20 Oct 2026: its 28 h landed on 21 Oct ("used less" +258 L)
+        // and 20 Oct's 260 L drop sat on Generator 1's 0 h reading. Its meter
+        // moving since its own last reading means it MAY have run on those days.
+        const own=getPrevReading(selGen);
+        const ownGap=own?Math.round((new Date(entryDate)-new Date(own.date))/86400000):0;
+        const ranH=own?.genHoursClosing!=null?parseFloat(hoursClosing)-own.genHoursClosing:NaN;
+        if(own&&ownGap>1&&gPrev&&gPrev.date>own.date&&ranH>0){
+          const gName=(generators.find(x=>x.id===selGen)||{}).name||"This generator";
+          const oName=(generators.find(x=>x.id===gPrev.generatorId)||{}).name||"the other generator";
+          const sk=ownGap-1,days=sk>1?`the ${sk} skipped days`:"the skipped day";
+          const h=(Math.round(ranH*100)/100).toLocaleString();
+          if(!confirm(`${gName} was last logged on ${own.date} (${sk} day${sk>1?"s":""} skipped), but the tank was read since then on ${oName}'s reading. ${gName}'s hour meter has moved ${h} h since ${own.date}.\n\nIf ${gName} ran on ${days}, all ${h} h will count on ${entryDate}, while the diesel it burned was already taken off the tank on ${days} - this reading will look like it used too little, and ${sk>1?"those days":"that day"} too much.\n\nBetter: log ${gName} for ${days} first (change the Reading Date at the top). If it did not run on ${days}, save anyway.\n\nSave this reading anyway?`))return;
+        }
       }
     }
     setSaving(true);setMsg("");
