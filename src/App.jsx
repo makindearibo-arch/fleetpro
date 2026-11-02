@@ -685,6 +685,38 @@ function ImprestChainPanel({chain,setChain}){
     </div></div>);
 }
 
+// Settings -> Zoho Books (Super Admin): which Zoho Books accounts the fleet imprest journals use.
+// Saved in app_settings 'zoho_imprest'; api/imprest-zoho.js reads it (the lists come live from Zoho).
+function ZohoImprestPanel({appSettings,saveSetting}){
+  const cur=(appSettings&&appSettings.zoho_imprest)||{};
+  const [lists,setLists]=useState(null);const [err,setErr]=useState("");const [ok,setOk]=useState("");
+  const [f,setF]=useState({petty:cur.petty_cash_id||"",oper:cur.operational_id||"",loc:cur.location_id||""});
+  useEffect(()=>{let live=true;impZohoCall("GET",null,"?list=1").then(j=>{if(!live)return;setLists(j);
+    setF(x=>({petty:x.petty||(j.accounts.find(a=>/petty/i.test(a.name)&&/admin/i.test(a.name))||{}).id||"",oper:x.oper||(j.accounts.find(a=>/operational\s*imprest/i.test(a.name))||{}).id||"",loc:x.loc}));})
+    .catch(e=>{if(live)setErr(e.message);});return()=>{live=false;};},[]);
+  const accs=lists?[...lists.accounts].sort((a,b)=>a.name.localeCompare(b.name)):[];
+  const likely=accs.filter(a=>/imprest|petty/i.test(a.name));
+  const opts=<>{likely.length>0&&<optgroup label="Imprest / petty cash accounts">{likely.map(a=>(<option key={"l"+a.id} value={a.id}>{a.name}</option>))}</optgroup>}<optgroup label="All accounts">{accs.map(a=>(<option key={a.id} value={a.id}>{a.name}{a.type?" ("+a.type.replace(/_/g," ")+")":""}</option>))}</optgroup></>;
+  const name=id=>(accs.find(a=>a.id===id)||{}).name||"";
+  const save=async()=>{setOk("");if(!f.petty||!f.oper){setErr("Choose both accounts.");return;}if(f.petty===f.oper){setErr("Choose two different accounts.");return;}setErr("");
+    const loc=(lists.locations||[]).find(l=>l.id===f.loc);
+    await saveSetting("zoho_imprest",{petty_cash_id:f.petty,petty_cash_name:name(f.petty),operational_id:f.oper,operational_name:name(f.oper),location_id:loc?loc.id:null,location_name:loc?loc.name:null});
+    setOk("Saved. New journals use these accounts.");};
+  return(<div style={{maxWidth:620}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:6}}>Zoho Books - fleet imprest</h3>
+    <div style={{fontSize:12,color:"#525252",marginBottom:12}}>HQ Accounts sends the fleet imprest to Zoho Books from the Imprest page. <b>Journal 1</b>, each time cash is given: Dr Petty cash imprest admin / Cr Operational imprest. <b>Journal 2</b>, when a week is approved: Dr each line's expense account / Cr Petty cash imprest admin. Choose the Zoho accounts once here.</div>
+    <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:14}}>
+      {cur.petty_cash_name&&<div style={{fontSize:12,marginBottom:10}}>In use: <b>{cur.petty_cash_name}</b> and <b>{cur.operational_name}</b>{cur.location_name?", location "+cur.location_name:""}.</div>}
+      {!lists&&!err&&<div style={{fontSize:12,color:"#8D8D8D"}}>Loading Zoho's accounts…</div>}
+      {lists&&<>
+        <Field label="Petty cash imprest admin (Dr when cash is given, Cr when it is spent)"><select style={inp} value={f.petty} onChange={e=>setF({...f,petty:e.target.value})}><option value="">- choose -</option>{opts}</select></Field>
+        <Field label="Operational imprest (Cr when cash is given)"><select style={inp} value={f.oper} onChange={e=>setF({...f,oper:e.target.value})}><option value="">- choose -</option>{opts}</select></Field>
+        <Field label="Location (optional)"><select style={inp} value={f.loc} onChange={e=>setF({...f,loc:e.target.value})}><option value="">No location</option>{(lists.locations||[]).map(l=>(<option key={l.id} value={l.id}>{l.name}</option>))}</select></Field>
+        <button onClick={save} style={{padding:"8px 16px",borderRadius:9,border:"none",background:P,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Save</button></>}
+      {err&&<div style={{fontSize:12,color:"#DA1E28",marginTop:8}}>{err}</div>}
+      {ok&&<div style={{fontSize:12,color:"#24A148",marginTop:8}}>{ok}</div>}
+    </div></div>);
+}
+
 // Change history (Settings, Super Admin only). Reads public.audit_log, which the
 // database fills from triggers on every stock-related insert/edit/delete -- the
 // app cannot skip or alter it. Shows who, when, and before -> after.
@@ -1525,7 +1557,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
     catch(e){alert("Error: "+e.message);}
   };
   const isSA=user?.role==="Super Admin";
-  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vehicle groups","vendor types","diesel",...(user?.role==="Super Admin"?["change history",...(imprestReady?["imprest approvals"]:[])]:[])]:["profile","users",...(user?.role==="Audit"?["change history"]:[])];
+  const tabs=user?.role==="Store Staff"?["profile"]:isAdmin?["profile","users","locations","vehicle groups","vendor types","diesel",...(user?.role==="Super Admin"?["change history",...(imprestReady?["imprest approvals","zoho books"]:[])]:[])]:["profile","users",...(user?.role==="Audit"?["change history"]:[])];
   return(<div style={{maxWidth:800}}><div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 20px",borderRadius:8,border:tab===t?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}</div>
     {tab==="profile"&&(<div style={{maxWidth:480}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>My Profile</h3><div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20}}><div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}><div style={{width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${P},#6929C4)`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18,fontWeight:700}}>{user.avatar}</div><div><div style={{fontSize:16,fontWeight:700}}>{user.name}</div><div style={{fontSize:12,color:"#8D8D8D"}}>{user.email}</div><Badge label={user.role}/></div></div><ProfileEditor user={user} setUser={(u)=>{setUser(u);setUsers(users.map(x=>x.id===u.id?u:x));}} /></div></div>)}
     {tab==="users"&&(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><h3 style={{fontSize:15,fontWeight:700,margin:0}}>Team Members</h3>{isSA&&<button onClick={()=>setShowAddUser(true)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={15}/>Add User</button>}</div>
@@ -1572,6 +1604,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
     </div>)}
     {tab==="change history"&&<ChangeHistoryPanel/>}
     {tab==="imprest approvals"&&<ImprestChainPanel chain={imprestChain} setChain={setImprestChain}/>}
+    {tab==="zoho books"&&<ZohoImprestPanel appSettings={appSettings} saveSetting={handleSaveSetting}/>}
     {tab==="diesel"&&isAdmin&&(<div>
       <h3 style={{fontSize:15,fontWeight:700,margin:"0 0 14px"}}>Diesel Entry Settings</h3>
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:20,marginBottom:18}}>
@@ -3127,8 +3160,8 @@ const toIV=r=>({id:r.id,kind:r.kind,weekStart:r.week_start,title:r.title||"",sta
   lines:Array.isArray(r.lines)?r.lines:[],history:Array.isArray(r.history)?r.history:[],requestedTotal:Number(r.requested_total)||0,
   approvedTotal:r.approved_total!=null?Number(r.approved_total):null,balanceBf:r.balance_bf!=null?Number(r.balance_bf):null,overspentBf:r.overspent_bf!=null?Number(r.overspent_bf):null,
   collectedTotal:r.collected_total!=null?Number(r.collected_total):null,closingBalance:r.closing_balance!=null?Number(r.closing_balance):null,
-  submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,createdAt:r.created_at,updatedAt:r.updated_at});
-const toIC=r=>({id:r.id,weekStart:r.week_start,date:r.date,amount:Number(r.amount)||0,kind:r.kind||"weekly",note:r.note||"",recordedBy:r.recorded_by||null,createdAt:r.created_at,requestId:r.request_id||null});
+  submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,createdAt:r.created_at,updatedAt:r.updated_at,zoho:r.zoho});
+const toIC=r=>({id:r.id,weekStart:r.week_start,date:r.date,amount:Number(r.amount)||0,kind:r.kind||"weekly",note:r.note||"",recordedBy:r.recorded_by||null,createdAt:r.created_at,requestId:r.request_id||null,zoho:r.zoho});
 const toIR=r=>({id:r.id,weekStart:r.week_start,kind:r.kind||"weekly",amount:Number(r.amount)||0,reason:r.reason||"",status:r.status,chain:Array.isArray(r.chain)?r.chain:[],step:Number(r.step)||0,
   allowed:r.allowed!=null?Number(r.allowed):null,cutNote:r.cut_note||"",approvedAmount:r.approved_amount!=null?Number(r.approved_amount):null,history:Array.isArray(r.history)?r.history:[],
   requestedBy:r.requested_by||null,createdAt:r.created_at,submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,approvedBy:r.approved_by||null,updatedAt:r.updated_at});
@@ -3137,6 +3170,17 @@ const toIR=r=>({id:r.id,weekStart:r.week_start,kind:r.kind||"weekly",amount:Numb
 const impReqGiven=(rq,cash)=>(cash||[]).find(c=>c.requestId===rq.id)||null;
 const impCanGive=(rq,vouchers,cash)=>rq.status==="approved"&&!impReqGiven(rq,cash)&&!(vouchers||[]).some(v=>v.kind==="weekly"&&v.status==="approved"&&v.weekStart===rq.weekStart);
 const impReqWhat=rq=>rq.kind==="extra"?"Extra money":"The week's money";
+// Zoho Books: the Super Admin / HQ Accounts send the journals through api/imprest-zoho.js, which
+// checks who is asking, reads the amounts from the database itself and keeps the journal ids
+// (Journal 1 per cash given: Dr Petty cash imprest admin / Cr Operational imprest; Journal 2 per
+// approved week: Dr each line's expense account / Cr Petty cash imprest admin).
+async function impZohoCall(method,body,query){const{data:{session}}=await supabase.auth.getSession();
+  const r=await fetch("/api/imprest-zoho"+(query||""),{method,headers:{"Content-Type":"application/json",Authorization:"Bearer "+(session?.access_token||"")},body:body?JSON.stringify(body):undefined});
+  let j=null;try{j=await r.json();}catch(e){}
+  if(!r.ok||!j||!j.ok)throw new Error((j&&j.error)||(r.status===404?"The Zoho service only runs on the live site.":"Zoho posting failed (error "+r.status+")."));
+  return j;}
+const impZohoPoster=u=>u?.role==="Super Admin"||u?.role==="HQ Accounts";
+const impZohoTxt=z=>z?(z.manual?"Entered by hand"+(z.number?" ("+z.number+")":""):"Journal "+(z.number||"")):"";
 const impReqStatus=(rq,cash)=>{const g=impReqGiven(rq,cash);return g?["Cash given "+fmtDayLabel(g.date).replace(/^\S+ /,""),"#24A148","#DEFBE6"]:rq.status==="approved"?["Approved - HQ Accounts to give it","#0043CE","#D0E2FF"]:rq.status==="returned"?["Sent back","#DA1E28","#FFF1F1"]:["With "+(rq.chain[rq.step]||"approvers"),"#B45309","#FFF8E1"];};
 
 function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,requests,setRequests,requestsReady,chain,vehicles,drivers,docReady,ready}){
@@ -3158,6 +3202,10 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
   useEffect(()=>{setNote("");setMsg("");},[openId]);
   // reload the working copy whenever the saved voucher changes (keeps any message on screen)
   useEffect(()=>{setEd(open?{lines:(open.kind==="weekly"&&(open.status==="draft"||open.status==="returned")&&office?impSyncOwed(open.lines,all,allCash,open.weekStart):open.lines).map(l=>({...l})),title:open.title}:null);},[openId,open?.updatedAt]);   // eslint-disable-line
+  // Zoho Books (Super Admin / HQ Accounts send the journals; api/imprest-zoho.js)
+  const zPoster=impZohoPoster(user);
+  const [zcfg,setZcfg]=useState(null);
+  useEffect(()=>{if(!zPoster)return;let live=true;impZohoCall("GET").then(j=>{if(live)setZcfg(j);}).catch(e=>{if(live)setZcfg({error:e.message});});return()=>{live=false;};},[zPoster]);
   const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
   const btn=(bg,fg,border)=>({padding:"8px 14px",borderRadius:9,border:border||"none",background:bg,color:fg||"#fff",fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.7:1});
   const pill=(t,c,bg)=><span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:bg,color:c,whiteSpace:"nowrap"}}>{t}</span>;
@@ -3236,7 +3284,21 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     localReq(await db.updateImprestRequest(r.id,{allowed:al<amt?al:null,cut_note:al<amt?m.cutNote.trim():null,history:hist(r,last?"Approved - final":"Approved",note.trim()),...(last?{status:"approved"}:{step:r.step+1})}));setModal(null);});
   const delReq=rq=>run(async()=>{if(!rq||!confirm("Delete this request for "+fmt(rq.amount)+"?"))return;await db.deleteImprestRequest(rq.id);setRequests(prev=>prev.filter(x=>x.id!==rq.id));setModal(null);});
   const giveCash=m=>run(async()=>{const rq=allReq.find(x=>x.id===m.id);if(!m.date)throw new Error("Enter the date the cash was given.");
-    const row=toIC(await db.addImprestCash({week_start:rq.weekStart,date:m.date,amount:rq.approvedAmount,kind:rq.kind,note:String(m.note||"").trim()||null,request_id:rq.id}));setCash(prev=>[...prev,row]);setModal(null);});
+    if(m.zoho&&!String(m.inputtedBy||"").trim())throw new Error('Fill in "Inputted by" for Zoho, or untick "Also send Journal 1 to Zoho Books".');
+    if(m.zoho&&!String(m.znotes||"").trim())throw new Error("Write the narration for Zoho.");
+    const row=toIC(await db.addImprestCash({week_start:rq.weekStart,date:m.date,amount:rq.approvedAmount,kind:rq.kind,note:String(m.note||"").trim()||null,request_id:rq.id}));setCash(prev=>[...prev,row]);setModal(null);
+    if(m.zoho){impWho(m.inputtedBy);
+      try{const j=await impZohoCall("POST",{doc:"j1",cashId:row.id,date:m.date,notes:m.znotes.trim(),inputtedBy:m.inputtedBy.trim()});setCash(prev=>prev.map(c=>c.id===row.id?toIC(j.row):c));}
+      catch(e){setMsg("The cash is recorded, but it did not reach Zoho: "+e.message+" Use 'Send to Zoho' on the cash line to try again.");}}});
+  // send a journal (or record one already entered in Zoho by hand)
+  const postZoho=m=>run(async()=>{const isJ1=m.doc==="j1";
+    if(!m.date)throw new Error("Pick the date.");if(!String(m.notes||"").trim())throw new Error("Write the narration (Zoho needs notes).");
+    if(!String(m.inputtedBy||"").trim())throw new Error('Fill in "Inputted by" - Zoho requires it.');
+    impWho(m.inputtedBy);
+    if(!confirm((m.manual?"Record that "+(isJ1?"Journal 1":"Journal 2")+" was entered in Zoho by hand":(m.update?"Update ":"Send ")+(isJ1?"Journal 1":"Journal 2")+(m.update?" in":" to")+" Zoho Books")+" ("+fmt(m.total)+", "+m.date+")?"))return;
+    const j=await impZohoCall("POST",{doc:m.doc,[isJ1?"cashId":"voucherId"]:m.id,date:m.date,notes:m.notes.trim(),inputtedBy:m.inputtedBy.trim(),accounts:m.accounts,manual:!!m.manual,reference:String(m.reference||"").trim()});
+    if(isJ1)setCash(prev=>prev.map(c=>c.id===m.id?toIC(j.row):c));else local(j.row);
+    setModal(null);});
   const printV=v=>{const w=window.open("","_blank");if(!w)return;const esc=s=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));const e=L[v.weekStart]||{opening:0,collected:0,used:0,left:0,cash:[]};
     const rows=v.lines.map((l,i)=>"<tr><td>"+(i+1)+"</td><td>"+esc(l.desc)+"</td><td>"+esc(l.name)+"</td><td>"+esc(l.date?dayTxt(l.date):"")+"</td><td>"+esc(l.category)+"</td><td>"+esc(vehName(l.vehicleId))+"</td><td class=r>"+(Number(l.qty)||0)+"</td><td class=r>"+fmt(Number(l.unitPrice)||0)+"</td><td class=r>"+fmt(impAmt(l))+"</td><td class=r>"+(v.status==="draft"?"":fmt(impAllowed(l)))+"</td></tr>").join("");
     const app=v.history.filter(h=>/^Approved|^Submitted|^Resubmitted/.test(h.action)).map(h=>"<div>"+esc(h.action)+": <b>"+esc(h.by)+"</b> ("+esc(h.role)+"), "+esc(whenTxt(h.at))+"</div>").join("");
@@ -3253,6 +3315,21 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
   const officeTodo=office?all.filter(v=>v.status==="returned"||(v.kind==="weekly"&&v.status==="draft"&&v.weekStart<thisWeek)).sort((a,b)=>a.weekStart.localeCompare(b.weekStart)):[];
   const weekList=all.filter(v=>v.weekStart===week).sort((a,b)=>(a.kind==="weekly"?0:1)-(b.kind==="weekly"?0:1)||String(a.createdAt).localeCompare(String(b.createdAt)));
   const weeklyThis=weekList.find(v=>v.kind==="weekly");
+  // Zoho: is it ready to send, what is still to send, the default narration
+  const zReady=!!(zcfg&&!zcfg.error&&zcfg.configured&&zcfg.settings?.pettyCash&&zcfg.settings?.operational);
+  const zWhy=!zcfg?"checking Zoho…":zcfg.error?zcfg.error:!zcfg.configured?"Zoho Books is not connected yet - the Zoho Books login has to be added to Vercel":"the Super Admin has to choose the Zoho accounts in Settings → Zoho Books";
+  const impWho=v=>{try{if(v!==undefined)localStorage.setItem("fp.zoho.inputtedBy",String(v).trim());return localStorage.getItem("fp.zoho.inputtedBy")||"";}catch(e){return "";}};
+  const j1Notes=c=>{const rq=allReq.find(x=>x.id===c.requestId);return("Fleet imprest: "+(c.kind==="extra"?"extra cash":"the week's cash")+" for the week of "+dayTxt(c.weekStart)+(rq&&rq.reason?" - "+rq.reason:"")+".").replace(/₦/g,"N");};
+  const j2Lines=v=>(v.lines||[]).filter(l=>l.type!=="owed"&&impAllowed(l)>0);
+  const j2Total=v=>impSum(j2Lines(v),impAllowed);
+  const j2Owed=v=>impSum((v.lines||[]).filter(l=>l.type==="owed"),impAllowed);
+  const j2Notes=v=>("Fleet imprest spent, week "+weekTxt(v.weekStart)+": "+fmt(j2Total(v))+(j2Owed(v)?" (excludes "+fmt(j2Owed(v))+" owed from last week, already in last week's journal)":"")+".").replace(/₦/g,"N");
+  const openZoho=(doc,id)=>{setMsg("");const isJ1=doc==="j1";const r=isJ1?allCash.find(x=>x.id===id):all.find(x=>x.id===id);if(!r)return;const z=r.zoho;
+    setModal({mode:"zoho",doc,id,date:z?.date||(isJ1?r.date:(r.approvedAt?ngDate(r.approvedAt):todayStr)),notes:z?.notes||(isJ1?j1Notes(r):j2Notes(r)),inputtedBy:z?.inputtedBy||impWho()||user?.name||"",
+      accounts:{},manual:!!z?.manual,reference:z?.manual?(z.number||""):"",update:!!(z&&!z.manual),total:isJ1?r.amount:j2Total(r)});};
+  const zTodoCash=zPoster?allCash.filter(c=>c.zoho===null).sort((a,b)=>a.date.localeCompare(b.date)):[];
+  const zTodoV=zPoster?all.filter(v=>v.kind==="weekly"&&v.status==="approved"&&v.zoho===null).sort((a,b)=>a.weekStart.localeCompare(b.weekStart)):[];
+  const zohoOn=allCash.some(c=>c.zoho!==undefined)||all.some(v=>v.zoho!==undefined);
   // cash requests needing this person: their approval step, or (HQ Accounts / Super Admin) cash to give
   const reqTurn=rq=>rq.status==="in_approval"&&(isSA||rq.chain[rq.step]===role);
   const reqToGive=rq=>canCash&&impCanGive(rq,all,allCash);
@@ -3262,7 +3339,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     return u.length?"\n\nNOTE: cash requested for this week has not been given yet ("+u.map(rq=>fmt(rq.approvedAmount??rq.amount)).join(", ")+"). Once the week is approved, no more cash can be posted to it.":"";};
   const reqAction=rq=>{
     if(reqTurn(rq))return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"review",id:rq.id,allowed:String(rq.allowed??rq.amount),cutNote:rq.cutNote||"",note:""});}} style={btn("#24A148")}>Review</button>);
-    if(reqToGive(rq))return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"give",id:rq.id,date:todayStr,note:""});}} style={btn("#24A148")}>Give cash</button>);
+    if(reqToGive(rq))return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"give",id:rq.id,date:todayStr,note:"",zoho:zReady,inputtedBy:impWho()||user?.name||"",znotes:j1Notes({kind:rq.kind,weekStart:rq.weekStart,requestId:rq.id})});}} style={btn("#24A148")}>Give cash</button>);
     if(office&&rq.status==="returned")return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"request",id:rq.id,week:rq.weekStart,kind:rq.kind,amount:String(rq.amount),reason:rq.reason});}} style={btn("#fff",P,"1.5px solid "+P)}>Change</button>);
     if(office&&rq.status==="in_approval")return(<button disabled={busy} onClick={()=>delReq(rq)} title="Withdraw this request" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={13} color="#DA1E28"/></button>);
     return null;};
@@ -3298,10 +3375,12 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
       </div>
       {e.owedIn>0&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,marginTop:10}}>The week before was overspent by <b>{fmt(e.owedIn)}</b>. That is owed to the fleet office and goes on this week's voucher as a line for the approvers to check.</div>}
       {wReq.length>0&&<div style={{marginTop:12}}><div style={{fontSize:12,fontWeight:700,color:"#525252",marginBottom:6}}>Cash requested</div>{reqTable(wReq,false)}</div>}
-      {e.cash.length>0&&<div style={{overflowX:"auto",marginTop:10}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:480}}>
-        <thead><tr style={{background:"#F4F4F4"}}>{["Collected on","What for","Note","Recorded by","Amount",""].map((h,i)=>(<th key={h+i} style={th}>{h}</th>))}</tr></thead>
+      {e.cash.length>0&&<div style={{overflowX:"auto",marginTop:10}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:zohoOn?620:480}}>
+        <thead><tr style={{background:"#F4F4F4"}}>{["Collected on","What for","Note","Recorded by","Amount",...(zohoOn?["Zoho"]:[]),""].map((h,i)=>(<th key={h+i} style={th}>{h}</th>))}</tr></thead>
         <tbody>{e.cash.map(c=>(<tr key={c.id}><td style={tc}>{fmtDayLabel(c.date)}</td><td style={tc}>{c.kind==="extra"?"Extra":"The week's money"}{c.requestId?<div style={{fontSize:10,color:"#8D8D8D"}}>approved request</div>:null}</td><td style={tc}>{c.note||"-"}</td><td style={tc}>{userName(c.recordedBy)||"-"}</td><td style={{...tc,fontWeight:700}}>{fmt(c.amount)}</td>
-          <td style={tc}>{canCash&&!e.fixed&&(isSA||c.requestId)&&<button onClick={()=>delCash(c)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={13} color="#DA1E28"/></button>}</td></tr>))}</tbody></table></div>}
+          {zohoOn&&<td style={tc}>{c.zoho?<span title={"Zoho "+dayTxt(c.zoho.date)+" - sent by "+c.zoho.by} style={{fontSize:11,fontWeight:700,color:"#0043CE",whiteSpace:"nowrap"}}>{impZohoTxt(c.zoho)} ✓{zPoster&&<button onClick={()=>openZoho("j1",c.id)} style={{background:"none",border:"none",color:P,fontSize:11,fontWeight:600,cursor:"pointer",padding:"0 0 0 6px"}}>{c.zoho.manual?"Change":"Update"}</button>}</span>
+            :c.zoho===null&&zPoster?<button disabled={busy} onClick={()=>openZoho("j1",c.id)} style={btn("#fff",P,"1.5px solid "+P)}>Send to Zoho</button>:<span style={{fontSize:11,color:"#8D8D8D"}}>Not in Zoho yet</span>}</td>}
+          <td style={tc}>{canCash&&!e.fixed&&!c.zoho&&(isSA||c.requestId)&&<button onClick={()=>delCash(c)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={13} color="#DA1E28"/></button>}</td></tr>))}</tbody></table></div>}
     </div>);};
 
   if(!ready)return(<div style={card}><h3 style={{fontSize:15,fontWeight:700,margin:"0 0 6px"}}>Imprest</h3><div style={{fontSize:13,color:"#525252"}}>Imprest needs a one-time database update: run <b>supabase/migrations/20261027_imprest.sql</b> in the Supabase SQL editor.</div></div>);
@@ -3350,7 +3429,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
             <td style={{...tc,minWidth:280,maxWidth:380}}>{rowEdit?<textarea rows={2} style={{...cellIn,resize:"vertical",lineHeight:1.35}} value={l.desc} placeholder="e.g. T/FARE TO & FRO AKURE 2 AND AKURE 4 FOR SOP" onChange={e=>setLine(i,{desc:e.target.value})}/>:<><div style={{fontWeight:700,whiteSpace:"normal",wordBreak:"break-word"}}>{l.desc}</div>{l.type==="owed"&&<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>added automatically - last week was overspent</div>}</>}</td>
             <td style={{...tc,minWidth:120}}>{rowEdit?<input style={cellIn} value={l.name||""} list="imp-names" placeholder="e.g. driver's name" onChange={e=>setLine(i,{name:e.target.value})}/>:(l.name||"-")}</td>
             <td style={{...tc,minWidth:editing?136:80,whiteSpace:"nowrap"}}>{rowEdit?<input type="date" style={cellIn} value={l.date||""} min={v.weekStart} max={impAddDays(v.weekStart,6)} onChange={e=>setLine(i,{date:e.target.value})}/>:(l.date?fmtDayLabel(l.date):"-")}</td>
-            <td style={{...tc,minWidth:editing?130:0}}>{rowEdit?<select style={cellIn} value={l.category} onChange={e=>setLine(i,{category:e.target.value})}>{IMP_CATS.map(c=>(<option key={c}>{c}</option>))}</select>:l.category}</td>
+            <td style={{...tc,minWidth:editing?130:0}}>{rowEdit?<select style={cellIn} value={l.category} onChange={e=>setLine(i,{category:e.target.value})}>{IMP_CATS.map(c=>(<option key={c}>{c}</option>))}</select>:<>{l.category}{l.zohoAccountName?<div title="Zoho expense account" style={{fontSize:10,color:"#8D8D8D"}}>{l.zohoAccountName}</div>:null}</>}</td>
             <td style={{...tc,width:150,maxWidth:160}}>{rowEdit?<select style={{...cellIn,maxWidth:160}} value={l.vehicleId||""} onChange={e=>setLine(i,{vehicleId:e.target.value})}><option value="">-</option>{(vehicles||[]).map(x=>(<option key={x.id} value={x.id}>{vehName(x.id)}</option>))}</select>:(vehName(l.vehicleId)||"-")}</td>
             <td style={{...tc,width:64}}>{rowEdit?<input type="number" min="0" style={cellIn} value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})}/>:(Number(l.qty)||0)}</td>
             <td style={{...tc,width:104}}>{rowEdit?<input type="number" min="0" style={cellIn} value={l.unitPrice} onChange={e=>setLine(i,{unitPrice:e.target.value})}/>:fmt(Number(l.unitPrice)||0)}</td>
@@ -3366,6 +3445,14 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
         {editing&&<datalist id="imp-names">{[...new Set([...(drivers||[]).map(d=>d.name),...all.flatMap(x=>x.lines.map(l=>l.name))].filter(Boolean))].sort().map(n=>(<option key={n} value={n}/>))}</datalist>}
         {cats.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>{cats.map(([c,t])=>(<span key={c} style={{fontSize:11,padding:"3px 9px",borderRadius:10,background:"#F4F4F4",color:"#525252"}}>{c}: <b>{fmt(t)}</b></span>))}</div>}
       </div>
+
+      {v.kind==="weekly"&&approved&&v.zoho!==undefined&&<div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div><h3 style={{fontSize:14,fontWeight:700,margin:0}}>Zoho Books - Journal 2 (spent)</h3>
+            <div style={{fontSize:12,color:v.zoho?"#0043CE":"#525252",marginTop:3}}>{v.zoho?<>{impZohoTxt(v.zoho)} ✓ - {fmt(v.zoho.amount)}, {dayTxt(v.zoho.date)}, sent by {v.zoho.by}</>:"Not in Zoho yet."}</div>
+            <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>Dr each line's expense account / Cr {zcfg?.settings?.pettyCash||"Petty cash imprest admin"}: {fmt(j2Total(v))}{j2Owed(v)?" - the "+fmt(j2Owed(v))+" owed from last week is left out (it is in last week's journal)":""}.</div></div>
+          {zPoster&&<button disabled={busy} onClick={()=>openZoho("j2",v.id)} style={v.zoho?btn("#fff",P,"1.5px solid "+P):btn(P)}>{v.zoho?(v.zoho.manual?"Change the record":"Update in Zoho"):"Send Journal 2 to Zoho"}</button>}
+        </div></div>}
 
       <div style={card}>
         <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>{approving?"Your decision":"Actions"}</h3>
@@ -3403,7 +3490,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
     <button disabled={busy} onClick={()=>saveCash(m)} style={{...btn("#24A148"),width:"100%",padding:12}}>Save</button>
   </Modal>);}
-  function modalView(){return modal.mode==="cash"?cashModal():modal.mode==="request"?requestModal():modal.mode==="review"?reviewModal():modal.mode==="give"?giveModal():null;}
+  function modalView(){return modal.mode==="cash"?cashModal():modal.mode==="request"?requestModal():modal.mode==="review"?reviewModal():modal.mode==="give"?giveModal():modal.mode==="zoho"?zohoModal():null;}
   function requestModal(){const m=modal;const order=(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ");return(<Modal title={m.id?"Change the cash request":"Request cash"} onClose={()=>setModal(null)}>
     <div style={{fontSize:12,color:"#525252",marginBottom:10}}>For the week {weekTxt(m.week)}. It goes to {order} to approve; once approved, HQ Accounts gives the cash and posts it.</div>
     <Field label="What is it for?"><select style={inp} value={m.kind} onChange={e=>setModal({...m,kind:e.target.value})}><option value="weekly">The week's money</option><option value="extra">Extra money during the week</option></select></Field>
@@ -3436,8 +3523,44 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     <div style={{fontSize:12,color:"#525252",marginBottom:10}}>Give the fleet office exactly this amount, then post it here. It is added to what they have to spend that week.</div>
     <Field label="Given on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
     <Field label="Note (optional)"><input style={inp} value={m.note} placeholder="e.g. cash to Gbola, or the transfer reference" onChange={e=>setModal({...m,note:e.target.value})}/></Field>
+    {zPoster&&zohoOn&&<div style={{border:"1px solid #D0E2FF",borderRadius:8,padding:"8px 10px",margin:"2px 0 10px",background:"#F7FBFF"}}>
+      <label style={{display:"flex",gap:8,alignItems:"center",fontSize:12,fontWeight:600,cursor:zReady?"pointer":"default"}}><input type="checkbox" checked={!!m.zoho} disabled={!zReady} onChange={e=>setModal({...m,zoho:e.target.checked})}/>Also send Journal 1 to Zoho Books</label>
+      {!zReady&&<div style={{fontSize:11,color:"#8D8D8D",marginTop:4}}>Not available now: {zWhy}. It can be sent later from the cash line.</div>}
+      {m.zoho&&zReady&&<><div style={{fontSize:11,color:"#525252",margin:"6px 0"}}>Dr {zcfg.settings.pettyCash} / Cr {zcfg.settings.operational}: {fmt(rq.approvedAmount)}{zcfg.settings.location?" - location "+zcfg.settings.location:""}</div>
+        <Field label="Inputted by (required by Zoho)"><input style={inp} value={m.inputtedBy} placeholder="Your name" onChange={e=>setModal({...m,inputtedBy:e.target.value})}/></Field>
+        <Field label="Narration"><textarea style={{...inp,minHeight:50}} value={m.znotes} onChange={e=>setModal({...m,znotes:e.target.value})}/></Field></>}
+    </div>}
     {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
-    <button disabled={busy} onClick={()=>giveCash(m)} style={{...btn("#24A148"),width:"100%",padding:12}}>Post {fmt(rq.approvedAmount)} as given</button>
+    <button disabled={busy} onClick={()=>giveCash(m)} style={{...btn("#24A148"),width:"100%",padding:12}}>Post {fmt(rq.approvedAmount)} as given{m.zoho&&zReady?" and send to Zoho":""}</button>
+  </Modal>);}
+  function zohoModal(){const m=modal;const isJ1=m.doc==="j1";const r=isJ1?allCash.find(x=>x.id===m.id):all.find(x=>x.id===m.id);if(!r)return null;
+    const z=r.zoho;const st=zcfg?.settings||{};const cfgAcc=zcfg?.accounts||[];const defs=zcfg?.categoryDefaults||{};
+    const accName=id=>(cfgAcc.find(a=>a[0]===id)||[])[1]||id||"";
+    const lineAcc=l=>m.accounts[l.id]||l.zohoAccountId||defs[l.category]||defs.Others||"";
+    const jl=isJ1?[]:j2Lines(r);const groups={};jl.forEach(l=>{const a=lineAcc(l);groups[a]=(groups[a]||0)+impAllowed(l);});
+    const total=isJ1?r.amount:j2Total(r);const pc=st.pettyCash||"Petty cash imprest admin";
+    const rows=isJ1?[["Dr",pc,total],["Cr",st.operational||"Operational imprest",total]]:[...Object.entries(groups).map(([a,t])=>["Dr",accName(a),t]),["Cr",pc,total]];
+    const canSend=m.manual||zReady;
+    return(<Modal title={isJ1?"Journal 1 - cash given":"Journal 2 - spent"} onClose={()=>setModal(null)}>
+    <div style={{fontSize:12,color:"#525252",marginBottom:8}}>{isJ1?<>{r.kind==="extra"?"Extra cash":"The week's cash"} for the week {weekTxt(r.weekStart)}, given {fmtDayLabel(r.date)}.</>:<>Week {weekTxt(r.weekStart)} - approved spending.{j2Owed(r)?" The "+fmt(j2Owed(r))+" owed from last week is left out: that spending is already in last week's Journal 2.":""}</>}</div>
+    {z&&<div style={{fontSize:12,background:"#D0E2FF",color:"#0043CE",borderRadius:8,padding:"6px 10px",marginBottom:8}}>Already recorded: {impZohoTxt(z)} - {fmt(z.amount)}, {fmtDayLabel(z.date)}, by {z.by}{z.updates?" (updated "+z.updates+"x)":""}.{z.manual?"":" Sending again updates the same journal."}</div>}
+    {!isJ1&&<div style={{overflowX:"auto",marginBottom:8}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+      <thead><tr style={{background:"#F4F4F4"}}>{["Line","Approved","Expense account"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
+      <tbody>{jl.map(l=>(<tr key={l.id}><td style={tc}>{l.desc}<div style={{fontSize:10,color:"#8D8D8D"}}>{l.category}</div></td><td style={tc}>{fmt(impAllowed(l))}</td>
+        <td style={tc}>{m.manual?accName(lineAcc(l)):<select style={{...inp,padding:"5px 8px",fontSize:12,maxWidth:260}} value={lineAcc(l)} onChange={x=>setModal({...m,accounts:{...m.accounts,[l.id]:x.target.value}})}>{[...cfgAcc].sort((a,b)=>a[1].localeCompare(b[1])).map(a=>(<option key={a[0]} value={a[0]}>{a[1]}</option>))}</select>}</td></tr>))}</tbody></table></div>}
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:10}}>
+      <thead><tr style={{background:"#F4F4F4"}}>{["","Account","Debit","Credit"].map((h,i)=>(<th key={h+i} style={th}>{h}</th>))}</tr></thead>
+      <tbody>{rows.map(([dc,a,t],i)=>(<tr key={i}><td style={tc}>{dc}</td><td style={{...tc,fontWeight:600}}>{a}</td><td style={tc}>{dc==="Dr"?fmt(t):""}</td><td style={tc}>{dc==="Cr"?fmt(t):""}</td></tr>))}</tbody></table>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+      <Field label="Date"><input type="date" style={inp} value={m.date} onChange={x=>setModal({...m,date:x.target.value})}/></Field>
+      <Field label="Inputted by (required by Zoho)"><input style={inp} value={m.inputtedBy} placeholder="Your name" onChange={x=>setModal({...m,inputtedBy:x.target.value})}/></Field>
+    </div>
+    <Field label="Narration (Zoho notes)"><textarea style={{...inp,minHeight:56}} value={m.notes} onChange={x=>setModal({...m,notes:x.target.value})}/></Field>
+    {(!z||z.manual)&&<label style={{display:"flex",gap:8,alignItems:"center",fontSize:12,margin:"0 0 6px"}}><input type="checkbox" checked={!!m.manual} disabled={!!z?.manual} onChange={x=>setModal({...m,manual:x.target.checked})}/>Already entered in Zoho by hand - just record it here</label>}
+    {m.manual&&<Field label="Zoho journal number (optional)"><input style={inp} value={m.reference} placeholder="e.g. JE-00412" onChange={x=>setModal({...m,reference:x.target.value})}/></Field>}
+    {!canSend&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",borderRadius:8,padding:"6px 10px",marginBottom:8}}>Cannot send yet: {zWhy}.</div>}
+    {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
+    <button disabled={busy||!canSend} onClick={()=>postZoho(m)} style={{...btn(P),width:"100%",padding:12,opacity:canSend?1:0.5}}>{m.manual?"Record as entered by hand":m.update?"Update in Zoho":"Send to Zoho"}</button>
   </Modal>);}
   const tabBtn=(id,label,n)=>(<button key={id} onClick={()=>setView(id)} style={{padding:"8px 16px",borderRadius:8,border:view===id?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:view===id?"#D0E2FF":"#fff",color:view===id?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>{label}{n?<span style={{marginLeft:6,background:"#DA1E28",color:"#fff",borderRadius:9,padding:"0 6px",fontSize:10}}>{n}</span>:null}</button>);
   const vRow=(v,extra)=>(<tr key={v.id} onClick={()=>setOpenId(v.id)} style={{cursor:"pointer"}}>
@@ -3450,7 +3573,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
   const exportCash=()=>downloadCsv(`fleet-imprest-cash_${from}_to_${to}.csv`,["Week","Brought forward","Collected (week's money)","Collected (extra)","Spent","Left","Voucher"],
     bookWeeks.map(w=>{const e=L[w];return[w,e.opening,impSum(e.cash.filter(c=>c.kind!=="extra"),c=>c.amount),impSum(e.cash.filter(c=>c.kind==="extra"),c=>c.amount),e.used,e.left,e.voucher?impStatus(e.voucher)[0]:"none"];}));
   return(<div>
-    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>{tabBtn("week","This week")}{tabBtn("waiting","Waiting for "+(office&&!isSA?"approval":"me"),office&&!isSA?0:waiting.length+reqMine.length)}{tabBtn("book","Cash book")}</div>
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>{tabBtn("week","This week")}{tabBtn("waiting","Waiting for "+(office&&!isSA?"approval":"me"),office&&!isSA?0:waiting.length+reqMine.length+zTodoCash.length+zTodoV.length)}{tabBtn("book","Cash book")}</div>
     {msg&&<div style={{padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
     {view==="week"&&<>
       {officeTodo.length>0&&<div style={{...card,background:"#FFF8E1",border:"1px solid #F1C21B"}}><div style={{fontSize:13,fontWeight:700,color:"#7A4F00",marginBottom:6}}>Needs the fleet office</div>
@@ -3468,6 +3591,15 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
         {weekList.length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No voucher for this week yet.{office?" Start it and add each expense as it happens.":""}</div>:vTable(weekList)}
       </div>
     </>}
+    {view==="waiting"&&zTodoCash.length+zTodoV.length>0&&<div style={card}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 6px"}}>To send to Zoho Books</h3>
+      {!zReady&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",borderRadius:8,padding:"6px 10px",marginBottom:8}}>Zoho Books is not ready yet ({zWhy}). You can still record journals that were already entered in Zoho by hand.</div>}
+      {zTodoCash.map(c=>(<div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #F4F4F4",fontSize:12}}>
+        <span><b>Journal 1</b> - {c.kind==="extra"?"extra cash":"the week's cash"} given {dayTxt(c.date)}: <b>{fmt(c.amount)}</b> <span style={{color:"#8D8D8D"}}>(week of {dayTxt(c.weekStart)})</span></span>
+        <button disabled={busy} onClick={()=>openZoho("j1",c.id)} style={btn("#fff",P,"1.5px solid "+P)}>Open</button></div>))}
+      {zTodoV.map(v=>(<div key={v.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #F4F4F4",fontSize:12}}>
+        <span><b>Journal 2</b> - spent in the week of {dayTxt(v.weekStart)}: <b>{fmt(j2Total(v))}</b></span>
+        <button disabled={busy} onClick={()=>openZoho("j2",v.id)} style={btn("#fff",P,"1.5px solid "+P)}>Open</button></div>))}
+    </div>}
     {view==="waiting"&&reqWaiting.length>0&&<div style={card}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Cash requests</h3>{reqTable(reqWaiting,true)}</div>}
     {view==="waiting"&&<div style={card}>
       {reqWaiting.length>0&&<h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Weekly vouchers</h3>}
