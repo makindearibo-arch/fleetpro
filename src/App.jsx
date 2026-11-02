@@ -3391,7 +3391,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     const receiptsOnly=office&&approved&&docReady;
     const lines=ed.lines;const setLine=(i,patch)=>setEd({...ed,lines:lines.map((l,j)=>j===i?{...l,...patch}:l)});
     const prevE=impPrev(L,v.weekStart);const prevV=prevE?.voucher||null;
-    const lastAmt=desc=>{if(!prevV)return null;const m=prevV.lines.filter(l=>l.desc===String(desc||"").trim().toUpperCase());return m.length?impSum(m,impAllowed):null;};
+    const lastAmt=l=>{if(!prevV||!l.category)return null;const m=prevV.lines.filter(x=>x.category===l.category);if(!m.length)return null;return{cat:impSum(m,impAllowed),veh:l.vehicleId?impSum(m.filter(x=>x.vehicleId===l.vehicleId),impAllowed):null};};
     const amtTot=impSum(lines,impAmt),allowedTot=impSum(lines,impAllowed);
     const pend=v.kind==="weekly"&&editing?pendingBefore(v.weekStart):[];
     const receiptsChanged=receiptsOnly&&lines.some(l=>(l.receipt||"")!==((v.lines.find(x=>x.id===l.id)||{}).receipt||""));
@@ -3424,7 +3424,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
         {approving&&<div style={{fontSize:12,color:"#525252",marginBottom:8}}>To refuse or reduce a line, lower its <b>Allowed</b> amount (0 refuses it) and give a reason. What you don't allow stays with the fleet office as cash it still holds.</div>}
         <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:editing?1180:1000}}>
           <thead><tr style={{background:"#F4F4F4"}}>{["#","Description","Name","Date","Category","Vehicle","Qty","Unit price",...(prevV?["Last week"]:[]),"Amount","Allowed","Receipt",...(editing?[""]:[])].map((h,i)=>(<th key={h+i} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
-          <tbody>{lines.map((l,i)=>{const amt=impAmt(l);const al=impAllowed(l);const cut=l.allowed!=null&&l.allowed!==""&&al<amt;const lw=prevV?lastAmt(l.desc):null;const rowEdit=editing&&l.type!=="owed";return(<tr key={l.id||i} style={{verticalAlign:"top"}}>
+          <tbody>{lines.map((l,i)=>{const amt=impAmt(l);const al=impAllowed(l);const cut=l.allowed!=null&&l.allowed!==""&&al<amt;const lw=prevV?lastAmt(l):null;const rowEdit=editing&&l.type!=="owed";return(<tr key={l.id||i} style={{verticalAlign:"top"}}>
             <td style={tc}>{i+1}</td>
             <td style={{...tc,minWidth:280,maxWidth:380}}>{rowEdit?<textarea rows={2} style={{...cellIn,resize:"vertical",lineHeight:1.35}} value={l.desc} placeholder="e.g. T/FARE TO & FRO AKURE 2 AND AKURE 4 FOR SOP" onChange={e=>setLine(i,{desc:e.target.value})}/>:<><div style={{fontWeight:700,whiteSpace:"normal",wordBreak:"break-word"}}>{l.desc}</div>{l.type==="owed"&&<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>added automatically - last week was overspent</div>}</>}</td>
             <td style={{...tc,minWidth:120}}>{rowEdit?<input style={cellIn} value={l.name||""} list="imp-names" placeholder="e.g. driver's name" onChange={e=>setLine(i,{name:e.target.value})}/>:(l.name||"-")}</td>
@@ -3433,7 +3433,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
             <td style={{...tc,width:150,maxWidth:160}}>{rowEdit?<select style={{...cellIn,maxWidth:160}} value={l.vehicleId||""} onChange={e=>setLine(i,{vehicleId:e.target.value})}><option value="">-</option>{(vehicles||[]).map(x=>(<option key={x.id} value={x.id}>{vehName(x.id)}</option>))}</select>:(vehName(l.vehicleId)||"-")}</td>
             <td style={{...tc,width:64}}>{rowEdit?<input type="number" min="0" style={cellIn} value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})}/>:(Number(l.qty)||0)}</td>
             <td style={{...tc,width:104}}>{rowEdit?<input type="number" min="0" style={cellIn} value={l.unitPrice} onChange={e=>setLine(i,{unitPrice:e.target.value})}/>:fmt(Number(l.unitPrice)||0)}</td>
-            {prevV&&<td style={{...tc,color:"#0043CE"}}>{lw!=null?fmt(lw):"-"}</td>}
+            {prevV&&<td style={{...tc,color:"#0043CE",whiteSpace:"nowrap"}} title={"Spent last week on "+l.category+(l.vehicleId?" - in total, and on "+vehName(l.vehicleId):"")}>{lw?<>{fmt(lw.cat)}<div style={{fontSize:10,color:"#8D8D8D"}}>whole category</div>{lw.veh!=null&&<div style={{marginTop:4}}>{fmt(lw.veh)}<div style={{fontSize:10,color:"#8D8D8D"}}>this vehicle</div></div>}</>:"-"}</td>}
             <td style={{...tc,fontWeight:600}}>{fmt(amt)}</td>
             <td style={{...tc,minWidth:approving?150:90}}>{approving?<><input type="number" min="0" style={cellIn} value={l.allowed!=null?l.allowed:amt} onChange={e=>setLine(i,{allowed:e.target.value})}/>{al<amt&&<input style={{...cellIn,marginTop:4}} value={l.cutNote||""} placeholder="Reason (required)" onChange={e=>setLine(i,{cutNote:e.target.value})}/>}</>
               :v.status==="draft"?"-":<>{fmt(al)}{cut&&<div style={{fontSize:10,color:"#DA1E28"}}>lowered: {l.cutNote}</div>}</>}</td>
