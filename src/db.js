@@ -374,4 +374,14 @@ export const db = {
   async getImprestCash() { return fetchAll('imprest_cash', 'date', true); },
   async addImprestCash(c) { return insertRow('imprest_cash', c); },
   async deleteImprestCash(id) { return deleteRow('imprest_cash', id); },
+  // Cash requests: the fleet office asks, Audit -> Senior Manager approve, HQ Accounts gives and posts (20261102_imprest_requests.sql)
+  async getImprestRequests() { return fetchAll('imprest_requests', 'created_at', false); },
+  async getImprestRequest(id) {
+    const { data, error } = await supabase.from('imprest_requests').select('*').eq('id', id).maybeSingle();
+    if (error) throw friendlyError(error, 'read');
+    return data;
+  },
+  async addImprestRequest(r) { return insertRow('imprest_requests', r); },
+  async updateImprestRequest(id, r) { return updateRow('imprest_requests', id, r); },
+  async deleteImprestRequest(id) { return deleteRow('imprest_requests', id); },
 };

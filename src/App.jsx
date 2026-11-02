@@ -672,7 +672,7 @@ function ImprestChainPanel({chain,setChain}){
     try{const row=await db.setImprestChain(list);setChain(row.chain);setMsg("Saved. New submissions follow this order.");}catch(e){setMsg(e.message||String(e));}setBusy(false);};
   const sb={background:"none",border:"1px solid #E0E0E0",borderRadius:6,cursor:"pointer",padding:"2px 8px",fontSize:12};
   return(<div style={{maxWidth:520}}><h3 style={{fontSize:15,fontWeight:700,marginBottom:6}}>Imprest approval order</h3>
-    <div style={{fontSize:12,color:"#525252",marginBottom:12}}>Each imprest voucher is approved by these roles, in this order. Vouchers already in approval keep the order they were submitted with. The Super Admin can act at any step.</div>
+    <div style={{fontSize:12,color:"#525252",marginBottom:12}}>Each imprest voucher and cash request is approved by these roles, in this order. HQ Accounts does not approve: it gives and posts the cash once a request is approved. Vouchers and requests already in approval keep the order they were sent with. The Super Admin can act at any step.</div>
     <div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:14}}>
       {list.map((r,i)=>(<div key={r} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid #F4F4F4"}}>
         <b style={{width:22,color:"#8D8D8D"}}>{i+1}.</b><span style={{flex:1,fontWeight:600}}>{r}</span>
@@ -688,7 +688,7 @@ function ImprestChainPanel({chain,setChain}){
 // Change history (Settings, Super Admin only). Reads public.audit_log, which the
 // database fills from triggers on every stock-related insert/edit/delete -- the
 // app cannot skip or alter it. Shows who, when, and before -> after.
-const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",gas_cylinders:"Cooking gas",gas_purchases:"Gas purchases",auth_users:"Passwords",gas_stock_counts:"Gas stock counts",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading",diesel_losses:"Accepted losses",imprest_vouchers:"Imprest",imprest_config:"Imprest approval order",imprest_cash:"Imprest cash"};
+const AUDIT_TABLES={diesel_purchases:"Purchases",diesel_distributions:"Deliveries",diesel_readings:"Readings",diesel_transfers:"Transfers",generator_baselines:"Baselines",profiles:"Users & roles",app_settings:"Settings",diesel_locks:"Date locks",power_periods:"Power on/off",gas_cylinders:"Cooking gas",gas_purchases:"Gas purchases",auth_users:"Passwords",gas_stock_counts:"Gas stock counts",diesel_stock_checks:"Main tank / tanker checks",tanker_loads:"Tanker loading",diesel_losses:"Accepted losses",imprest_vouchers:"Imprest",imprest_config:"Imprest approval order",imprest_cash:"Imprest cash",imprest_requests:"Imprest cash requests"};
 const AUDIT_FIELDS={on_at:"power on",off_at:"power off",litres:"litres",litres_received:"received",price_per_litre:"price/L",supplier:"supplier",date:"date",store_location:"store",received_confirmed:"accepted",received_date:"accepted on",diesel_level_actual:"tank level",diesel_added:"added",consumption_litres:"used",discrepancy_litres:"discrepancy",discrepancy_flag:"flagged",gen_hours_opening:"meter open",gen_hours_closing:"meter close",avg_litres_per_hour:"baseline L/hr",role:"role",name:"name",email:"email",value:"value",notes:"notes",purchase_id:"from purchase",batches_produced:"batches",dest_label:"to",from_date:"from",to_date:"to"};
 const AUDIT_HIDE=new Set(["history","purchase_id","updated_at","created_at","last_calculated","hours_run","consumption_rate","diesel_level_theoretical","ai_readings","ai_confidence","received_by","avatar"]);
 const auditVal=v=>v===null||v===undefined||v===""?"-":typeof v==="boolean"?(v?"yes":"no"):typeof v==="number"?v.toLocaleString():typeof v==="object"?JSON.stringify(v).slice(0,60):String(v).length>60?String(v).slice(0,57)+"...":String(v);
@@ -706,6 +706,7 @@ const auditWhat=(t,d)=>{if(!d)return"";const L=d.litres!=null?" - "+Number(d.lit
   if(t==="imprest_vouchers")return(d.kind==="midweek"?"Mid-week imprest "+(d.title||""):"Weekly imprest")+" week of "+(d.week_start||"")+" - "+(d.status||"")+(d.retired?" (retired)":"");
   if(t==="imprest_cash")return"Imprest cash for the week of "+(d.week_start||"")+": "+(d.amount!=null?Number(d.amount).toLocaleString():"?")+(d.kind==="extra"?" (extra)":"")+(d.note?" - "+d.note:"");
   if(t==="imprest_config")return"Imprest approval order: "+(Array.isArray(d.chain)?d.chain.join(" -> "):"");
+  if(t==="imprest_requests")return"Cash request for the week of "+(d.week_start||"")+": "+(d.amount!=null?Number(d.amount).toLocaleString():"?")+(d.kind==="extra"?" (extra)":"")+" - "+(d.status||"")+(d.approved_amount!=null?", approved "+Number(d.approved_amount).toLocaleString():"");
   if(t==="gas_stock_counts")return"Main office gas count "+(d.date||"")+": "+(d.cylinders??"?")+" x "+(d.kg_each||"?")+" kg";
   if(t==="auth_users")return(d.name||"?")+(d.email?" ("+d.email+")":"")+" - password set";
   if(t==="gas_purchases")return"Gas from "+(d.supplier||"?")+" "+(d.date||"")+" - "+(d.cylinders||"?")+" x "+(d.kg_each||"?")+" kg";
@@ -3067,15 +3068,17 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
 
 // ============================================
 // IMPREST - weekly petty cash for the fleet office
-// (20261027_imprest.sql, _imprest_owed.sql, _imprest_cash.sql)
+// (20261027_imprest.sql, _imprest_owed.sql, _imprest_cash.sql, 20261102_imprest_requests.sql)
 // ============================================
-// How a week runs (Makinde, 2026-10-27): the Super Admin or HQ Accounts records the
-// CASH the fleet office collects (the week's money, plus any extra); the fleet office
-// logs each expense as a line on the week's ONE shared voucher as it happens, and the
-// page counts down what is left. At the end of the week the voucher is submitted and
-// approved step by step (imprest_config, default Audit -> HQ Accounts -> Senior
-// Manager; the Super Admin can act at any step). Approvers may lower a line (with a
-// reason) or send it back. The FINAL approval fixes the week in the database:
+// How a week runs (Makinde, 2026-10-27 and 2026-11-02): the fleet office (Fleet Manager
+// or Super Admin) REQUESTS the week's cash, and any extra. Every request is approved step
+// by step like a voucher (imprest_config: Audit -> Senior Manager; the Super Admin can act
+// at any step), and only then does HQ Accounts give the money and post it -- exactly the
+// approved amount. HQ Accounts approves nothing. The fleet office logs each expense as a
+// line on the week's ONE shared voucher as it happens, and the page counts down what is
+// left. At the end of the week the voucher is submitted and approved the same way.
+// Approvers may lower a line or a request (with a reason) or send it back. The FINAL
+// approval of the voucher fixes the week in the database:
 //   opening (last approved week's closing, if positive) + cash collected
 //   - approved spending = closing, carried into the next week.
 // A negative closing is owed to the fleet office: the next weekly voucher carries one
@@ -3084,12 +3087,12 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
 // its voucher is approved. The database enforces all of it (fp_guard_imprest,
 // fp_guard_imprest_cash); the page mirrors the rules so people see why.
 const IMP_CATS=["Transport","Repairs & parts","Tyres & vulcanizer","Police & levies","Cards & airtime","Drivers' meal","Others"];
-const IMP_APPROVER_ROLES=["Audit","HQ Accounts","Senior Manager"];   // read-only elsewhere in FleetPro
-const IMP_STEP_ROLES=[...IMP_APPROVER_ROLES,"Super Admin"];
-const IMP_DEFAULT_CHAIN=["Audit","HQ Accounts","Senior Manager"];
+const IMP_APPROVER_ROLES=["Audit","HQ Accounts","Senior Manager"];   // the imprest roles; read-only elsewhere in FleetPro
+const IMP_STEP_ROLES=["Audit","Senior Manager","Super Admin"];   // who can be a step in the approval order -- HQ Accounts only gives the cash
+const IMP_DEFAULT_CHAIN=["Audit","Senior Manager"];
 const isImpOffice=u=>u?.role==="Super Admin"||u?.role==="Fleet Manager";
 const impCanSee=u=>isImpOffice(u)||IMP_APPROVER_ROLES.includes(u?.role);
-const impCashRole=u=>u?.role==="Super Admin"||u?.role==="HQ Accounts";   // who records cash collected
+const impCashRole=u=>u?.role==="Super Admin"||u?.role==="HQ Accounts";   // who gives and posts the cash (against an approved request)
 const impMonday=d=>{const t=new Date(d+"T12:00:00Z");return new Date(t.getTime()-((t.getUTCDay()+6)%7)*864e5).toISOString().slice(0,10);};
 const impAddDays=(d,n)=>new Date(new Date(d+"T12:00:00Z").getTime()+n*864e5).toISOString().slice(0,10);
 const impId=()=>Math.random().toString(36).slice(2,10);
@@ -3125,10 +3128,21 @@ const toIV=r=>({id:r.id,kind:r.kind,weekStart:r.week_start,title:r.title||"",sta
   approvedTotal:r.approved_total!=null?Number(r.approved_total):null,balanceBf:r.balance_bf!=null?Number(r.balance_bf):null,overspentBf:r.overspent_bf!=null?Number(r.overspent_bf):null,
   collectedTotal:r.collected_total!=null?Number(r.collected_total):null,closingBalance:r.closing_balance!=null?Number(r.closing_balance):null,
   submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,createdAt:r.created_at,updatedAt:r.updated_at});
-const toIC=r=>({id:r.id,weekStart:r.week_start,date:r.date,amount:Number(r.amount)||0,kind:r.kind||"weekly",note:r.note||"",recordedBy:r.recorded_by||null,createdAt:r.created_at});
+const toIC=r=>({id:r.id,weekStart:r.week_start,date:r.date,amount:Number(r.amount)||0,kind:r.kind||"weekly",note:r.note||"",recordedBy:r.recorded_by||null,createdAt:r.created_at,requestId:r.request_id||null});
+const toIR=r=>({id:r.id,weekStart:r.week_start,kind:r.kind||"weekly",amount:Number(r.amount)||0,reason:r.reason||"",status:r.status,chain:Array.isArray(r.chain)?r.chain:[],step:Number(r.step)||0,
+  allowed:r.allowed!=null?Number(r.allowed):null,cutNote:r.cut_note||"",approvedAmount:r.approved_amount!=null?Number(r.approved_amount):null,history:Array.isArray(r.history)?r.history:[],
+  requestedBy:r.requested_by||null,createdAt:r.created_at,submittedAt:r.submitted_at||null,approvedAt:r.approved_at||null,approvedBy:r.approved_by||null,updatedAt:r.updated_at});
+// a cash request is "given" once HQ Accounts has posted the cash against it; it can be
+// given only once approved and while its week is still open
+const impReqGiven=(rq,cash)=>(cash||[]).find(c=>c.requestId===rq.id)||null;
+const impCanGive=(rq,vouchers,cash)=>rq.status==="approved"&&!impReqGiven(rq,cash)&&!(vouchers||[]).some(v=>v.kind==="weekly"&&v.status==="approved"&&v.weekStart===rq.weekStart);
+const impReqWhat=rq=>rq.kind==="extra"?"Extra money":"The week's money";
+const impReqStatus=(rq,cash)=>{const g=impReqGiven(rq,cash);return g?["Cash given "+fmtDayLabel(g.date).replace(/^\S+ /,""),"#24A148","#DEFBE6"]:rq.status==="approved"?["Approved - HQ Accounts to give it","#0043CE","#D0E2FF"]:rq.status==="returned"?["Sent back","#DA1E28","#FFF1F1"]:["With "+(rq.chain[rq.step]||"approvers"),"#B45309","#FFF8E1"];};
 
-function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,chain,vehicles,drivers,docReady,ready}){
+function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,requests,setRequests,requestsReady,chain,vehicles,drivers,docReady,ready}){
   const role=user?.role;const office=isImpOffice(user);const isSA=role==="Super Admin";const canCash=impCashRole(user)&&cashReady;
+  // once cash requests are switched on, cash is given against an approved request; only the Super Admin can still record it without one
+  const canRecordFree=canCash&&(!requestsReady||isSA);
   const todayStr=ngDate(Date.now());const thisWeek=impMonday(todayStr);
   const [view,setView]=useState(()=>IMP_APPROVER_ROLES.includes(role)?"waiting":"week");
   const [week,setWeek]=useState(thisWeek);
@@ -3138,7 +3152,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
   const [busy,setBusy]=useState(false);const [msg,setMsg]=useState("");
   const [modal,setModal]=useState(null);
   const [from,setFrom]=useState(()=>impAddDays(thisWeek,-7*11));const [to,setTo]=useState(thisWeek);
-  const all=vouchers||[];const allCash=cash||[];
+  const all=vouchers||[];const allCash=cash||[];const allReq=requests||[];
   const L=useMemo(()=>impLedger(all,allCash),[all,allCash]);
   const open=all.find(v=>v.id===openId)||null;
   useEffect(()=>{setNote("");setMsg("");},[openId]);
@@ -3187,7 +3201,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
     const lines=ed.lines.map(l=>{const o={...l};delete o.allowed;delete o.cutNote;const a=impAllowed(l);if(a<impAmt(l)){o.allowed=a;o.cutNote=String(l.cutNote).trim();}return o;});
     const last=open.step>=open.chain.length-1;
     if(last){const tot=impSum(lines,impAllowed);const e=L[open.weekStart]||{opening:0,collected:0};
-      if(!confirm("Final approval.\n\nBrought forward: "+fmt(e.opening)+"\nCash collected: "+fmt(e.collected)+"\nApproved spending: "+fmt(tot)+"\nLeft (carried into next week): "+leftTxt(e.opening+e.collected-tot)+(e.opening+e.collected-tot<0?"\n(the amount over is owed to the fleet office - it goes on next week's voucher for approval)":"")+"\n\nAfter this the week is fixed."))return;}
+      if(!confirm("Final approval.\n\nBrought forward: "+fmt(e.opening)+"\nCash collected: "+fmt(e.collected)+"\nApproved spending: "+fmt(tot)+"\nLeft (carried into next week): "+leftTxt(e.opening+e.collected-tot)+(e.opening+e.collected-tot<0?"\n(the amount over is owed to the fleet office - it goes on next week's voucher for approval)":"")+impUnsettledTxt(open.weekStart)+"\n\nAfter this the week is fixed."))return;}
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{lines,history:hist(r,last?"Approved - final":"Approved",note.trim()),...(last?{status:"approved"}:{step:open.step+1})}));setNote("");});
   const sendBack=()=>run(async()=>{if(!note.trim())throw new Error("Say why you are sending it back (in the comment box).");
@@ -3200,7 +3214,29 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
   // cash collected (Super Admin / HQ Accounts)
   const saveCash=m=>run(async()=>{const amount=Number(m.amount);if(!(amount>0))throw new Error("Enter the amount collected.");if(!m.date)throw new Error("Enter the date it was collected.");
     const row=toIC(await db.addImprestCash({week_start:m.week,date:m.date,amount,kind:m.kind,note:m.note.trim()||null}));setCash(prev=>[...prev,row]);setModal(null);});
-  const delCash=c=>run(async()=>{if(!confirm("Remove "+fmt(c.amount)+" collected on "+dayTxt(c.date)+"?"))return;await db.deleteImprestCash(c.id);setCash(prev=>prev.filter(x=>x.id!==c.id));});
+  const delCash=c=>run(async()=>{if(!confirm("Remove "+fmt(c.amount)+" collected on "+dayTxt(c.date)+"?"+(c.requestId?"\n\nThe cash request goes back to 'approved - HQ Accounts to give it'.":"")))return;await db.deleteImprestCash(c.id);setCash(prev=>prev.filter(x=>x.id!==c.id));});
+  // cash requests: the fleet office asks; the approvers approve, lower (with a reason) or send back; HQ Accounts gives and posts it
+  const localReq=row=>{const r=toIR(row);setRequests(prev=>prev.some(x=>x.id===r.id)?prev.map(x=>x.id===r.id?r:x):[r,...prev]);return r;};
+  const freshReq=async rq=>{const r=await db.getImprestRequest(rq.id);if(!r)throw new Error("This cash request no longer exists.");
+    if(r.updated_at!==rq.updatedAt){localReq(r);throw new Error("Someone else changed this cash request a moment ago. It has been refreshed - check it and try again.");}return toIR(r);};
+  const saveReq=m=>run(async()=>{const amount=Number(m.amount);if(!(amount>0))throw new Error("Enter the amount you need.");if(!String(m.reason||"").trim())throw new Error("Say what the cash is for.");
+    if(m.id){const r=await freshReq(allReq.find(x=>x.id===m.id));localReq(await db.updateImprestRequest(m.id,{kind:m.kind,amount,reason:m.reason.trim(),status:"in_approval",history:hist(r,"Sent again")}));}
+    else localReq(await db.addImprestRequest({week_start:m.week,kind:m.kind,amount,reason:m.reason.trim(),history:[{at:new Date().toISOString(),by:user?.name||user?.email||"?",role,action:"Requested",note:""}]}));
+    setModal(null);});
+  const decideReq=(m,d)=>run(async()=>{const r=await freshReq(allReq.find(x=>x.id===m.id));const amt=r.amount;
+    if(d==="back"){if(!String(m.note||"").trim())throw new Error("Say why you are sending it back (in the comment box).");
+      localReq(await db.updateImprestRequest(r.id,{status:"returned",history:hist(r,"Sent back",m.note.trim())}));setModal(null);return;}
+    const al=m.allowed===""||m.allowed==null?amt:Number(m.allowed);
+    if(!(al>0))throw new Error("The amount approved must be more than 0 - to refuse it, send it back.");
+    if(al>amt)throw new Error("You can lower the amount but not raise it above what was asked for ("+fmt(amt)+").");
+    if(al<amt&&!String(m.cutNote||"").trim())throw new Error("Give a reason for lowering the amount.");
+    const last=r.step>=r.chain.length-1;
+    if(last&&!confirm("Final approval: "+fmt(al)+" ("+impReqWhat(r).toLowerCase()+") for the week of "+dayTxt(r.weekStart)+".\n\nHQ Accounts then gives the cash and posts it."))return;
+    const note=(al<amt?"Lowered to "+fmt(al)+": "+m.cutNote.trim()+". ":"")+String(m.note||"").trim();
+    localReq(await db.updateImprestRequest(r.id,{allowed:al<amt?al:null,cut_note:al<amt?m.cutNote.trim():null,history:hist(r,last?"Approved - final":"Approved",note.trim()),...(last?{status:"approved"}:{step:r.step+1})}));setModal(null);});
+  const delReq=rq=>run(async()=>{if(!rq||!confirm("Delete this request for "+fmt(rq.amount)+"?"))return;await db.deleteImprestRequest(rq.id);setRequests(prev=>prev.filter(x=>x.id!==rq.id));setModal(null);});
+  const giveCash=m=>run(async()=>{const rq=allReq.find(x=>x.id===m.id);if(!m.date)throw new Error("Enter the date the cash was given.");
+    const row=toIC(await db.addImprestCash({week_start:rq.weekStart,date:m.date,amount:rq.approvedAmount,kind:rq.kind,note:String(m.note||"").trim()||null,request_id:rq.id}));setCash(prev=>[...prev,row]);setModal(null);});
   const printV=v=>{const w=window.open("","_blank");if(!w)return;const esc=s=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));const e=L[v.weekStart]||{opening:0,collected:0,used:0,left:0,cash:[]};
     const rows=v.lines.map((l,i)=>"<tr><td>"+(i+1)+"</td><td>"+esc(l.desc)+"</td><td>"+esc(l.name)+"</td><td>"+esc(l.date?dayTxt(l.date):"")+"</td><td>"+esc(l.category)+"</td><td>"+esc(vehName(l.vehicleId))+"</td><td class=r>"+(Number(l.qty)||0)+"</td><td class=r>"+fmt(Number(l.unitPrice)||0)+"</td><td class=r>"+fmt(impAmt(l))+"</td><td class=r>"+(v.status==="draft"?"":fmt(impAllowed(l)))+"</td></tr>").join("");
     const app=v.history.filter(h=>/^Approved|^Submitted|^Resubmitted/.test(h.action)).map(h=>"<div>"+esc(h.action)+": <b>"+esc(h.by)+"</b> ("+esc(h.role)+"), "+esc(whenTxt(h.at))+"</div>").join("");
@@ -3217,15 +3253,41 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
   const officeTodo=office?all.filter(v=>v.status==="returned"||(v.kind==="weekly"&&v.status==="draft"&&v.weekStart<thisWeek)).sort((a,b)=>a.weekStart.localeCompare(b.weekStart)):[];
   const weekList=all.filter(v=>v.weekStart===week).sort((a,b)=>(a.kind==="weekly"?0:1)-(b.kind==="weekly"?0:1)||String(a.createdAt).localeCompare(String(b.createdAt)));
   const weeklyThis=weekList.find(v=>v.kind==="weekly");
+  // cash requests needing this person: their approval step, or (HQ Accounts / Super Admin) cash to give
+  const reqTurn=rq=>rq.status==="in_approval"&&(isSA||rq.chain[rq.step]===role);
+  const reqToGive=rq=>canCash&&impCanGive(rq,all,allCash);
+  const reqMine=allReq.filter(rq=>reqTurn(rq)||reqToGive(rq));
+  const reqWaiting=(office&&!isSA?allReq.filter(rq=>rq.status==="in_approval"||rq.status==="returned"):reqMine).sort((a,b)=>String(a.submittedAt||a.createdAt).localeCompare(String(b.submittedAt||b.createdAt)));
+  const impUnsettledTxt=w=>{const u=allReq.filter(rq=>rq.weekStart===w&&(rq.status==="in_approval"||(rq.status==="approved"&&!impReqGiven(rq,allCash))));
+    return u.length?"\n\nNOTE: cash requested for this week has not been given yet ("+u.map(rq=>fmt(rq.approvedAmount??rq.amount)).join(", ")+"). Once the week is approved, no more cash can be posted to it.":"";};
+  const reqAction=rq=>{
+    if(reqTurn(rq))return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"review",id:rq.id,allowed:String(rq.allowed??rq.amount),cutNote:rq.cutNote||"",note:""});}} style={btn("#24A148")}>Review</button>);
+    if(reqToGive(rq))return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"give",id:rq.id,date:todayStr,note:""});}} style={btn("#24A148")}>Give cash</button>);
+    if(office&&rq.status==="returned")return(<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"request",id:rq.id,week:rq.weekStart,kind:rq.kind,amount:String(rq.amount),reason:rq.reason});}} style={btn("#fff",P,"1.5px solid "+P)}>Change</button>);
+    if(office&&rq.status==="in_approval")return(<button disabled={busy} onClick={()=>delReq(rq)} title="Withdraw this request" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={13} color="#DA1E28"/></button>);
+    return null;};
+  const reqTable=(list,withWeek)=>(<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:withWeek?720:620}}>
+    <thead><tr style={{background:"#F4F4F4"}}>{[...(withWeek?["Week"]:[]),"Asked","What for","Asked for","Approved","Status",""].map((h,i)=>(<th key={h+i} style={th}>{h}</th>))}</tr></thead>
+    <tbody>{list.map(rq=>{const [st,c,bg]=impReqStatus(rq,allCash);const back=rq.status==="returned"?[...rq.history].reverse().find(x=>x.action==="Sent back"):null;return(<tr key={rq.id} style={{verticalAlign:"top"}}>
+      {withWeek&&<td style={{...tc,whiteSpace:"nowrap",fontWeight:600}}>{dayTxt(rq.weekStart)}</td>}
+      <td style={{...tc,whiteSpace:"nowrap"}}>{rq.submittedAt?dayTxt(ngDate(rq.submittedAt)):"-"}<div style={{fontSize:10,color:"#8D8D8D"}}>{userName(rq.requestedBy)}</div></td>
+      <td style={tc}><b>{impReqWhat(rq)}</b>{rq.reason?<div style={{fontSize:11,color:"#525252",whiteSpace:"normal"}}>{rq.reason}</div>:null}</td>
+      <td style={{...tc,fontWeight:700}}>{fmt(rq.amount)}</td>
+      <td style={tc}>{rq.approvedAmount!=null?<b>{fmt(rq.approvedAmount)}</b>:rq.allowed!=null?<span style={{color:"#B45309"}}>{fmt(rq.allowed)} so far</span>:"-"}{rq.cutNote?<div style={{fontSize:10,color:"#DA1E28"}}>lowered: {rq.cutNote}</div>:null}</td>
+      <td style={tc}>{pill(st,c,bg)}{back?<div style={{fontSize:10,color:"#A2191F",marginTop:3,whiteSpace:"normal"}}>{back.by}: {back.note}</div>:null}</td>
+      <td style={tc}>{reqAction(rq)}</td></tr>);})}</tbody></table></div>);
 
   // the week's money (opening + cash collected - spent = left) with the cash entries
   const cashCard=(w,compact)=>{const p=impPrev(L,w);const op=p?Math.max(0,p.left):0;
+    const wReq=allReq.filter(rq=>rq.weekStart===w).sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt)));
     const e=L[w]||{opening:op,owedIn:p?Math.max(0,-p.left):0,collected:0,used:0,left:op,fixed:false,cash:[],voucher:null};
     return(<div style={card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
         <div><h3 style={{fontSize:14,fontWeight:700,margin:0}}>Cash for the week</h3>
-          <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>{e.fixed?"Approved - these figures are fixed.":"Counts down as the fleet office adds what it spends."}{!cashReady&&" Recording cash needs a one-time database update (20261027_imprest_cash.sql)."}</div></div>
-        {canCash&&!e.fixed&&<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"cash",week:w,date:todayStr<w?w:todayStr,amount:"",kind:e.cash.some(c=>c.kind==="weekly")?"extra":"weekly",note:""});}} style={btn("#24A148")}>+ Record cash collected</button>}
+          <div style={{fontSize:11,color:"#8D8D8D",marginTop:2}}>{e.fixed?"Approved - these figures are fixed.":"Counts down as the fleet office adds what it spends."}{!cashReady&&" Recording cash needs a one-time database update (20261027_imprest_cash.sql)."}{isSA&&cashReady&&!requestsReady&&" Cash requests need a one-time database update (20261102_imprest_requests.sql)."}</div></div>
+        {!e.fixed&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {office&&requestsReady&&<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"request",week:w,kind:wReq.some(rq=>rq.kind==="weekly")||e.cash.some(c=>c.kind==="weekly")?"extra":"weekly",amount:"",reason:""});}} style={btn(P)}>+ Request cash</button>}
+          {canRecordFree&&<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"cash",week:w,date:todayStr<w?w:todayStr,amount:"",kind:e.cash.some(c=>c.kind==="weekly")?"extra":"weekly",note:""});}} style={requestsReady?btn("#fff","#24A148","1.5px solid #24A148"):btn("#24A148")}>{requestsReady?"Record cash without a request":"+ Record cash collected"}</button>}</div>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:10,marginTop:12}}>
         {[["Brought forward",fmt(e.opening),p?(p.fixed?"from "+dayTxt(p.week):"estimate - "+dayTxt(p.week)+" not approved yet"):"nothing before this week","#161616"],
@@ -3235,10 +3297,11 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
           <div key={k} style={{background:"#F7F8FA",borderRadius:10,padding:"10px 12px"}}><div style={{fontSize:11,color:"#6F6F6F",fontWeight:600}}>{k}</div><div style={{fontSize:compact?16:20,fontWeight:800,color:c,marginTop:2}}>{val}</div><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>{sub}</div></div>))}
       </div>
       {e.owedIn>0&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,marginTop:10}}>The week before was overspent by <b>{fmt(e.owedIn)}</b>. That is owed to the fleet office and goes on this week's voucher as a line for the approvers to check.</div>}
+      {wReq.length>0&&<div style={{marginTop:12}}><div style={{fontSize:12,fontWeight:700,color:"#525252",marginBottom:6}}>Cash requested</div>{reqTable(wReq,false)}</div>}
       {e.cash.length>0&&<div style={{overflowX:"auto",marginTop:10}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:480}}>
         <thead><tr style={{background:"#F4F4F4"}}>{["Collected on","What for","Note","Recorded by","Amount",""].map((h,i)=>(<th key={h+i} style={th}>{h}</th>))}</tr></thead>
-        <tbody>{e.cash.map(c=>(<tr key={c.id}><td style={tc}>{fmtDayLabel(c.date)}</td><td style={tc}>{c.kind==="extra"?"Extra":"The week's money"}</td><td style={tc}>{c.note||"-"}</td><td style={tc}>{userName(c.recordedBy)||"-"}</td><td style={{...tc,fontWeight:700}}>{fmt(c.amount)}</td>
-          <td style={tc}>{canCash&&!e.fixed&&<button onClick={()=>delCash(c)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={13} color="#DA1E28"/></button>}</td></tr>))}</tbody></table></div>}
+        <tbody>{e.cash.map(c=>(<tr key={c.id}><td style={tc}>{fmtDayLabel(c.date)}</td><td style={tc}>{c.kind==="extra"?"Extra":"The week's money"}{c.requestId?<div style={{fontSize:10,color:"#8D8D8D"}}>approved request</div>:null}</td><td style={tc}>{c.note||"-"}</td><td style={tc}>{userName(c.recordedBy)||"-"}</td><td style={{...tc,fontWeight:700}}>{fmt(c.amount)}</td>
+          <td style={tc}>{canCash&&!e.fixed&&(isSA||c.requestId)&&<button onClick={()=>delCash(c)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",padding:2}}><Trash2 size={13} color="#DA1E28"/></button>}</td></tr>))}</tbody></table></div>}
     </div>);};
 
   if(!ready)return(<div style={card}><h3 style={{fontSize:15,fontWeight:700,margin:"0 0 6px"}}>Imprest</h3><div style={{fontSize:13,color:"#525252"}}>Imprest needs a one-time database update: run <b>supabase/migrations/20261027_imprest.sql</b> in the Supabase SQL editor.</div></div>);
@@ -3324,7 +3387,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
         <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>History</h3>
         {v.history.length===0?<div style={{fontSize:12,color:"#8D8D8D"}}>Not submitted yet.</div>:[...v.history].reverse().map((h,i)=>(<div key={i} style={{fontSize:12,padding:"6px 0",borderBottom:"1px solid #F4F4F4"}}><b>{h.action}</b> - {h.by}{h.role?" ("+h.role+")":""}, {whenTxt(h.at)}{h.note?<div style={{color:"#525252",marginTop:2}}>{h.note}</div>:null}</div>))}
       </div>
-      {modal&&modal.mode==="cash"&&cashModal()}
+      {modal&&modalView()}
     </div>);
   }
 
@@ -3340,6 +3403,42 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
     {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
     <button disabled={busy} onClick={()=>saveCash(m)} style={{...btn("#24A148"),width:"100%",padding:12}}>Save</button>
   </Modal>);}
+  function modalView(){return modal.mode==="cash"?cashModal():modal.mode==="request"?requestModal():modal.mode==="review"?reviewModal():modal.mode==="give"?giveModal():null;}
+  function requestModal(){const m=modal;const order=(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ");return(<Modal title={m.id?"Change the cash request":"Request cash"} onClose={()=>setModal(null)}>
+    <div style={{fontSize:12,color:"#525252",marginBottom:10}}>For the week {weekTxt(m.week)}. It goes to {order} to approve; once approved, HQ Accounts gives the cash and posts it.</div>
+    <Field label="What is it for?"><select style={inp} value={m.kind} onChange={e=>setModal({...m,kind:e.target.value})}><option value="weekly">The week's money</option><option value="extra">Extra money during the week</option></select></Field>
+    <Field label="Amount (₦)"><input type="number" min="0" style={{...inp,fontWeight:700}} value={m.amount} placeholder="e.g. 30000" onChange={e=>setModal({...m,amount:e.target.value})}/></Field>
+    <Field label="Reason"><input style={inp} value={m.reason} placeholder={m.kind==="extra"?"e.g. 2 tyres for APP95YD":"e.g. the week's transport, repairs and levies"} onChange={e=>setModal({...m,reason:e.target.value})}/></Field>
+    {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
+    <button disabled={busy} onClick={()=>saveReq(m)} style={{...btn(P),width:"100%",padding:12}}>{m.id?"Send again for approval":"Send for approval"}</button>
+    {m.id&&<button disabled={busy} onClick={()=>delReq(allReq.find(x=>x.id===m.id))} style={{...btn("#fff","#DA1E28","1.5px solid #FFB3B8"),width:"100%",padding:10,marginTop:8}}>Delete the request</button>}
+  </Modal>);}
+  function reviewModal(){const m=modal;const rq=allReq.find(x=>x.id===m.id);if(!rq)return null;const last=rq.step>=rq.chain.length-1;
+    const al=m.allowed===""?rq.amount:Number(m.allowed);const e=L[rq.weekStart];return(<Modal title="Cash request" onClose={()=>setModal(null)}>
+    <div style={{fontSize:13,marginBottom:6}}><b>{impReqWhat(rq)}</b> for the week {weekTxt(rq.weekStart)}</div>
+    <div style={{fontSize:12,color:"#525252",marginBottom:4}}>Asked for <b>{fmt(rq.amount)}</b> by {userName(rq.requestedBy)||"the fleet office"}{rq.submittedAt?", "+whenTxt(rq.submittedAt):""}.</div>
+    {rq.reason&&<div style={{fontSize:12,color:"#525252",marginBottom:4}}>Reason: {rq.reason}</div>}
+    {e&&<div style={{fontSize:12,color:"#525252",marginBottom:4}}>This week so far: brought forward {fmt(e.opening)}, cash given {fmt(e.collected)}, spent {fmt(e.used)}{e.owedIn>0?"; owed to the fleet office from last week "+fmt(e.owedIn):""}.</div>}
+    {rq.history.filter(h=>h.action!=="Requested").map((h,i)=>(<div key={i} style={{fontSize:11,color:"#525252"}}>{h.action} - {h.by}{h.role?" ("+h.role+")":""}{h.note?": "+h.note:""}</div>))}
+    {isSA&&rq.chain[rq.step]!=="Super Admin"&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,margin:"8px 0"}}>This step is {rq.chain[rq.step]}'s. As Super Admin you can act for them.</div>}
+    <div style={{display:"grid",gridTemplateColumns:al<rq.amount?"1fr 1fr":"1fr",gap:12,marginTop:8}}>
+      <Field label="Amount to approve (₦)"><input type="number" min="0" style={{...inp,fontWeight:700}} value={m.allowed} onChange={x=>setModal({...m,allowed:x.target.value})}/></Field>
+      {al<rq.amount&&<Field label="Reason for lowering it"><input style={inp} value={m.cutNote} onChange={x=>setModal({...m,cutNote:x.target.value})}/></Field>}
+    </div>
+    <Field label="Comment (required to send back)"><textarea style={{...inp,minHeight:56}} value={m.note} onChange={x=>setModal({...m,note:x.target.value})}/></Field>
+    {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button disabled={busy} onClick={()=>decideReq(m,"approve")} style={btn("#24A148")}>{last?"Approve (final)":"Approve → "+rq.chain[rq.step+1]}</button>
+      <button disabled={busy} onClick={()=>decideReq(m,"back")} style={btn("#fff","#DA1E28","1.5px solid #FFB3B8")}>↩ Send back to fleet office</button></div>
+  </Modal>);}
+  function giveModal(){const m=modal;const rq=allReq.find(x=>x.id===m.id);if(!rq)return null;return(<Modal title="Give cash" onClose={()=>setModal(null)}>
+    <div style={{fontSize:13,marginBottom:6}}>Approved: <b>{fmt(rq.approvedAmount)}</b> - {impReqWhat(rq).toLowerCase()} for the week {weekTxt(rq.weekStart)}.</div>
+    {rq.reason&&<div style={{fontSize:12,color:"#525252",marginBottom:6}}>Reason: {rq.reason}{rq.cutNote?" (lowered from "+fmt(rq.amount)+": "+rq.cutNote+")":""}</div>}
+    <div style={{fontSize:12,color:"#525252",marginBottom:10}}>Give the fleet office exactly this amount, then post it here. It is added to what they have to spend that week.</div>
+    <Field label="Given on"><input type="date" style={inp} value={m.date} max={todayStr} onChange={e=>setModal({...m,date:e.target.value})}/></Field>
+    <Field label="Note (optional)"><input style={inp} value={m.note} placeholder="e.g. cash to Gbola, or the transfer reference" onChange={e=>setModal({...m,note:e.target.value})}/></Field>
+    {msg&&<div style={{color:"#DA1E28",fontSize:12,marginBottom:8}}>{msg}</div>}
+    <button disabled={busy} onClick={()=>giveCash(m)} style={{...btn("#24A148"),width:"100%",padding:12}}>Post {fmt(rq.approvedAmount)} as given</button>
+  </Modal>);}
   const tabBtn=(id,label,n)=>(<button key={id} onClick={()=>setView(id)} style={{padding:"8px 16px",borderRadius:8,border:view===id?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:view===id?"#D0E2FF":"#fff",color:view===id?P:"#525252",fontSize:13,fontWeight:600,cursor:"pointer"}}>{label}{n?<span style={{marginLeft:6,background:"#DA1E28",color:"#fff",borderRadius:9,padding:"0 6px",fontSize:10}}>{n}</span>:null}</button>);
   const vRow=(v,extra)=>(<tr key={v.id} onClick={()=>setOpenId(v.id)} style={{cursor:"pointer"}}>
     <td style={{...tc,fontWeight:600}}>{v.kind==="weekly"?"Weekly imprest":<>Mid-week: {v.title||"request"}</>}<div style={{fontSize:11,color:"#8D8D8D",fontWeight:400}}>week of {dayTxt(v.weekStart)}{extra?" - "+extra:""}</div></td>
@@ -3351,7 +3450,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
   const exportCash=()=>downloadCsv(`fleet-imprest-cash_${from}_to_${to}.csv`,["Week","Brought forward","Collected (week's money)","Collected (extra)","Spent","Left","Voucher"],
     bookWeeks.map(w=>{const e=L[w];return[w,e.opening,impSum(e.cash.filter(c=>c.kind!=="extra"),c=>c.amount),impSum(e.cash.filter(c=>c.kind==="extra"),c=>c.amount),e.used,e.left,e.voucher?impStatus(e.voucher)[0]:"none"];}));
   return(<div>
-    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>{tabBtn("week","This week")}{tabBtn("waiting","Waiting for "+(office&&!isSA?"approval":"me"),office&&!isSA?0:waiting.length)}{tabBtn("book","Cash book")}</div>
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>{tabBtn("week","This week")}{tabBtn("waiting","Waiting for "+(office&&!isSA?"approval":"me"),office&&!isSA?0:waiting.length+reqMine.length)}{tabBtn("book","Cash book")}</div>
     {msg&&<div style={{padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12,marginBottom:10}}>{msg}</div>}
     {view==="week"&&<>
       {officeTodo.length>0&&<div style={{...card,background:"#FFF8E1",border:"1px solid #F1C21B"}}><div style={{fontSize:13,fontWeight:700,color:"#7A4F00",marginBottom:6}}>Needs the fleet office</div>
@@ -3369,7 +3468,9 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
         {weekList.length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No voucher for this week yet.{office?" Start it and add each expense as it happens.":""}</div>:vTable(weekList)}
       </div>
     </>}
+    {view==="waiting"&&reqWaiting.length>0&&<div style={card}><h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Cash requests</h3>{reqTable(reqWaiting,true)}</div>}
     {view==="waiting"&&<div style={card}>
+      {reqWaiting.length>0&&<h3 style={{fontSize:14,fontWeight:700,margin:"0 0 8px"}}>Weekly vouchers</h3>}
       {(office&&!isSA?all.filter(v=>v.status==="in_approval"):waiting).length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>Nothing is waiting{office&&!isSA?" for approval":" for you"}.</div>
         :vTable(office&&!isSA?all.filter(v=>v.status==="in_approval"):waiting,v=>"submitted "+(v.submittedAt?whenTxt(v.submittedAt):"")+(isSA&&v.chain[v.step]!=="Super Admin"?" - at "+v.chain[v.step]:""))}
     </div>}
@@ -3385,7 +3486,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,cha
         <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc}>Total</td><td style={tc}/><td style={tc}>{fmt(impSum(bookWeeks,w=>L[w].collected))}</td><td style={tc}>{fmt(impSum(bookWeeks,w=>L[w].used))}</td><td style={tc}/><td style={tc}/></tr></tfoot>
       </table></div>}
     </div>}
-    {modal&&modal.mode==="cash"&&cashModal()}
+    {modal&&modalView()}
   </div>);
 }
 
@@ -4941,21 +5042,32 @@ function FleetProAppInner(){
   const [imprestReady,setImprestReady]=useState(false);
   const [imprestCash,setImprestCash]=useState([]);   // cash collected (20261027_imprest_cash.sql)
   const [imprestCashReady,setImprestCashReady]=useState(false);
+  const [imprestReq,setImprestReq]=useState([]);   // cash requests (20261102_imprest_requests.sql)
+  const [imprestReqReady,setImprestReqReady]=useState(false);
   useEffect(()=>{if(!user?.uid||!impCanSee(user))return;let live=true;(async()=>{
     try{const rows=await db.getImprestVouchers();const ch=await db.getImprestChain();if(live){setImprest(rows.map(toIV));if(Array.isArray(ch)&&ch.length)setImprestChain(ch);setImprestReady(true);}}
     catch(e){console.warn("Imprest not available:",e?.message);if(live)setImprestReady(false);}
     try{const rows=await db.getImprestCash();if(live){setImprestCash(rows.map(toIC));setImprestCashReady(true);}}
     catch(e){console.warn("Imprest cash not available:",e?.message);if(live)setImprestCashReady(false);}
+    try{const rows=await db.getImprestRequests();if(live){setImprestReq(rows.map(toIR));setImprestReqReady(true);}}
+    catch(e){console.warn("Imprest cash requests not available:",e?.message);if(live)setImprestReqReady(false);}
   })();return()=>{live=false;};},[user?.uid,user?.role]);
   // menu badge: vouchers at this user's approval step (+ sent back, for the fleet office)
-  const impBadge=imprestReady?imprest.filter(v=>v.status==="in_approval"&&v.chain[v.step]===user?.role).length+(isImpOffice(user)?imprest.filter(v=>v.status==="returned").length:0):0;
+  const impBadge=imprestReady?imprest.filter(v=>v.status==="in_approval"&&v.chain[v.step]===user?.role).length+(isImpOffice(user)?imprest.filter(v=>v.status==="returned").length:0)
+    +imprestReq.filter(r=>r.status==="in_approval"&&r.chain[r.step]===user?.role).length+(isImpOffice(user)?imprestReq.filter(r=>r.status==="returned").length:0)
+    +(user?.role==="HQ Accounts"?imprestReq.filter(r=>impCanGive(r,imprest,imprestCash)).length:0):0;
   const imprestAlerts=useMemo(()=>{if(!imprestReady)return[];const out=[];const role=user?.role;
     const mine=imprest.filter(v=>v.status==="in_approval"&&v.chain[v.step]===role);if(mine.length)out.push(`${mine.length} imprest voucher${mine.length>1?"s":""} waiting for you to approve`);
     const wk=impMonday(ngDate(Date.now()));
     if(isImpOffice(user)){const back=imprest.filter(v=>v.status==="returned");if(back.length)out.push(`Imprest sent back to the fleet office: ${back.map(impName).join("; ")}`);
       const late=imprest.filter(v=>v.kind==="weekly"&&v.status==="draft"&&v.weekStart<wk);if(late.length)out.push(`Imprest not submitted yet for the week is over: ${late.map(impName).join("; ")}`);}
-    if(impCashRole(user)&&imprestCashReady&&imprest.some(v=>v.kind==="weekly"&&v.weekStart===wk)&&!imprestCash.some(c=>c.weekStart===wk))out.push("No cash recorded yet for this week's imprest");
-    return out;},[imprest,imprestCash,imprestReady,imprestCashReady,user?.role]);   // eslint-disable-line
+    const reqMine=imprestReq.filter(r=>r.status==="in_approval"&&r.chain[r.step]===role);if(reqMine.length)out.push(`${reqMine.length} imprest cash request${reqMine.length>1?"s":""} waiting for you to approve`);
+    const wkTxt=w=>fmtDayLabel(w).replace(/^\S+ /,"");
+    if(isImpOffice(user)){const rb=imprestReq.filter(r=>r.status==="returned");if(rb.length)out.push(`Cash request sent back to the fleet office: ${rb.map(r=>fmt(r.amount)+" for the week of "+wkTxt(r.weekStart)).join("; ")}`);}
+    if(impCashRole(user)){const give=imprestReq.filter(r=>impCanGive(r,imprest,imprestCash));if(give.length)out.push(`Imprest cash approved - give it and post it: ${give.map(r=>fmt(r.approvedAmount)+" for the week of "+wkTxt(r.weekStart)).join("; ")}`);}
+    if(imprestReqReady){if(isImpOffice(user)&&imprest.some(v=>v.kind==="weekly"&&v.weekStart===wk&&v.status!=="approved")&&!imprestCash.some(c=>c.weekStart===wk)&&!imprestReq.some(r=>r.weekStart===wk))out.push("No cash requested yet for this week's imprest");}
+    else if(impCashRole(user)&&imprestCashReady&&imprest.some(v=>v.kind==="weekly"&&v.weekStart===wk)&&!imprestCash.some(c=>c.weekStart===wk))out.push("No cash recorded yet for this week's imprest");
+    return out;},[imprest,imprestCash,imprestReq,imprestReady,imprestCashReady,imprestReqReady,user?.role]);   // eslint-disable-line
   // the approver roles open on Imprest after logging in
   const impLanded=useRef(false);
   useEffect(()=>{if(impLanded.current||!imprestReady||!IMP_APPROVER_ROLES.includes(user?.role))return;impLanded.current=true;if(location.pathname==="/")navigate("/imprest");},[imprestReady,user?.role]);   // eslint-disable-line
@@ -5085,7 +5197,7 @@ function FleetProAppInner(){
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
-        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} users={users} vouchers={imprest} setVouchers={setImprest} cash={imprestCash} setCash={setImprestCash} cashReady={imprestCashReady} chain={imprestChain} vehicles={vehicles} drivers={drivers} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady}/>:<Navigate to="/" replace/>}/>
+        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} users={users} vouchers={imprest} setVouchers={setImprest} cash={imprestCash} setCash={setImprestCash} cashReady={imprestCashReady} requests={imprestReq} setRequests={setImprestReq} requestsReady={imprestReqReady} chain={imprestChain} vehicles={vehicles} drivers={drivers} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady}/>:<Navigate to="/" replace/>}/>
         <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady} gasPurchases={gasPurchases} setGasPurchases={setGasPurchases} supplyReady={gasSupplyReady} gasCounts={gasCounts} setGasCounts={setGasCounts} countsReady={gasCountsReady}/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks} imprestChain={imprestChain} setImprestChain={setImprestChain} imprestReady={imprestReady}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
