@@ -99,6 +99,22 @@ def connect():
     return Supabase(url, key)
 
 
+def select_generators(sb, cols):
+    """The generators, with meter_unit once 20261104_meter_kh.sql has added it
+    (before that every meter counts in hours)."""
+    try:
+        return sb.select_all("generators", cols + ",meter_unit")
+    except RuntimeError:
+        return sb.select_all("generators", cols)
+
+
+def kh_ids(gens):
+    """Generators whose hour meter counts in THOUSANDS of hours (Akure 4's panel
+    reads "15.79 Kh"): it moves in 10-hour steps, so a single day can't be
+    judged -- the app checks them month by month instead (App.jsx khMonths)."""
+    return {g["id"] for g in gens if g.get("meter_unit") == "kh"}
+
+
 def tank_key_fn(gens):
     """ONE TANK PER STORE FOR ITS GENERATORS -- the same rule as App.jsx
     tankKeyFn (2026-10-29): all the generators at a store draw from one tank
@@ -126,6 +142,7 @@ def tank_pairs(sb, gens, tank_of, tr_map):
     counts: a multi-day logging gap lumps several days' consumption against one
     day's hours (a 50 L/hr phantom)."""
     ovens = {g["id"] for g in gens if g.get("asset_type") == "oven"}
+    kh = kh_ids(gens)
     rows = sb.select_all("diesel_readings",
                          "id,generator_id,store_location,date,created_at,gen_hours_opening,gen_hours_closing,diesel_level_actual,diesel_added",
                          order="date.asc,created_at.asc,id.asc")
@@ -150,6 +167,9 @@ def tank_pairs(sb, gens, tank_of, tr_map):
                     hrs[r["generator_id"]] = hrs.get(r["generator_id"], 0) + (hc - ho)
             total_h = sum(hrs.values())
             consecutive = prev_date is not None and (cur_date - prev_date).days == 1
+            # a meter in thousands of hours moves in 10-hour steps: its day can't make a pair
+            if any(r["generator_id"] in kh for r in rs):
+                total_h = 0
             if total_h > 0 and close is not None and prev is not None and consecutive:
                 actual = prev + added - tr_map.get((key, date), 0) - close
                 # Guards: negative actual = an unlogged refill; >100 L/hr = a
@@ -171,7 +191,7 @@ def compute(sb, recent_days=RECENT_DAYS):
     recent_days=None learns from the whole history.
     Returns (updates, old_baselines_by_generator_id). Used by main() and by
     monthly_baseline_refresh.py, which vets the updates before writing them."""
-    gens = sb.select_all("generators", "id,name,loc,asset_type")
+    gens = select_generators(sb, "id,name,loc,asset_type")
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
     tank_of = tank_key_fn(gens)
     # Transfers out per (TANK, date) -- moved diesel is not generator consumption
@@ -186,8 +206,8 @@ def compute(sb, recent_days=RECENT_DAYS):
     updates = []
     print(f"  {'Generator':<30} {'old L/hr':>9} {'new L/hr':>9}  pairs  ~flag%")
     for g in gens:
-        if g.get("asset_type") == "oven":
-            continue
+        if g.get("asset_type") == "oven" or g.get("meter_unit") == "kh":
+            continue   # ovens: litres per batch; kilo-hour meters: checked by month in the app
         # POOLED AGGREGATE estimator: avg = sum(actual litres) / sum(hours) over
         # consecutive-day pairs — NOT the mean of per-day rates. Stores whose
         # dipstick only resolves ~35-40 L steps (e.g. Ado 1) read "0 consumed"

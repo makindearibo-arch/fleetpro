@@ -75,8 +75,9 @@ def vet(updates, old, names=None, accept=()):
 
 def matters(f):
     _, litres, flag, old_litres, old_flag = f[:5]
-    return (bool(flag) != bool(old_flag) or old_litres is None
-            or abs(litres - old_litres) >= MIN_GAP_CHANGE_L)
+    if litres is None or old_litres is None:   # a gap added or cleared (e.g. a kilo-hour meter's old daily gap)
+        return bool(flag) != bool(old_flag) or litres != old_litres
+    return bool(flag) != bool(old_flag) or abs(litres - old_litres) >= MIN_GAP_CHANGE_L
 
 
 def backup_root():

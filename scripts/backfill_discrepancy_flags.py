@@ -99,6 +99,22 @@ class Supabase:
                          extra_headers={"Prefer": "return=minimal"})
 
 
+def select_generators(sb, cols):
+    """The generators, with meter_unit once 20261104_meter_kh.sql has added it
+    (before that every meter counts in hours)."""
+    try:
+        return sb.select_all("generators", cols + ",meter_unit")
+    except RuntimeError:
+        return sb.select_all("generators", cols)
+
+
+def kh_ids(gens):
+    """Generators whose hour meter counts in THOUSANDS of hours (Akure 4's panel
+    reads "15.79 Kh"): it moves in 10-hour steps, so a single day can't be
+    judged -- the app checks them month by month instead (App.jsx khMonths)."""
+    return {g["id"] for g in gens if g.get("meter_unit") == "kh"}
+
+
 def tank_key_fn(gens):
     """ONE TANK PER STORE FOR ITS GENERATORS -- the same rule as App.jsx
     tankKeyFn (2026-10-29): all the generators at a store draw from one tank
@@ -133,8 +149,9 @@ def compute(sb, rates=None):
     stored values differ. `rates` ({generator_id: L/hr}) scores against
     PROPOSED baselines instead of the stored ones, so a baseline change can be
     previewed before it is written (monthly_baseline_refresh.py does this)."""
-    gen_list = sb.select_all("generators", "id,name,loc,asset_type")
+    gen_list = select_generators(sb, "id,name,loc,asset_type")
     gens = {g["id"]: g for g in gen_list}
+    kh = kh_ids(gen_list)
     baselines = {b["generator_id"]: b for b in sb.select_all("generator_baselines", "*")}
     for gid, rate in (rates or {}).items():
         baselines[gid] = {**baselines.get(gid, {}), "generator_id": gid, "avg_litres_per_hour": rate}
@@ -181,6 +198,15 @@ def compute(sb, rates=None):
             rs = list(rs)
             levels = [r["diesel_level_actual"] for r in rs if r.get("diesel_level_actual") is not None]
             close = levels[-1] if levels else None
+            if any(r["generator_id"] in kh for r in rs):
+                # a meter in thousands of hours: no daily judgment (the app checks it by
+                # month), and an old daily flag/gap is cleared
+                for r in rs:
+                    if r["generator_id"] in kh and (r.get("discrepancy_flag") or r.get("discrepancy_litres") is not None):
+                        updates.append((r["id"], None, False, r.get("discrepancy_litres"), bool(r.get("discrepancy_flag")),
+                                        r.get("store_location"), r["date"]))
+                prev_level = close
+                continue
             parts = []   # (reading, expected burn)
             known = True
             for r in rs:
