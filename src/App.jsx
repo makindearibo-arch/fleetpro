@@ -3208,10 +3208,14 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
 // left. At the end of the week the voucher is submitted and approved the same way.
 // Approvers may lower a line or a request (with a reason) or send it back. The FINAL
 // approval of the voucher fixes the week in the database:
-//   opening (last approved week's closing, if positive) + cash collected
+//   opening (last approved week's closing) + cash collected
 //   - approved spending = closing, carried into the next week.
-// A negative closing is owed to the fleet office: the next weekly voucher carries one
-// locked 'owed' line for exactly that amount, which the approvers check. A week can
+// A negative closing (overspent) is owed to the fleet office and comes into the next
+// week as a NEGATIVE balance brought forward (20261106_imprest_overspend_bf.sql,
+// Makinde 2026-11-06): 26 Oct closed at -4,200, so 2 Nov is -4,200 + 30,000 - 25,800 = 0.
+// Until that migration it went on the next voucher as a locked 'owed' line, which
+// counted the same 4,200 as spending twice (64,200 "spent" in two weeks for 60,000);
+// `carry` (imprest_config.overspend_carried exists) switches the page over. A week can
 // only be submitted once the week before it is approved; a week's cash is fixed once
 // its voucher is approved. The database enforces all of it (fp_guard_imprest,
 // fp_guard_imprest_cash); the page mirrors the rules so people see why.
@@ -3230,26 +3234,30 @@ const impAllowed=l=>l.allowed!=null&&l.allowed!==""?(Number(l.allowed)||0):impAm
 const impSum=(lines,f)=>(lines||[]).reduce((a,l)=>a+f(l),0);
 const impMyTurn=(v,role)=>v.status==="in_approval"&&(role==="Super Admin"||v.chain[v.step]===role);
 const impName=v=>(v.kind==="weekly"?"Week of ":"Mid-week: "+(v.title||"request")+", week of ")+fmtDayLabel(v.weekStart).replace(/^\S+ /,"");
-// what a voucher's lines come to: as written while it is being prepared, after any cuts once submitted
-const impUsed=v=>v?impSum(v.lines,v.status==="draft"||v.status==="returned"?impAmt:impAllowed):0;
+// what a voucher's lines come to: as written while it is being prepared, after any cuts once submitted.
+// With `carry` an old 'owed' line is not spending (last week's overspend is in the brought forward).
+const impUsed=(v,carry)=>v?impSum(carry?(v.lines||[]).filter(l=>l.type!=="owed"):v.lines,v.status==="draft"||v.status==="returned"?impAmt:impAllowed):0;
 // The week-by-week cash book. An approved week uses the figures the DATABASE fixed;
 // any other week is estimated the same way from the week before it.
-const impLedger=(vouchers,cash)=>{const wv=(vouchers||[]).filter(v=>v.kind==="weekly");
+const impLedger=(vouchers,cash,carry)=>{const wv=(vouchers||[]).filter(v=>v.kind==="weekly");
   const weeks=[...new Set([...wv.map(v=>v.weekStart),...(cash||[]).map(c=>c.weekStart)])].sort();
   const out={};let prev=0,prevWeek=null;
   for(const w of weeks){const v=wv.find(x=>x.weekStart===w)||null;const cs=(cash||[]).filter(c=>c.weekStart===w).sort((a,b)=>a.date.localeCompare(b.date));
     const collected=impSum(cs,c=>Number(c.amount)||0);
-    if(v&&v.status==="approved"&&v.closingBalance!=null)out[w]={week:w,prevWeek,opening:v.balanceBf||0,owedIn:v.overspentBf||0,collected:v.collectedTotal??collected,used:v.approvedTotal||0,left:v.closingBalance,fixed:true,voucher:v,cash:cs};
-    else{const opening=Math.max(0,prev);const used=impUsed(v);out[w]={week:w,prevWeek,opening,owedIn:Math.max(0,-prev),collected,used,left:opening+collected-used,fixed:false,voucher:v,cash:cs};}
+    if(v&&v.status==="approved"&&v.closingBalance!=null)out[w]=carry
+      ?{week:w,prevWeek,opening:(v.balanceBf||0)-(v.overspentBf||0),owedIn:v.overspentBf||0,collected:v.collectedTotal??collected,used:(v.approvedTotal||0)-impSum((v.lines||[]).filter(l=>l.type==="owed"),impAllowed),left:v.closingBalance,fixed:true,voucher:v,cash:cs}
+      :{week:w,prevWeek,opening:v.balanceBf||0,owedIn:v.overspentBf||0,collected:v.collectedTotal??collected,used:v.approvedTotal||0,left:v.closingBalance,fixed:true,voucher:v,cash:cs};
+    else{const opening=carry?prev:Math.max(0,prev);const used=impUsed(v,carry);out[w]={week:w,prevWeek,opening,owedIn:Math.max(0,-prev),collected,used,left:opening+collected-used,fixed:false,voucher:v,cash:cs};}
     prev=out[w].left;prevWeek=w;}
   return out;};
 // the week before `week` in the cash book (its closing is this week's opening)
 const impPrev=(L,week)=>{const k=Object.keys(L).filter(w=>w<week).sort().pop();return k?L[k]:null;};
-// last week OVERSPENT -> it is owed to the fleet office: one locked 'owed' line on the next
-// weekly voucher for exactly that amount (the database checks it). Approvers can lower it.
+// Before 20261106: last week OVERSPENT -> one locked 'owed' line on the next weekly voucher
+// for exactly that amount (the database checked it). With `carry` it is never added and an
+// old one is taken off: the overspend is in the (negative) balance brought forward.
 const IMP_OWED_DESC="OWED TO THE FLEET OFFICE FROM LAST WEEK";
-const impSyncOwed=(lines,vouchers,cash,week)=>{const p=impPrev(impLedger(vouchers,cash),week);const owed=p?Math.max(0,-p.left):0;
-  const rest=(lines||[]).filter(l=>l.type!=="owed");if(!owed)return rest;const old=(lines||[]).find(l=>l.type==="owed")||{};
+const impSyncOwed=(lines,vouchers,cash,week,carry)=>{const rest=(lines||[]).filter(l=>l.type!=="owed");if(carry)return rest;
+  const p=impPrev(impLedger(vouchers,cash),week);const owed=p?Math.max(0,-p.left):0;if(!owed)return rest;const old=(lines||[]).find(l=>l.type==="owed")||{};
   return[...rest,{...old,id:old.id||impId(),desc:IMP_OWED_DESC,name:"Fleet office",date:week,category:"Owed from last week",vehicleId:"",type:"owed",qty:1,unitPrice:owed}];};
 const impStatus=v=>v.status==="draft"?["Being filled in","#525252","#F4F4F4"]:v.status==="returned"?["Sent back","#DA1E28","#FFF1F1"]:v.status==="in_approval"?["With "+(v.chain[v.step]||"approvers"),"#B45309","#FFF8E1"]:["Approved","#24A148","#DEFBE6"];
 const toIV=r=>({id:r.id,kind:r.kind,weekStart:r.week_start,title:r.title||"",status:r.status,chain:Array.isArray(r.chain)?r.chain:[],step:Number(r.step)||0,
@@ -3279,7 +3287,7 @@ const impZohoPoster=u=>u?.role==="Super Admin"||u?.role==="HQ Accounts";
 const impZohoTxt=z=>z?(z.manual?"Entered by hand"+(z.number?" ("+z.number+")":""):"Journal "+(z.number||"")):"";
 const impReqStatus=(rq,cash)=>{const g=impReqGiven(rq,cash);return g?["Cash given "+fmtDayLabel(g.date).replace(/^\S+ /,""),"#24A148","#DEFBE6"]:rq.status==="approved"?["Approved - HQ Accounts to give it","#0043CE","#D0E2FF"]:rq.status==="returned"?["Sent back","#DA1E28","#FFF1F1"]:["With "+(rq.chain[rq.step]||"approvers"),"#B45309","#FFF8E1"];};
 
-function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,requests,setRequests,requestsReady,chain,vehicles,drivers,docReady,ready}){
+function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,requests,setRequests,requestsReady,chain,vehicles,drivers,docReady,ready,carry}){
   const role=user?.role;const office=isImpOffice(user);const isSA=role==="Super Admin";const canCash=impCashRole(user)&&cashReady;
   // once cash requests are switched on, cash is given against an approved request; only the Super Admin can still record it without one
   const canRecordFree=canCash&&(!requestsReady||isSA);
@@ -3293,11 +3301,11 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
   const [modal,setModal]=useState(null);
   const [from,setFrom]=useState(()=>impAddDays(thisWeek,-7*11));const [to,setTo]=useState(thisWeek);
   const all=vouchers||[];const allCash=cash||[];const allReq=requests||[];
-  const L=useMemo(()=>impLedger(all,allCash),[all,allCash]);
+  const L=useMemo(()=>impLedger(all,allCash,carry),[all,allCash,carry]);
   const open=all.find(v=>v.id===openId)||null;
   useEffect(()=>{setNote("");setMsg("");},[openId]);
   // reload the working copy whenever the saved voucher changes (keeps any message on screen)
-  useEffect(()=>{setEd(open?{lines:(open.kind==="weekly"&&(open.status==="draft"||open.status==="returned")&&office?impSyncOwed(open.lines,all,allCash,open.weekStart):open.lines).map(l=>({...l})),title:open.title}:null);},[openId,open?.updatedAt]);   // eslint-disable-line
+  useEffect(()=>{setEd(open?{lines:(open.kind==="weekly"&&(open.status==="draft"||open.status==="returned")&&office?impSyncOwed(open.lines,all,allCash,open.weekStart,carry):open.lines).map(l=>({...l})),title:open.title}:null);},[openId,open?.updatedAt]);   // eslint-disable-line
   // Zoho Books (Super Admin / HQ Accounts send the journals; api/imprest-zoho.js)
   const zPoster=impZohoPoster(user);
   const [zcfg,setZcfg]=useState(null);
@@ -3312,6 +3320,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
   const whenTxt=iso=>iso?fmtDayLabel(ngDate(iso))+" "+fmtClock(iso):"";
   const weekTxt=w=>fmtDayLabel(w)+" – "+fmtDayLabel(impAddDays(w,6));
   const leftTxt=n=>n>=0?fmt(n):"over by "+fmt(-n);
+  const bfTxt=n=>n<0?"-"+fmt(-n):fmt(n);   // brought forward: negative = last week was overspent
 
   // ---- saving
   const local=row=>{const v=toIV(row);setVouchers(prev=>prev.some(x=>x.id===v.id)?prev.map(x=>x.id===v.id?v:x):[v,...prev]);return v;};
@@ -3324,11 +3333,11 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
   const clean=lines=>lines.map(l=>({...l,desc:String(l.desc||"").trim().toUpperCase(),name:String(l.name||"").trim(),date:l.date||"",qty:Number(l.qty)||0,unitPrice:Number(l.unitPrice)||0}));
   const pendingBefore=w=>all.filter(x=>x.kind==="weekly"&&x.status!=="approved"&&x.weekStart<w).sort((a,b)=>a.weekStart.localeCompare(b.weekStart));
 
-  const createWeekly=()=>run(async()=>{const lines=impSyncOwed([blank()],all,allCash,week);
+  const createWeekly=()=>run(async()=>{const lines=impSyncOwed([blank()],all,allCash,week,carry);
     const v=local(await db.addImprestVoucher({kind:"weekly",week_start:week,lines,requested_total:impSum(lines,impAmt)}));setOpenId(v.id);});
-  const saveDraft=()=>run(async()=>{await fresh(open);const lines=impSyncOwed(clean(ed.lines),all,allCash,open.weekStart);
+  const saveDraft=()=>run(async()=>{await fresh(open);const lines=impSyncOwed(clean(ed.lines),all,allCash,open.weekStart,carry);
     local(await db.updateImprestVoucher(open.id,{lines,title:ed.title,requested_total:impSum(lines,impAmt)}));});
-  const submit=()=>run(async()=>{const lines=impSyncOwed(clean(ed.lines),all,allCash,open.weekStart);
+  const submit=()=>run(async()=>{const lines=impSyncOwed(clean(ed.lines),all,allCash,open.weekStart,carry);
     if(!lines.length)throw new Error("Add at least one line.");
     const bad=lines.find(l=>!l.desc||!(impAmt(l)>0));if(bad)throw new Error("Every line needs a description, a quantity and a unit price.");
     const noND=lines.filter(l=>!l.name||!l.date);if(noND.length)throw new Error("Every line needs a name and a date: "+noND.map(l=>l.desc).join(", ")+".");
@@ -3336,7 +3345,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     if(outWk.length)throw new Error("Dates must be in this voucher's week ("+dayTxt(open.weekStart)+" - "+dayTxt(wkEnd)+"): "+outWk.map(l=>l.desc).join(", ")+".");
     const pend=pendingBefore(open.weekStart);if(pend.length)throw new Error("The voucher for the "+impName(pend[0]).toLowerCase()+" has to be approved first - this week starts from what that week leaves.");
     const e=L[open.weekStart]||{opening:0,collected:0};const spent=impSum(lines,impAmt);const owedAmt=impSum(lines.filter(l=>l.type==="owed"),impAmt);const left=e.opening+e.collected-spent;
-    if(!confirm("Submit this week for approval?\n\nBrought forward: "+fmt(e.opening)+"\nCash collected this week: "+fmt(e.collected)+"\nSpent: "+fmt(spent)+(owedAmt?" (includes "+fmt(owedAmt)+" owed to the fleet office from last week)":"")+"\nLeft: "+leftTxt(left)+"\n\nIt goes to "+(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ")+"."))return;
+    if(!confirm("Submit this week for approval?\n\nBrought forward: "+bfTxt(e.opening)+(e.opening<0?" (last week was overspent - owed to the fleet office)":"")+"\nCash collected this week: "+fmt(e.collected)+"\nSpent: "+fmt(spent)+(owedAmt?" (includes "+fmt(owedAmt)+" owed to the fleet office from last week)":"")+"\nLeft: "+leftTxt(left)+"\n\nIt goes to "+(chain&&chain.length?chain:IMP_DEFAULT_CHAIN).join(" → ")+"."))return;
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{lines,title:ed.title,requested_total:spent,status:"in_approval",history:hist(r,open.status==="returned"?"Resubmitted":"Submitted")}));});
   const approve=()=>run(async()=>{
@@ -3345,7 +3354,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     const lines=ed.lines.map(l=>{const o={...l};delete o.allowed;delete o.cutNote;const a=impAllowed(l);if(a<impAmt(l)){o.allowed=a;o.cutNote=String(l.cutNote).trim();}return o;});
     const last=open.step>=open.chain.length-1;
     if(last){const tot=impSum(lines,impAllowed);const e=L[open.weekStart]||{opening:0,collected:0};
-      if(!confirm("Final approval.\n\nBrought forward: "+fmt(e.opening)+"\nCash collected: "+fmt(e.collected)+"\nApproved spending: "+fmt(tot)+"\nLeft (carried into next week): "+leftTxt(e.opening+e.collected-tot)+(e.opening+e.collected-tot<0?"\n(the amount over is owed to the fleet office - it goes on next week's voucher for approval)":"")+impUnsettledTxt(open.weekStart)+"\n\nAfter this the week is fixed."))return;}
+      if(!confirm("Final approval.\n\nBrought forward: "+bfTxt(e.opening)+(e.opening<0?" (last week was overspent)":"")+"\nCash collected: "+fmt(e.collected)+"\nApproved spending: "+fmt(tot)+"\nLeft (carried into next week): "+leftTxt(e.opening+e.collected-tot)+(e.opening+e.collected-tot<0?(carry?"\n(the amount over is owed to the fleet office - it comes into next week as a negative balance brought forward)":"\n(the amount over is owed to the fleet office - it goes on next week's voucher for approval)"):"")+impUnsettledTxt(open.weekStart)+"\n\nAfter this the week is fixed."))return;}
     const r=await fresh(open);
     local(await db.updateImprestVoucher(open.id,{lines,history:hist(r,last?"Approved - final":"Approved",note.trim()),...(last?{status:"approved"}:{step:open.step+1})}));setNote("");});
   const sendBack=()=>run(async()=>{if(!note.trim())throw new Error("Say why you are sending it back (in the comment box).");
@@ -3402,7 +3411,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
       +"<h2>MICMAKIN - FLEET PETTY CASH VOUCHER</h2><div>Week "+esc(weekTxt(v.weekStart))+" - "+esc(impStatus(v)[0])+"</div>"
       +"<table><tr><th>#</th><th>Description</th><th>Name</th><th>Date</th><th>Category</th><th>Vehicle</th><th class=r>Qty</th><th class=r>Unit</th><th class=r>Amount</th><th class=r>Approved</th></tr>"+rows
       +"<tr><th colspan=8>TOTAL</th><th class=r>"+fmt(impSum(v.lines,impAmt))+"</th><th class=r>"+(v.status==="draft"?"":fmt(impSum(v.lines,impAllowed)))+"</th></tr></table>"
-      +"<div>BROUGHT FORWARD: <b>"+fmt(e.opening)+"</b></div><div>CASH COLLECTED: <b>"+fmt(e.collected)+"</b>"+(e.cash.length?" ("+e.cash.map(c=>esc(dayTxt(c.date))+" "+fmt(c.amount)+(c.kind==="extra"?" extra":"")).join(", ")+")":"")+"</div>"
+      +"<div>BROUGHT FORWARD: <b>"+bfTxt(e.opening)+(e.opening<0?" (overspent the week before)":"")+"</b></div><div>CASH COLLECTED: <b>"+fmt(e.collected)+"</b>"+(e.cash.length?" ("+e.cash.map(c=>esc(dayTxt(c.date))+" "+fmt(c.amount)+(c.kind==="extra"?" extra":"")).join(", ")+")":"")+"</div>"
       +"<div>SPENT: <b>"+fmt(e.used)+"</b></div><div>LEFT: <b>"+esc(leftTxt(e.left))+"</b></div>"
       +"<div style='margin-top:14px'>"+app+"</div><script>window.print()</"+"script></body></html>");w.document.close();};
 
@@ -3451,7 +3460,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
       <td style={tc}>{reqAction(rq)}</td></tr>);})}</tbody></table></div>);
 
   // the week's money (opening + cash collected - spent = left) with the cash entries
-  const cashCard=(w,compact)=>{const p=impPrev(L,w);const op=p?Math.max(0,p.left):0;
+  const cashCard=(w,compact)=>{const p=impPrev(L,w);const op=p?(carry?p.left:Math.max(0,p.left)):0;
     const wReq=allReq.filter(rq=>rq.weekStart===w).sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt)));
     const e=L[w]||{opening:op,owedIn:p?Math.max(0,-p.left):0,collected:0,used:0,left:op,fixed:false,cash:[],voucher:null};
     return(<div style={card}>
@@ -3463,13 +3472,13 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
           {canRecordFree&&<button disabled={busy} onClick={()=>{setMsg("");setModal({mode:"cash",week:w,date:todayStr<w?w:todayStr,amount:"",kind:e.cash.some(c=>c.kind==="weekly")?"extra":"weekly",note:""});}} style={requestsReady?btn("#fff","#24A148","1.5px solid #24A148"):btn("#24A148")}>{requestsReady?"Record cash without a request":"+ Record cash collected"}</button>}</div>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:10,marginTop:12}}>
-        {[["Brought forward",fmt(e.opening),p?(p.fixed?"from "+dayTxt(p.week):"estimate - "+dayTxt(p.week)+" not approved yet"):"nothing before this week","#161616"],
+        {[["Brought forward",bfTxt(e.opening),p?(e.opening<0?"overspent in the week of "+dayTxt(p.week)+(p.fixed?"":" (estimate)"):p.fixed?"from "+dayTxt(p.week):"estimate - "+dayTxt(p.week)+" not approved yet"):"nothing before this week",e.opening<0?"#DA1E28":"#161616"],
           ["Cash collected",fmt(e.collected),e.cash.length+" collection"+(e.cash.length===1?"":"s"),"#24A148"],
           ["Spent",fmt(e.used),e.voucher?(e.fixed?"approved":e.voucher.status==="in_approval"?"in approval":"so far"):"no voucher yet","#161616"],
-          ["Left",leftTxt(e.left),e.left<0?"owed to the fleet office next week":e.fixed?"carried into next week":"if nothing else is spent",e.left<0?"#DA1E28":P]].map(([k,val,sub,c])=>(
+          ["Left",leftTxt(e.left),e.left<0?(carry?"brought forward into next week (owed to the fleet office)":"owed to the fleet office next week"):e.fixed?"carried into next week":"if nothing else is spent",e.left<0?"#DA1E28":P]].map(([k,val,sub,c])=>(
           <div key={k} style={{background:"#F7F8FA",borderRadius:10,padding:"10px 12px"}}><div style={{fontSize:11,color:"#6F6F6F",fontWeight:600}}>{k}</div><div style={{fontSize:compact?16:20,fontWeight:800,color:c,marginTop:2}}>{val}</div><div style={{fontSize:10,color:"#8D8D8D",marginTop:2}}>{sub}</div></div>))}
       </div>
-      {e.owedIn>0&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,marginTop:10}}>The week before was overspent by <b>{fmt(e.owedIn)}</b>. That is owed to the fleet office and goes on this week's voucher as a line for the approvers to check.</div>}
+      {e.owedIn>0&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,marginTop:10}}>The week before was overspent by <b>{fmt(e.owedIn)}</b>. {carry?<>It comes in as <b>{bfTxt(-e.owedIn)}</b> brought forward: this week's cash pays the fleet office back first, and it is not counted as spending a second time.</>:<>That is owed to the fleet office and goes on this week's voucher as a line for the approvers to check.{isSA&&" Run 20261106_imprest_overspend_bf.sql to bring it forward as a negative balance instead (the line counts it twice)."}</>}</div>}
       {wReq.length>0&&<div style={{marginTop:12}}><div style={{fontSize:12,fontWeight:700,color:"#525252",marginBottom:6}}>Cash requested</div>{reqTable(wReq,false)}</div>}
       {e.cash.length>0&&<div style={{overflowX:"auto",marginTop:10}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:zohoOn?620:480}}>
         <thead><tr style={{background:"#F4F4F4"}}>{["Collected on","What for","Note","Recorded by","Amount",...(zohoOn?["Zoho"]:[]),""].map((h,i)=>(<th key={h+i} style={th}>{h}</th>))}</tr></thead>
@@ -3601,7 +3610,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
     <div style={{fontSize:13,marginBottom:6}}><b>{impReqWhat(rq)}</b> for the week {weekTxt(rq.weekStart)}</div>
     <div style={{fontSize:12,color:"#525252",marginBottom:4}}>Asked for <b>{fmt(rq.amount)}</b> by {userName(rq.requestedBy)||"the fleet office"}{rq.submittedAt?", "+whenTxt(rq.submittedAt):""}.</div>
     {rq.reason&&<div style={{fontSize:12,color:"#525252",marginBottom:4}}>Reason: {rq.reason}</div>}
-    {e&&<div style={{fontSize:12,color:"#525252",marginBottom:4}}>This week so far: brought forward {fmt(e.opening)}, cash given {fmt(e.collected)}, spent {fmt(e.used)}{e.owedIn>0?"; owed to the fleet office from last week "+fmt(e.owedIn):""}.</div>}
+    {e&&<div style={{fontSize:12,color:"#525252",marginBottom:4}}>This week so far: brought forward {bfTxt(e.opening)}, cash given {fmt(e.collected)}, spent {fmt(e.used)}{e.owedIn>0&&!carry?"; owed to the fleet office from last week "+fmt(e.owedIn):""}.</div>}
     {rq.history.filter(h=>h.action!=="Requested").map((h,i)=>(<div key={i} style={{fontSize:11,color:"#525252"}}>{h.action} - {h.by}{h.role?" ("+h.role+")":""}{h.note?": "+h.note:""}</div>))}
     {isSA&&rq.chain[rq.step]!=="Super Admin"&&<div style={{fontSize:12,color:"#7A4F00",background:"#FFF8E1",padding:"6px 10px",borderRadius:8,margin:"8px 0"}}>This step is {rq.chain[rq.step]}'s. As Super Admin you can act for them.</div>}
     <div style={{display:"grid",gridTemplateColumns:al<rq.amount?"1fr 1fr":"1fr",gap:12,marginTop:8}}>
@@ -3710,7 +3719,7 @@ function ImprestPage({user,users,vouchers,setVouchers,cash,setCash,cashReady,req
       <div style={{fontSize:11,color:"#8D8D8D",marginBottom:8}}>Each week: brought forward + cash collected - spent = left, carried into the next week. Weeks not yet approved are estimates.</div>
       {bookWeeks.length===0?<div style={{padding:16,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No imprest in these weeks.</div>:<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:760}}>
         <thead><tr style={{background:"#F4F4F4"}}>{["Week","Brought forward","Cash collected","Spent","Left","Voucher"].map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead>
-        <tbody>{bookWeeks.map(w=>{const e=L[w];return(<tr key={w} onClick={()=>{setWeek(w);setView("week");}} style={{cursor:"pointer"}}><td style={{...tc,fontWeight:600,whiteSpace:"nowrap"}}>{dayTxt(w)}</td><td style={tc}>{fmt(e.opening)}</td><td style={{...tc,color:"#24A148"}}>{fmt(e.collected)}</td><td style={tc}>{fmt(e.used)}</td><td style={{...tc,fontWeight:700,color:e.left<0?"#DA1E28":"#161616"}}>{leftTxt(e.left)}{!e.fixed&&<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>estimate</div>}</td><td style={tc}>{e.voucher?statusPill(e.voucher):<span style={{color:"#B45309",fontSize:12}}>no voucher</span>}</td></tr>);})}</tbody>
+        <tbody>{bookWeeks.map(w=>{const e=L[w];return(<tr key={w} onClick={()=>{setWeek(w);setView("week");}} style={{cursor:"pointer"}}><td style={{...tc,fontWeight:600,whiteSpace:"nowrap"}}>{dayTxt(w)}</td><td style={{...tc,color:e.opening<0?"#DA1E28":undefined}}>{bfTxt(e.opening)}</td><td style={{...tc,color:"#24A148"}}>{fmt(e.collected)}</td><td style={tc}>{fmt(e.used)}</td><td style={{...tc,fontWeight:700,color:e.left<0?"#DA1E28":"#161616"}}>{leftTxt(e.left)}{!e.fixed&&<div style={{fontSize:10,color:"#8D8D8D",fontWeight:400}}>estimate</div>}</td><td style={tc}>{e.voucher?statusPill(e.voucher):<span style={{color:"#B45309",fontSize:12}}>no voucher</span>}</td></tr>);})}</tbody>
         <tfoot><tr style={{background:"#F4F4F4",fontWeight:700}}><td style={tc}>Total</td><td style={tc}/><td style={tc}>{fmt(impSum(bookWeeks,w=>L[w].collected))}</td><td style={tc}>{fmt(impSum(bookWeeks,w=>L[w].used))}</td><td style={tc}/><td style={tc}/></tr></tfoot>
       </table></div>}
     </div>}
@@ -5276,8 +5285,10 @@ function FleetProAppInner(){
   const [imprestCashReady,setImprestCashReady]=useState(false);
   const [imprestReq,setImprestReq]=useState([]);   // cash requests (20261102_imprest_requests.sql)
   const [imprestReqReady,setImprestReqReady]=useState(false);
+  const [imprestCarry,setImprestCarry]=useState(false);   // overspend brought forward as a negative balance (20261106_imprest_overspend_bf.sql)
   useEffect(()=>{if(!user?.uid||!impCanSee(user))return;let live=true;(async()=>{
-    try{const rows=await db.getImprestVouchers();const ch=await db.getImprestChain();if(live){setImprest(rows.map(toIV));if(Array.isArray(ch)&&ch.length)setImprestChain(ch);setImprestReady(true);}}
+    try{const rows=await db.getImprestVouchers();const ch=await db.getImprestChain();const oc=await supabase.from("imprest_config").select("overspend_carried").limit(1);
+      if(live){setImprest(rows.map(toIV));if(Array.isArray(ch)&&ch.length)setImprestChain(ch);setImprestCarry(!oc.error);setImprestReady(true);}}
     catch(e){console.warn("Imprest not available:",e?.message);if(live)setImprestReady(false);}
     try{const rows=await db.getImprestCash();if(live){setImprestCash(rows.map(toIC));setImprestCashReady(true);}}
     catch(e){console.warn("Imprest cash not available:",e?.message);if(live)setImprestCashReady(false);}
@@ -5429,7 +5440,7 @@ function FleetProAppInner(){
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
         <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
-        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} users={users} vouchers={imprest} setVouchers={setImprest} cash={imprestCash} setCash={setImprestCash} cashReady={imprestCashReady} requests={imprestReq} setRequests={setImprestReq} requestsReady={imprestReqReady} chain={imprestChain} vehicles={vehicles} drivers={drivers} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady}/>:<Navigate to="/" replace/>}/>
+        <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} users={users} vouchers={imprest} setVouchers={setImprest} cash={imprestCash} setCash={setImprestCash} cashReady={imprestCashReady} requests={imprestReq} setRequests={setImprestReq} requestsReady={imprestReqReady} chain={imprestChain} vehicles={vehicles} drivers={drivers} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady} carry={imprestCarry}/>:<Navigate to="/" replace/>}/>
         <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady} gasPurchases={gasPurchases} setGasPurchases={setGasPurchases} supplyReady={gasSupplyReady} gasCounts={gasCounts} setGasCounts={setGasCounts} countsReady={gasCountsReady}/>}/>
         <Route path="/settings" element={<SettingsPage locations={locations} setLocations={setLocations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} vendorTypes={vendorTypes} setVendorTypes={setVendorTypes} users={users} setUsers={setUsers} user={user} setUser={setUser} appSettings={appSettings} setAppSettings={setAppSettings} dieselLocks={dieselLocks} setDieselLocks={setDieselLocks} imprestChain={imprestChain} setImprestChain={setImprestChain} imprestReady={imprestReady}/>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
