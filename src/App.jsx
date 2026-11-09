@@ -488,29 +488,39 @@ const changesAfterCounts=(audit,checks)=>{
 // order (dated on or before the delivery). Worked out from all the records every
 // time, so changing or deleting an older delivery re-flows the later ones.
 // Straight-to-store deliveries are charged to their own purchase only. Litres no
-// purchase can cover stay "uncovered" (e.g. diesel a count found). Before this no
-// purchase was over-delivered, so every older delivery keeps its own purchase.
+// purchase can cover stay "uncovered" (e.g. diesel a count found).
+// DIESEL STILL IN THE MAIN TANK CANNOT PAY FOR A TANKER DELIVERY (2026-11-09,
+// Makinde: STEM ENERGY was charged 33 L while all of it sat in the main tank and
+// the tanker still had 124 L). With the depotLedger passed in, each delivery only
+// sees what had left the main tank by the END OF ITS OWN DAY: the main tank's
+// balance that day is taken to be the NEWEST purchases (the oldest go out first),
+// so a later loading never reaches back to an earlier delivery.
 const _allocNone=[],_allocCache=new WeakMap();
-const allocateDeliveries=({purchases,deliveries,losses})=>{
-  const P=purchases||_allocNone,D=deliveries||_allocNone,L=losses||_allocNone;
-  const hit=_allocCache.get(D);if(hit&&hit.P===P&&hit.L===L)return hit.r;
+const allocateDeliveries=({purchases,deliveries,losses,ledger})=>{
+  const P=purchases||_allocNone,D=deliveries||_allocNone,L=losses||_allocNone,G=ledger||null;
+  const hit=_allocCache.get(D);if(hit&&hit.P===P&&hit.L===L&&hit.G===G)return hit.r;
   const byId={},room={};P.forEach(p=>{byId[p.id]=p;room[p.id]=(p.litresReceived??p.litres)||0;});
   L.forEach(l=>{if(l.purchaseId&&room[l.purchaseId]!=null)room[l.purchaseId]-=(l.litres||0);});
-  const byPurchase={},parts={},uncovered={},over=[];
+  const byPurchase={},parts={},uncovered={};
   const charge=(d,pid,l)=>{if(!(l>0))return;byPurchase[pid]=(byPurchase[pid]||0)+l;if(room[pid]!=null)room[pid]-=l;(parts[d.id]=parts[d.id]||[]).push({purchaseId:pid,litres:l});};
   const ord=(a,b)=>(a.date||"").localeCompare(b.date||"")||String(a.createdAt||"").localeCompare(String(b.createdAt||""));
+  const line=P.filter(p=>p.destination!=="direct"&&p.supplier!=="STOCK RECONCILIATION").sort(ord);
+  const mainOn={},heldBy={};if(G&&G.days)G.days.forEach(r=>{mainOn[r.date]=r.mainEnd;});
+  const heldOn=date=>{if(heldBy[date])return heldBy[date];const h={};   // litres of each purchase still in the main tank at the end of this day
+    if(G&&G.start&&date>=G.start){let m=Math.max(0,mainOn[date]??G.mainNow??0);
+      for(let i=line.length-1;i>=0&&m>0;i--){const q=line[i];if(q.destination==="tanker"||(q.date||"")>date)continue;const t=Math.min(m,(q.litresReceived??q.litres)||0);h[q.id]=t;m-=t;}}
+    return heldBy[date]=h;};
+  const free=(p,date)=>Math.max(0,room[p.id]-(heldOn(date)[p.id]||0));   // reached the diesel tanker and not yet charged
   [...D].sort(ord).forEach(d=>{if(!d.purchaseId)return;const l=d.litres||0,p=byId[d.purchaseId];
     if(!p||d.source==="direct"||p.destination==="direct"){charge(d,d.purchaseId,l);return;}   // a supplier's own delivery: that purchase only
-    const t=Math.min(l,Math.max(0,room[p.id]));charge(d,p.id,t);if(l-t>0.001)over.push([d,l-t]);});
-  const line=P.filter(p=>p.destination!=="direct"&&p.supplier!=="STOCK RECONCILIATION").sort(ord);
-  over.forEach(([d,rest])=>{const i=line.findIndex(p=>p.id===d.purchaseId);
-    for(const q of line.slice(i+1)){if(rest<=0.001||(q.date||"")>(d.date||""))break;const t=Math.min(rest,Math.max(0,room[q.id]));if(t>0){charge(d,q.id,t);rest-=t;}}
+    const t=Math.min(l,free(p,d.date));charge(d,p.id,t);let rest=l-t;if(rest<=0.001)return;   // strictly in date order: an earlier delivery's overflow comes before a later delivery
+    for(const q of line.slice(line.findIndex(x=>x.id===p.id)+1)){if(rest<=0.001||(q.date||"")>(d.date||""))break;const u=Math.min(rest,free(q,d.date));if(u>0){charge(d,q.id,u);rest-=u;}}
     if(rest>0.001)uncovered[d.id]=rest;});
-  const r={byPurchase,parts,uncovered,left:room};_allocCache.set(D,{P,L,r});return r;
+  const r={byPurchase,parts,uncovered,left:room};_allocCache.set(D,{P,L,G,r});return r;
 };
 // The purchase(s) a delivery was paid from, for the lists: the purchase itself, or
 // a stand-in {supplier:"BOVAS + SHARFA FILLING STATION", parts} when it spans several.
-const paidFromP=(d,purchases,deliveries,losses)=>{const ps=allocateDeliveries({purchases,deliveries,losses}).parts[d.id]||[];
+const paidFromP=(d,purchases,deliveries,stock)=>{const ps=allocateDeliveries({purchases,deliveries,...(stock||{})}).parts[d.id]||[];
   const ids=ps.length?ps.map(x=>x.purchaseId):(d.purchaseId?[d.purchaseId]:[]);const pp=ids.map(id=>(purchases||[]).find(p=>p.id===id)).filter(Boolean);
   if(pp.length<2)return pp[0]||null;return{...pp[0],supplier:[...new Set(pp.map(p=>p.supplier))].join(" + "),parts:ps};};
 // Each purchase's litres: received - delivered - accepted losses = left on the
@@ -520,7 +530,7 @@ const paidFromP=(d,purchases,deliveries,losses)=>{const ps=allocateDeliveries({p
 // "deliverable" = left - missing, and the Distribute auto-pick skips them.
 const purchaseStock=({purchases,deliveries,losses,ledger})=>{
   const del={},lost={};
-  Object.assign(del,allocateDeliveries({purchases,deliveries,losses}).byPurchase);   // diesel-tanker deliveries: first in, first out
+  Object.assign(del,allocateDeliveries({purchases,deliveries,losses,ledger}).byPurchase);   // diesel-tanker deliveries: first in, first out
   (losses||[]).forEach(l=>{if(l.purchaseId)lost[l.purchaseId]=(lost[l.purchaseId]||0)+(l.litres||0);});
   const byId={};
   (purchases||[]).forEach(p=>{const left=(p.litresReceived??p.litres)-(del[p.id]||0)-(lost[p.id]||0);byId[p.id]={left,lossAccepted:lost[p.id]||0,missing:0,deliverable:left};});
@@ -1783,7 +1793,7 @@ function SettingsPage({locations,setLocations,vehicleGroups,saveVehicleGroups,ve
 // ============================================
 // DIESEL LOG PAGE - Daily Staff Input
 // ============================================
-function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings,vehicles,dieselTransfers,setDieselTransfers,powerPeriods,setPowerPeriods,powerReady,storeTransfersReady,pansReady}){
+function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,dieselStock,user,locations,odoLog,setOdoLog,genBaselines,setGenBaselines,nepaPeriodLogs,setNepaPeriodLogs,dieselLocks,appSettings,vehicles,dieselTransfers,setDieselTransfers,powerPeriods,setPowerPeriods,powerReady,storeTransfersReady,pansReady}){
   const [pageTab,setPageTab]=useState("daily"); // daily | nepa
   const [step,setStep]=useState("select"); // select | input | review | done
   const [selGen,setSelGen]=useState("");
@@ -2544,7 +2554,7 @@ function DieselLogPage({generators,setGenerators,dieselReadings,setDieselReading
                 </div>))}
               {dayDists.length===0&&dayIncoming.length===0
                 ?<div style={{padding:"10px 12px",fontSize:11,color:"#8D8D8D",borderTop:"1px solid #E8ECF1"}}>No admin delivery recorded for this date. Diesel you receive from admin is added here automatically once you accept it.</div>
-                :dayDists.map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions);return(
+                :dayDists.map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions,dieselStock);return(
                   <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 12px",borderTop:"1px solid #F0F2F5"}}>
                     <div style={{minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</div>
@@ -3009,7 +3019,7 @@ function NepaPeriodSection({user,nepaPeriodLogs,setNepaPeriodLogs,locations,appS
 // ============================================
 // STAFF DASHBOARD PAGE - Supply, History, Generators, Reports
 // ============================================
-function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,user,dieselTransfers,setDieselTransfers,storeTransfersReady,gasCylinders,setGasCylinders,gasSupplyReady}){
+function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselDistributions,setDieselDistributions,dieselPurchases,dieselStock,user,dieselTransfers,setDieselTransfers,storeTransfersReady,gasCylinders,setGasCylinders,gasSupplyReady}){
   const [gasBusy,setGasBusy]=useState(false);   // accepting gas (banner below); before any early return
   const userStore=user?.store_location||"";
   const isStoreStaff=user?.role==="Store Staff";
@@ -3057,7 +3067,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
   const exportCSV=(type)=>{
     let csv="";
     if(type==="readings"){csv="Date,Generator,Open Hrs,Close Hrs,Hours Run,Diesel Level (L),Added (L),Consumed (L),Rate (L/hr),NEPA Open,NEPA Close,Discrepancy\n";rReadings.forEach(r=>{const g=generators.find(x=>x.id===r.generatorId);csv+=`${r.date},${g?.name||r.generatorId},${r.genHoursOpening??""},${r.genHoursClosing??""},${r.hoursRun||""},${r.dieselLevelActual!=null?r.dieselLevelActual:""},${r.dieselAdded||""},${r.usedL||""},${r.rateL!=null?r.rateL.toFixed(2):""},${r.nepaMeterOpening??""},${r.nepaMeterClosing??""},${r.discrepancyFlag?"YES":"NO"}\n`;});}
-    else{csv="Date,Litres,Supplier,Notes,Status\n";rDists.forEach(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions);csv+=`${d.date},${d.litres},${p?.supplier||""},${(d.notes||"").replace(/,/g," ")},${d.confirmed?"Confirmed":"Pending"}\n`;});}
+    else{csv="Date,Litres,Supplier,Notes,Status\n";rDists.forEach(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions,dieselStock);csv+=`${d.date},${d.litres},${p?.supplier||""},${(d.notes||"").replace(/,/g," ")},${d.confirmed?"Confirmed":"Pending"}\n`;});}
     const blob=new Blob([csv],{type:"text/csv"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${myStore||"all"}_${type}_${rFrom}_to_${rTo}.csv`;a.click();URL.revokeObjectURL(url);
   };
   const exportPDF=(type)=>{
@@ -3072,7 +3082,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
     }else{
       html+="<div class=\"summary\"><div><div>Total Received</div><div class=\"val\">"+rTotalReceived.toFixed(1)+" L</div></div><div><div>Deliveries</div><div class=\"val\">"+rDists.length+"</div></div></div>";
       html+="<table><thead><tr><th>Date</th><th>Litres</th><th>Supplier</th><th>Notes</th><th>Status</th></tr></thead><tbody>";
-      rDists.forEach(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions);html+="<tr><td>"+d.date+"</td><td>"+d.litres+" L</td><td>"+(p?.supplier||"\u2014")+"</td><td>"+(d.notes||"\u2014")+"</td><td>"+(d.confirmed?"Confirmed":"Pending")+"</td></tr>";});
+      rDists.forEach(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions,dieselStock);html+="<tr><td>"+d.date+"</td><td>"+d.litres+" L</td><td>"+(p?.supplier||"\u2014")+"</td><td>"+(d.notes||"\u2014")+"</td><td>"+(d.confirmed?"Confirmed":"Pending")+"</td></tr>";});
       html+="</tbody></table>";
     }
     html+="</body></html>";
@@ -3104,7 +3114,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
       </>):(<>
         {rDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
         :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Supplier","Notes","Status"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead>
-        <tbody>{rDists.map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?.supplier||"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td></tr>);})}</tbody></table>}
+        <tbody>{rDists.map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions,dieselStock);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?.supplier||"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td></tr>);})}</tbody></table>}
       </>)}
     </div>
   </div>);}
@@ -3167,7 +3177,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
           </div>
           {!readOnly&&pendingRecent.length>1&&<button onClick={()=>acceptAll(pendingRecent)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Accept all</button>}
         </div>
-        <div>{pendingRecent.slice(0,6).map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions);return(
+        <div>{pendingRecent.slice(0,6).map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions,dieselStock);return(
           <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 16px",borderTop:"1px solid #D0E2FF"}}>
             <div style={{minWidth:0}}>
               <div style={{fontSize:13,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L <span style={{fontWeight:500,color:"#8D8D8D",fontSize:11}}>· {d.date}</span></div>
@@ -3209,7 +3219,7 @@ function StaffDashboardPage({generators,dieselReadings,setDieselReadings,dieselD
     {dashTab==="supply"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Diesel Received</h4></div>
       {myDists.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No deliveries in this period</div>
-      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{!d.confirmed&&!readOnly&&<button onClick={()=>acceptDelivery(d)} style={{padding:"5px 12px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer"}}>Accept Delivery</button>}</td></tr>);})}</tbody></table>}
+      :<table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Litres","Source","Notes","Status",""].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{myDists.map(d=>{const p=paidFromP(d,dieselPurchases,dieselDistributions,dieselStock);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:700,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{p?p.supplier:"\u2014"}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{!d.confirmed&&!readOnly&&<button onClick={()=>acceptDelivery(d)} style={{padding:"5px 12px",borderRadius:6,border:"none",background:"#24A148",color:"#fff",fontSize:11,fontWeight:600,cursor:"pointer"}}>Accept Delivery</button>}</td></tr>);})}</tbody></table>}
     </div>)}
     {/* History Tab */}
     {dashTab==="history"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
@@ -4610,7 +4620,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const excessPct=totalPurchased>0&&stockInHand<0?Math.abs(stockInHand)/totalPurchased*100:0;
   const pricedLitres=realPurchases.filter(p=>(p.pricePerL||0)>0).reduce((s,p)=>s+p.litres,0);
   const avgPrice=pricedLitres>0?(totalSpent/pricedLitres):0;
-  const alloc=allocateDeliveries({purchases:dieselPurchases,deliveries:dieselDistributions,losses});   // who paid for each delivery (first in, first out)
+  // Physical stock right now (main tank + tanker), for the Distribute warning and the overview.
+  const depot=depotLedger({checks:stockChecks||[],loads:tankerLoads||[],purchases:dieselPurchases,deliveries:dieselDistributions,losses:losses||[],today:ngDate(Date.now())});
+  const alloc=allocateDeliveries({purchases:dieselPurchases,deliveries:dieselDistributions,losses:losses||[],ledger:depot});   // who paid for each delivery (first in, first out)
   const purchaseDistributed=(pid)=>alloc.byPurchase[pid]||0;
   const lostOn=(pid)=>(losses||[]).filter(l=>l.purchaseId===pid).reduce((s,l)=>s+l.litres,0);   // accepted losses
   const purchaseRemaining=(p)=>receivedOf(p)-purchaseDistributed(p.id)-lostOn(p.id);  // on the books: received - delivered - accepted losses
@@ -4618,8 +4630,6 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   // diesel and runs on into the next ones (allocateDeliveries) -- the diesel in the
   // tanker is mixed, so nobody picks a purchase. Straight-from-a-supplier deliveries
   // still name their purchase.
-  // Physical stock right now (main tank + tanker), for the Distribute warning and the overview.
-  const depot=depotLedger({checks:stockChecks||[],loads:tankerLoads||[],purchases:dieselPurchases,deliveries:dieselDistributions,losses:losses||[],today:ngDate(Date.now())});
   const pstock=purchaseStock({purchases:dieselPurchases,deliveries:dieselDistributions,losses:losses||[],ledger:depot});
   stockInHand+=depot.netVar||0;   // the counts' variances not yet signed off (accepted losses are already out)
   const deliverableOf=p=>pstock.byId[p.id]?pstock.byId[p.id].deliverable:purchaseRemaining(p);   // left minus litres pinned as missing
@@ -4630,7 +4640,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   // What a new diesel-tanker delivery would be paid from -- the same allocateDeliveries the books use
   const distPreview=(litres,date)=>{const start=oldestWithDiesel();const sp=dieselPurchases.find(p=>p.id===start);const late=sp&&date&&(sp.date||"")>date?sp:null;   // bought AFTER this delivery's date: a date is wrong somewhere
     if(!(litres>0))return{start,late,parts:[],uncovered:0};if(!start)return{start,late,parts:[],uncovered:litres};
-    const al=allocateDeliveries({purchases:dieselPurchases,deliveries:[...dieselDistributions,{id:"__new",purchaseId:start,date,litres,source:"tanker",createdAt:"~"}],losses});
+    const al=allocateDeliveries({purchases:dieselPurchases,deliveries:[...dieselDistributions,{id:"__new",purchaseId:start,date,litres,source:"tanker",createdAt:"~"}],losses:losses||[],ledger:depot});
     return{start,late,parts:al.parts.__new||[],uncovered:al.uncovered.__new||0};};
   const storeStats=locations.map(loc=>{
     const dist=dieselDistributions.filter(d=>d.storeLoc===loc);
@@ -4668,11 +4678,12 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     const fromSupplier=routesReady&&distSource==="direct";
     if(fromSupplier&&!distPurchaseId){setMsg("Error: Choose the purchase the supplier delivered.");return;}
     // warn (never block) when the tanker can't hold what is being delivered: usually a loading not recorded yet
-    if(routesReady&&!fromSupplier&&depot.start&&litres>Math.max(0,depot.tankerNow)&&!confirm("The diesel tanker only has "+Math.max(0,depot.tankerNow).toLocaleString()+" L on record, and this delivery is "+litres.toLocaleString()+" L.\n\nWas a loading or a purchase into the diesel tanker not recorded yet? (Daily stock -> Load diesel tanker, or Log Purchase -> Into the diesel tanker)\n\nSave the delivery anyway?"))return;
+    const tankerShort=routesReady&&!fromSupplier&&depot.start&&litres>Math.max(0,depot.tankerNow);
+    if(tankerShort&&!confirm("The diesel tanker only has "+Math.max(0,depot.tankerNow).toLocaleString()+" L on record, and this delivery is "+litres.toLocaleString()+" L.\n\nWas a loading or a purchase into the diesel tanker not recorded yet? (Daily stock -> Load diesel tanker, or Log Purchase -> Into the diesel tanker)\n\nSave the delivery anyway?"))return;
     if(fromSupplier){const p=dieselPurchases.find(x=>x.id===distPurchaseId);if(p&&litres>purchaseRemaining(p)){setMsg("Error: Only "+purchaseRemaining(p).toLocaleString()+" L left on "+p.supplier+" ("+p.date+").");return;}}
     const pv=fromSupplier?null:distPreview(litres,df.date);
     if(pv&&pv.late&&!confirm("The oldest purchase with diesel left, "+pv.late.supplier+", was bought on "+pv.late.date+" - AFTER this delivery's date ("+df.date+").\n\nIs the delivery date or the purchase date wrong? This delivery will be paid from "+pv.late.supplier+".\n\nSave the delivery anyway?"))return;
-    if(pv&&pv.uncovered>0&&!confirm(Math.round(pv.uncovered).toLocaleString()+" L of this delivery is not covered by any purchase on the books"+(pv.start?" dated on or before "+df.date:"")+".\n\nWas a purchase not logged yet, or logged with a later date? Log or correct it and this delivery is paid from it automatically.\n\nSave the delivery anyway?"))return;
+    if(pv&&pv.uncovered>0&&!tankerShort&&!confirm(Math.round(pv.uncovered).toLocaleString()+" L of this delivery is not covered by any purchase that had reached the diesel tanker by "+df.date+".\n\nWas a purchase or a loading not recorded yet, or recorded with a later date? Correct it and this delivery is paid from it automatically.\n\nSave the delivery anyway?"))return;
     setSaving(true);setMsg("");
     try{
       const row=await db.addDieselDistribution(fromDD2({purchaseId:fromSupplier?distPurchaseId:pv.start,date:df.date,storeLoc:df.storeLoc,litres,notes:df.notes,distributedBy:user.uid,...(routesReady?{source:fromSupplier?"direct":"tanker"}:{})}));
@@ -4993,7 +5004,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
       if(adj)return(<tr key={p.id} style={{background:"#FFF8F0"}}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}><span style={{display:"inline-flex",alignItems:"center",gap:6}}>Stock reconciliation<span style={{fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:4,background:"#FFE8D6",color:"#FF832B"}}>ADJUSTMENT</span></span></td><td style={{...tc,color:"#8D8D8D"}} colSpan={4}>{p.notes||"Physical stock take baseline"}</td><td style={tc}>—</td><td style={{...tc,fontWeight:600,color:p.litres>=0?"#24A148":"#DA1E28"}}>{p.litres>=0?"+":""}{p.litres.toLocaleString()} L</td><td style={tc}>—</td><td style={{...tc,fontSize:11,color:"#8D8D8D"}} title="Stock reconciliations are permanent. To correct one, record a new stock take.">permanent</td></tr>);
       return(<tr key={p.id}><td style={{...tc,whiteSpace:"nowrap"}}>{p.date}</td><td style={{...tc,fontWeight:600}}>{p.supplier}{isDirect(p)&&<div style={{fontSize:10,fontWeight:600,color:"#FF832B"}}>straight to stores</div>}{p.destination==="tanker"&&<div style={{fontSize:10,fontWeight:600,color:"#8A3FFC"}}>into the diesel tanker</div>}</td><td style={tc}>{p.litres.toLocaleString()}</td><td style={tc}>{p.litresReceived!=null?recv.toLocaleString():<span style={{color:"#8D8D8D"}}>{recv.toLocaleString()}</span>}</td><td style={tc}>{exc>0?<span style={{color:"#24A148",fontWeight:600}}>+{exc.toLocaleString()}</span>:exc<0?<span style={{color:"#DA1E28",fontWeight:600}}>{exc.toLocaleString()}</span>:"—"}</td><td style={tc}>{p.pricePerL>0?fmt(p.pricePerL):<span style={{color:"#8D8D8D"}}>no price</span>}</td><td style={{...tc,fontWeight:600}}>{p.pricePerL>0?fmt(p.litres*p.pricePerL):"—"}</td><td style={tc}>{dist.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:rem>0?"#FF832B":"#24A148"}}>{rem.toLocaleString()} L</span>{lossBadges(p)}</td><td style={tc}>{canManage&&<div style={{display:"flex",gap:4}}>{rem>0&&<button onClick={()=>{const dir=isDirect(p);setDistSource(dir?"direct":"tanker");setDistPurchaseId(dir?p.id:null);setDistAuto(!dir);setDf({date:today,storeLoc:"",litres:dir?String(rem):"",notes:""});setShowDistribute(true);}} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Distribute</button>}<button onClick={()=>setEditPurchase({id:p.id,date:p.date,supplier:p.supplier||"",litres:String(p.litres),litresReceived:p.litresReceived!=null?String(p.litresReceived):"",pricePerL:p.pricePerL?String(p.pricePerL):"",dest:p.destination,locked:!superUser&&lock.purchase(p)})} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Pencil size={12} color="#525252"/></button>{!superUser&&lock.purchase(p)?lockTag:<button onClick={()=>handleDeletePurchase(p.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button>}</div>}</td></tr>);})}</tbody></table></div>)}
     {tab==="distributions"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Date","Store","Litres","Source Purchase","Notes","Status","Actions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{dieselDistributions.length===0?<tr><td colSpan={7} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No distributions recorded yet</td></tr>:dieselDistributions.map(d=>{const p=dieselPurchases.find(x=>x.id===d.purchaseId);return(<tr key={d.id}><td style={tc}>{d.date}</td><td style={{...tc,fontWeight:600}}>{d.storeLoc}</td><td style={{...tc,fontWeight:600,color:P}}>{d.litres.toLocaleString()} L</td><td style={tc}>{(()=>{const ps=alloc.parts[d.id]||[],un=alloc.uncovered[d.id]||0;if(ps.length<2&&!un)return p?p.supplier+" ("+p.date+")":"\u2014";const nm=id=>{const q=dieselPurchases.find(x=>x.id===id);return q?q.supplier+" ("+q.date+")":"?";};
-        return(<div>{ps.map(x=>(<div key={x.purchaseId} style={{whiteSpace:"nowrap"}}>{nm(x.purchaseId)} <span style={{color:"#8D8D8D"}}>{Math.round(x.litres).toLocaleString()} L</span></div>))}{un>0&&<div style={{color:"#B45309",whiteSpace:"nowrap"}}>{Math.round(un).toLocaleString()} L not from a purchase</div>}</div>);})()}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{canManage&&(!superUser&&lock.delivery(d)?lockTag:<div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div>)}</td></tr>);})}</tbody></table></div>)}
+        return(<div>{ps.map(x=>(<div key={x.purchaseId} style={{whiteSpace:"nowrap"}}>{nm(x.purchaseId)} <span style={{color:"#8D8D8D"}}>{Math.round(x.litres).toLocaleString()} L</span></div>))}{un>0&&<div title="More diesel left the diesel tanker than the purchases loaded into it by this date can cover" style={{color:"#B45309",whiteSpace:"nowrap"}}>{Math.round(un).toLocaleString()} L not from a purchase</div>}</div>);})()}</td><td style={tc}>{d.notes||"\u2014"}</td><td style={tc}><Badge label={d.confirmed?"Confirmed":"Pending"}/></td><td style={tc}>{canManage&&(!superUser&&lock.delivery(d)?lockTag:<div style={{display:"flex",gap:4}}><button onClick={()=>setEditDist({...d})} style={{padding:"4px 10px",borderRadius:5,border:"1px solid "+P,background:"#D0E2FF",cursor:"pointer",fontSize:11,fontWeight:600,color:P}}>Edit</button><button onClick={()=>handleDeleteDistribution(d.id)} style={{padding:"4px 8px",borderRadius:5,border:"1px solid #E0E0E0",background:"#fff",cursor:"pointer"}}><Trash2 size={12} color="#DA1E28"/></button></div>)}</td></tr>);})}</tbody></table></div>)}
     {tab==="stores"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#F4F4F4"}}>{["Store","Received (L)","Consumed (L)","Balance (L)","Distributions"].map(h=>(<th key={h} style={th}>{h}</th>))}</tr></thead><tbody>{storeStats.length===0?<tr><td colSpan={5} style={{...tc,textAlign:"center",color:"#8D8D8D",padding:30}}>No store data yet</td></tr>:storeStats.map(s=>(<tr key={s.loc}><td style={{...tc,fontWeight:600}}>{s.loc}</td><td style={{...tc,color:P,fontWeight:600}}>{s.received.toLocaleString()} L</td><td style={tc}>{s.consumed.toLocaleString()} L</td><td style={tc}><span style={{fontWeight:600,color:s.balance>=0?"#24A148":"#DA1E28"}}>{s.balance.toLocaleString()} L</span></td><td style={tc}>{s.distCount}</td></tr>))}</tbody></table></div>)}
     {tab==="baselines"&&(<div style={{background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",overflow:"hidden"}}>
       <div style={{padding:"16px 20px",borderBottom:"1px solid #E8ECF1",display:"flex",justifyContent:"space-between",alignItems:"center"}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>Generator Baselines</h4><div style={{fontSize:11,color:"#8D8D8D"}}>Auto-learned from staff readings</div></div>
@@ -5243,9 +5254,9 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           <div style={{fontSize:11,color:"#8D8D8D",marginBottom:4}}>Paid for from {want>0?"":"(oldest purchase first)"}</div>
           {want>0?<>{pv.parts.map(x=>(<div key={x.purchaseId} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:13}}><span style={{fontWeight:600}}>{nm(x.purchaseId)}</span><span>{Math.round(x.litres).toLocaleString()} L</span></div>))}
             {pv.late&&<div style={{fontSize:12,color:"#B45309",marginTop:4}}>{pv.late.supplier} was bought on {pv.late.date}, after this delivery's date. Check the dates.</div>}
-            {pv.uncovered>0&&<div style={{fontSize:12,color:"#B45309",marginTop:4}}><b>{Math.round(pv.uncovered).toLocaleString()} L</b> is not covered by any purchase on the books{pv.start?" dated on or before "+df.date:""}. Log the purchase first (or correct its date).</div>}</>
+            {pv.uncovered>0&&<div style={{fontSize:12,color:"#B45309",marginTop:4}}><b>{Math.round(pv.uncovered).toLocaleString()} L</b> is not covered by any purchase that had reached the diesel tanker by {df.date}. Record the loading or the purchase first (or correct its date).</div>}</>
           :<div style={{fontSize:13}}>{queue.length?queue.slice(0,3).map(q=>q.supplier+" ("+q.date+") "+Math.round(deliverableOf(q)).toLocaleString()+" L left").join(", then "):"No purchase has diesel left on the books. Log the purchase first."}</div>}
-          <div style={{fontSize:11,color:"#8D8D8D",marginTop:6}}>The diesel in the tanker is mixed, so a delivery is paid for from the oldest purchase first; when that one runs out, the rest comes from the next one.</div>
+          <div style={{fontSize:11,color:"#8D8D8D",marginTop:6}}>The diesel in the tanker is mixed, so a delivery is paid for from the oldest purchase first; when that one runs out, the rest comes from the next one. Diesel still in the main tank is not touched until it is loaded.</div>
         </div>);})()
       :<>{distPurchaseId&&!distAuto&&(()=>{const p=dieselPurchases.find(x=>x.id===distPurchaseId);return p?<div style={{padding:"10px 14px",borderRadius:8,background:"#F4F4F4",marginBottom:14}}><div style={{fontSize:11,color:"#8D8D8D"}}>From Purchase</div><div style={{fontSize:13,fontWeight:600}}>{p.supplier} - {p.date} - {purchaseRemaining(p).toLocaleString()} L remaining</div></div>:null;})()}
       {(!distPurchaseId||distAuto)&&<Field label="Which purchase did the supplier deliver?"><select style={inp} value={distPurchaseId||""} onChange={e=>{setDistPurchaseId(e.target.value||null);setDistAuto(true);}}><option value="">-- Choose the purchase --</option>{dieselPurchases.filter(p=>!isAdj(p)&&isDirect(p)&&purchaseRemaining(p)>0).map(p=>(<option key={p.id} value={p.id}>{p.supplier} ({p.date}) - {purchaseRemaining(p).toLocaleString()} L left</option>))}</select></Field>}
@@ -5377,9 +5388,11 @@ function FleetProAppInner(){
     catch(e){console.warn("Accepted losses not available:",e?.message);if(live)setLossesReady(false);}
   })();return()=>{live=false;};},[user?.uid]);
   // Main tank / tanker variance for the Dashboard's Needs attention list.
-  const depotAlert=useMemo(()=>{if(!depotReady)return null;const l=depotLedger({checks:stockChecks,loads:tankerLoads,purchases:dieselPurchases,deliveries:dieselDistributions,losses:dieselLosses,today:ngDate(Date.now())});
+  const dieselLedger=useMemo(()=>depotReady?depotLedger({checks:stockChecks,loads:tankerLoads,purchases:dieselPurchases,deliveries:dieselDistributions,losses:dieselLosses,today:ngDate(Date.now())}):null,[depotReady,stockChecks,tankerLoads,dieselPurchases,dieselDistributions,dieselLosses]);
+  const dieselStock=useMemo(()=>({losses:dieselLosses,ledger:dieselLedger}),[dieselLosses,dieselLedger]);   // the store pages' "paid for from" uses the same books
+  const depotAlert=useMemo(()=>{if(!dieselLedger)return null;const l=dieselLedger;
     const lc=l.counts&&l.counts.length?l.counts[l.counts.length-1].date:null;
-    return{net:l.netVar||0,date:lc};},[depotReady,stockChecks,tankerLoads,dieselPurchases,dieselDistributions,dieselLosses]);
+    return{net:l.netVar||0,date:lc};},[dieselLedger]);
   useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
     const[a,b,c,d]=await Promise.all([supabase.from("diesel_purchases").select("destination").limit(1),supabase.from("diesel_distributions").select("source").limit(1),supabase.from("diesel_transfers").select("dest_store").limit(1),supabase.from("diesel_readings").select("pans_fired").limit(1)]);
     if(live){setRoutesReady(!a.error&&!b.error);setStoreTransfersReady(!c.error);setPansReady(!d.error);}
@@ -5480,8 +5493,8 @@ function FleetProAppInner(){
     <main style={{marginLeft:sw,padding:mob?"14px 10px":"20px 24px",transition:"margin-left 0.2s",minHeight:"calc(100vh - 56px)"}}>
       <Routes>
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders} imprestAlerts={imprestAlerts}/>}/>
-        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady} pansReady={pansReady}/>}/>
-        <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasSupplyReady={gasSupplyReady}/>}/>
+        <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} dieselStock={dieselStock} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady} pansReady={pansReady}/>}/>
+        <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} dieselStock={dieselStock} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasSupplyReady={gasSupplyReady}/>}/>
         <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
