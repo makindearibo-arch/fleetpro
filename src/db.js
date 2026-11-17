@@ -325,6 +325,25 @@ export const db = {
   async addPowerPeriod(p) { return insertRow('power_periods', p); },
   async updatePowerPeriod(id, p) { return updateRow('power_periods', id, p); },
   async deletePowerPeriod(id) { return deleteRow('power_periods', id); },
+  // NEPA (PHCN) supply hours per store per day (20261117_nepa_supply.sql). The
+  // probe throws while the table does not exist, so the app can tell "not
+  // switched on yet" from "nothing entered" (fetchAll swallows errors).
+  async getNepaSupply() {
+    const { error } = await supabase.from('nepa_supply').select('id').limit(1);
+    if (error) throw error;
+    return fetchAll('nepa_supply', 'date', true);
+  },
+  async saveNepaSupply(rows) {   // one row per store + day: saving again updates it
+    const { data, error } = await supabase.from('nepa_supply').upsert(rows, { onConflict: 'store_location,date' }).select();
+    if (error) { console.error('Error saving NEPA supply hours:', error); throw friendlyError(error, 'save'); }
+    if (!data || data.length !== rows.length) throw new Error("Not all saved: you may not have permission to change NEPA hours.");
+    return data;
+  },
+  async deleteNepaSupply(ids) {
+    const { data, error } = await supabase.from('nepa_supply').delete().in('id', ids).select('id');
+    if (error) { console.error('Error deleting NEPA supply hours:', error); throw friendlyError(error, 'delete'); }
+    if (!data || data.length !== ids.length) throw new Error("Not all deleted: you may not have permission to change NEPA hours.");
+  },
 
   // Daily stock: main tank / tanker gauge readings and tanker loadings.
   async getStockChecks() { return fetchAll('diesel_stock_checks', 'date', true); },

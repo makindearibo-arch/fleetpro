@@ -39,6 +39,7 @@ const toGAS=(r)=>({id:r.id,storeLoc:r.store_location,purchaseDate:r.purchase_dat
   purchaseId:r.purchase_id||null,received:r.received_confirmed!==false,receivedDate:r.received_date||null,receivedBy:r.received_by||null});   // received: false only for gas sent but not yet accepted
 const toGSC=(r)=>({id:r.id,date:r.date,kgEach:Number(r.kg_each)||0,cylinders:Number(r.cylinders)||0,notes:r.notes||"",createdAt:r.created_at});
 const toGP=(r)=>({id:r.id,date:r.date,supplier:r.supplier||"",cylinders:Number(r.cylinders)||0,kgEach:Number(r.kg_each)||0,cost:r.cost!=null?Number(r.cost):null,notes:r.notes||"",createdAt:r.created_at});
+const toNS=(r)=>({id:r.id,storeLoc:r.store_location,date:r.date,hours:Number(r.hours),notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const toPW=(r)=>({id:r.id,storeLoc:r.store_location,onAt:r.on_at,offAt:r.off_at||null,notes:r.notes||"",recordedBy:r.recorded_by,createdAt:r.created_at});
 const fromNPL=(d)=>({store_location:d.storeLoc,from_date:d.fromDate,to_date:d.toDate,total_hours:d.totalHours||null,meter_opening:d.meterOpening,meter_closing:d.meterClosing,photo_url:d.photoUrl||"",notes:d.notes||"",submitted_by:d.submittedBy||null});
 const toLOCK=(r)=>({id:r.id,storeLoc:r.store_location||null,fromDate:r.from_date,toDate:r.to_date,reason:r.reason||"",lockedBy:r.locked_by,createdAt:r.created_at});
@@ -356,6 +357,63 @@ const atLocal=(date,hm)=>new Date(date+"T"+hm+":00+01:00").getTime();
 // equals the meter difference is treated as "no hours recorded".
 const nplUnits=n=>(n&&n.meterOpening!=null&&n.meterClosing!=null)?Math.round((n.meterClosing-n.meterOpening)*10)/10:null;
 const nplHours=n=>{const u=nplUnits(n);return(n&&n.totalHours&&!(u!=null&&Math.abs(n.totalHours-u)<0.05))?n.totalHours:null;};
+// NEPA (PHCN) vs GENERATOR (2026-11-17, Makinde; PHCN = NEPA, the grid). For
+// each store and day: the hours PHCN says it supplied (nepa_supply -- typed or
+// pasted from Internal Control's PHCN analysis), the hours the store recorded
+// itself (the power on/off log, else that day's NEPA meter entry, else the daily
+// reading's NEPA hours; 0 = not recorded) and the generator hours from the
+// readings. A day only has 24 hours, so PHCN + generator over 24 means the
+// generator ran while PHCN says power was on ("overlap"), counted from
+// OVERLAP_MIN_H (the sheet's figures are rounded). Not judged: a reading whose
+// hours cover several days (the generator was not logged the day before) and a
+// thousands-of-hours (Kh) meter (10-hour steps). PHCN's hours are per FEEDER, so
+// a store can be without usable power while its feeder is on -- a question to
+// ask, not proof.
+const OVERLAP_MIN_H=1;
+const corrOf=(xs,ys)=>{const n=xs.length;if(n<5)return null;const mx=xs.reduce((a,b)=>a+b,0)/n,my=ys.reduce((a,b)=>a+b,0)/n;let sxy=0,sxx=0,syy=0;
+  for(let i=0;i<n;i++){sxy+=(xs[i]-mx)*(ys[i]-my);sxx+=(xs[i]-mx)**2;syy+=(ys[i]-my)**2;}return sxx>0&&syy>0?Math.round(sxy/Math.sqrt(sxx*syy)*100)/100:null;};
+const followWord=r=>r==null?"-":r<=-0.7?"Yes":r<=-0.4?"Partly":"No";
+const powerCheck=({readings,generators,baselines,supply,powerPeriods,nepaLogs,stores,from,to})=>{
+  const inStore=st=>!stores||!stores.length||stores.includes(st);
+  const gm=new Map((generators||[]).map(g=>[g.id,g]));const isGen=id=>{const g=gm.get(id);return!!g&&g.assetType!=="oven";};
+  const bl={};(baselines||[]).forEach(b=>{bl[b.generator_id]=Number(b.avg_litres_per_hour)||null;});
+  const sup={};(supply||[]).forEach(x=>{sup[x.storeLoc+"|"+x.date]=x;});
+  const pw=powerHoursByDay(powerPeriods);
+  const npl={};(nepaLogs||[]).forEach(n=>{if(n.fromDate===n.toDate)npl[n.storeLoc+"|"+n.toDate]=n;});
+  const prevOf={},byGen={};(readings||[]).forEach(r=>{if(isGen(r.generatorId))(byGen[r.generatorId]=byGen[r.generatorId]||[]).push(r);});
+  Object.values(byGen).forEach(a=>{a.sort((x,y)=>x.date.localeCompare(y.date)||String(x.createdAt||"").localeCompare(String(y.createdAt||"")));a.forEach((r,i)=>{prevOf[r.id]=i?a[i-1].date:null;});});
+  const rd={};(readings||[]).forEach(r=>{if(r.date>=from&&r.date<=to&&isGen(r.generatorId)&&inStore(r.storeLoc))(rd[r.storeLoc+"|"+r.date]=rd[r.storeLoc+"|"+r.date]||[]).push(r);});
+  const keys=new Set([...Object.keys(rd),...(supply||[]).filter(x=>x.date>=from&&x.date<=to&&inStore(x.storeLoc)).map(x=>x.storeLoc+"|"+x.date)]);
+  const gapDays=(a,b)=>Math.round((new Date(b+"T12:00:00Z")-new Date(a+"T12:00:00Z"))/864e5);
+  const r1=x=>x==null?null:Math.round(x*10)/10;
+  const days=[...keys].map(k=>{const i=k.lastIndexOf("|");const store=k.slice(0,i),date=k.slice(i+1);const rs=rd[k]||[];const x=sup[k];
+    const p=pw[k],n=npl[k];const rn=Math.max(0,...rs.map(r=>Number(r.nepaHours)||0));
+    let rec=p?{h:p.ms/36e5,src:"power log"}:(n&&nplHours(n)!=null)?{h:nplHours(n),src:"NEPA meter"}:rn>0?{h:rn,src:"daily reading"}:null;
+    let recNote="";if(rec&&rec.h>24){recNote="the store's NEPA hours ("+r1(rec.h)+") are over 24 - a typo";rec=null;}
+    const gen=rs.length?r1(rs.reduce((a,r)=>a+(Number(r.hoursRun)||0),0)):null;   // to 0.1 h, so the sums on screen add up
+    const kh=rs.some(r=>r.meterKh);
+    const covers=rs.reduce((m,r)=>{const pd=prevOf[r.id];return pd?Math.max(m,gapDays(pd,date)):m;},1);
+    const used=rs.length?rs.reduce((a,r)=>a+(r.usedL!=null?r.usedL:0),0):null;
+    const ran=rs.filter(r=>(Number(r.hoursRun)||0)>0&&bl[r.generatorId]);const hw=ran.reduce((a,r)=>a+Number(r.hoursRun),0);
+    const base=hw>0?ran.reduce((a,r)=>a+Number(r.hoursRun)*bl[r.generatorId],0)/hw:(rs.map(r=>bl[r.generatorId]).find(Boolean)||null);
+    const phcn=x?x.hours:null;
+    const judged=phcn!=null&&gen!=null&&!kh&&covers<=1;
+    const total=judged?phcn+gen:null;   // not shown for days that are not judged (several days of hours, Kh meter)
+    const overlap=judged?Math.max(0,total-24):null;
+    const flag=overlap!=null&&overlap>=OVERLAP_MIN_H;
+    const note=[!rs.length?"no generator reading":kh?"meter counts in thousands of hours (10-hour steps)":covers>1?"generator hours cover "+covers+" days (not logged the day before)":phcn==null?"no PHCN hours":"",recNote].filter(Boolean).join("; ");
+    return{store,date,phcn,rec:rec?r1(rec.h):null,recSrc:rec?rec.src:null,gen,kh,used:used!=null?Math.round(used):null,total:r1(total),
+      overlap:overlap!=null?r1(overlap):null,flag,overlapL:flag&&base?overlap*base:0,base,judged,note};})
+    .sort((a,b)=>b.date.localeCompare(a.date)||a.store.localeCompare(b.store));
+  const byS={};days.forEach(d=>{(byS[d.store]=byS[d.store]||[]).push(d);});
+  const avg=(arr,f)=>arr.length?r1(arr.reduce((t,d)=>t+f(d),0)/arr.length):null;
+  const storesOut=Object.entries(byS).map(([store,a])=>{const j=a.filter(d=>d.judged),ph=a.filter(d=>d.phcn!=null),fl=j.filter(d=>d.flag);
+    return{store,phcnDays:ph.length,judged:j.length,avgPhcn:avg(ph,d=>d.phcn),avgRec:avg(a.filter(d=>d.rec!=null),d=>d.rec),recDiff:avg(a.filter(d=>d.rec!=null&&d.phcn!=null),d=>d.rec-d.phcn),
+      avgGen:avg(j,d=>d.gen),overlapDays:fl.length,overlapH:r1(fl.reduce((t,d)=>t+d.overlap,0)),overlapL:fl.reduce((t,d)=>t+d.overlapL,0),r:corrOf(j.map(d=>d.phcn),j.map(d=>d.gen))};})
+    .sort((a,b)=>b.overlapH-a.overlapH||a.store.localeCompare(b.store));
+  const all=days.filter(d=>d.judged),fl=all.filter(d=>d.flag);
+  return{days,stores:storesOut,judged:all.length,overlapDays:fl.length,overlapH:r1(fl.reduce((t,d)=>t+d.overlap,0))||0,overlapL:fl.reduce((t,d)=>t+d.overlapL,0),r:corrOf(all.map(d=>d.phcn),all.map(d=>d.gen))};
+};
 // DAILY STOCK. Diesel moves main tank -> distribution tanker -> store tanks.
 // THE STOCK SHEET (Makinde, 2026-10-12 -- replaces "the books never take a
 // count" of 2026-10-08): like any stock sheet, a count BECOMES the stock. The main
@@ -1423,7 +1481,7 @@ function VendorsPage({vendors,setVendors,vendorTypes,canEdit}){
   </div>);
 }
 
-function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,vehicleGroups,gasCylinders}){
+function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,workOrders,fuelLogs,dieselReadings,dieselPurchases,dieselDistributions,dieselTransfers,vehicleGroups,gasCylinders,genBaselines,powerPeriods,nepaPeriodLogs,nepaSupply,nepaSupplyReady,user}){
   // The Dashboard's "Full report" link leaves a one-shot hint so this opens on
   // Diesel Usage with the same stores and dates. Read in the initialiser and
   // cleared in an effect (StrictMode calls initialisers twice in dev).
@@ -1434,6 +1492,8 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   useEffect(()=>{try{sessionStorage.removeItem("fp.reports.open");}catch(e){}},[]);
   const dieselStores=useMemo(()=>[...new Set((dieselReadings||[]).map(r=>r.storeLoc).filter(Boolean))].sort(),[dieselReadings]);
   const gasStores=useMemo(()=>[...new Set((gasCylinders||[]).map(c=>c.storeLoc).filter(Boolean))].sort(),[gasCylinders]);
+  const nepaStores=useMemo(()=>[...new Set([...dieselStores,...(nepaSupply||[]).map(x=>x.storeLoc)].filter(Boolean))].sort(),[dieselStores,nepaSupply]);
+  const [nepaView,setNepaView]=useState("phcn");   // NEPA vs Generator: days with PHCN hours | only over 24 h | all
   // Store scope for the diesel tabs. Like the vehicle Group, it only applies
   // where its control is visible -- an invisible filter would just look like
   // missing data on the other tabs.
@@ -1453,7 +1513,7 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const inGroupAsset=(assetId,isGen)=>!groupActive?true:(!isGen&&gvIds.has(assetId));
   const _rpNow=new Date();const _rpMonthStart=new Date(_rpNow.getFullYear(),_rpNow.getMonth(),1).toISOString().split("T")[0];
   const [dateFrom,setDateFrom]=useState(hint?.from||_rpMonthStart);const [dateTo,setDateTo]=useState(hint?.to||_rpNow.toISOString().split("T")[0]);const [fuelTypeFilter,setFuelTypeFilter]=useState("All");
-  const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselusage","Diesel Usage"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["gas","Cooking Gas"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
+  const tabs=[["fleet","Fleet Summary"],["fuel","Fuel Consumption"],["dieselusage","Diesel Usage"],["dieselcost","Diesel Cost"],["storecompare","Store Comparison"],["nepa","NEPA vs Generator"],["gas","Cooking Gas"],["maintenance","Maintenance & WO"],["driver","Driver Performance"]];
   // A row with no date is NOT in any date window. This used to return true,
   // so the 433 work orders with a blank `due` (imported history) passed every
   // date filter -- the Maintenance tab showed the same 432 Completed and the
@@ -1462,7 +1522,7 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   const fFL=fuelLogs.filter(f=>inRange(f.date)&&inGroupAsset(f.asset,f.isGen));
   const gWO=workOrders.filter(w=>!groupActive||(!w.isGen&&gvNames.has(w.asset)));
   const fWO=gWO.filter(w=>inRange(w.due));
-  const storeScoped=storeFilter.length>0&&(DIESEL_REPORTS.includes(report)||report==="gas");   // the Stores picker is shown on these
+  const storeScoped=storeFilter.length>0&&(DIESEL_REPORTS.includes(report)||report==="gas"||report==="nepa");   // the Stores picker is shown on these
   const inStores=s=>!storeScoped||storeFilter.includes(s);
   const fDRall=(dieselReadings||[]).filter(r=>inRange(r.date)&&inStores(r.storeLoc));
   const dieselExcluded=fDRall.filter(r=>(r.usedL||0)>IMPLAUSIBLE_READING_L);
@@ -1584,6 +1644,41 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
         </tbody></table></div>
       </div>
     </div>);};
+  const renderNepa=()=>{
+    if(!nepaSupplyReady)return(<div style={{...card,fontSize:13,color:"#525252"}}><b>Not switched on yet.</b> {user?.role==="Super Admin"?<>Run <code>supabase/migrations/20261117_nepa_supply.sql</code> in the Supabase SQL editor (it should end with 4 | 1), then refresh.</>:"The Super Admin has to switch on NEPA supply hours."}</div>);
+    const pc=powerCheck({readings:dieselReadings,generators:allGenerators,baselines:genBaselines,supply:nepaSupply,powerPeriods,nepaLogs:nepaPeriodLogs,stores:storeScoped?storeFilter:null,from:dateFrom,to:dateTo});
+    const f1=x=>x==null?"-":(Math.round(x*10)/10).toLocaleString();
+    const exBtn=(onClick,label)=>(<button onClick={onClick} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 12px",borderRadius:7,border:"1.5px solid #E0E0E0",background:"#fff",fontSize:11,fontWeight:600,cursor:"pointer",color:"#525252"}}><Download size={12}/>{label}</button>);
+    const sl=pc.stores.filter(x=>x.phcnDays>0);
+    const sHeaders=["Store","Days checked","NEPA - PHCN (avg h a day)","NEPA - store recorded (avg h a day)","Store minus PHCN (avg h)","Generator (avg h a day)","Days over 24 h","Generator hours while NEPA on","Diesel for those hours (L)","Generator follows NEPA"];
+    const sRows=sl.map(x=>[x.store,x.judged,f1(x.avgPhcn),f1(x.avgRec),x.recDiff==null?"-":(x.recDiff>0?"+":"")+f1(x.recDiff),f1(x.avgGen),x.overlapDays||"-",x.overlapH?f1(x.overlapH):"-",x.overlapL?"~"+Math.round(x.overlapL).toLocaleString():"-",x.r==null?"-":followWord(x.r)+" ("+x.r.toFixed(2)+")"]);
+    const shown=pc.days.filter(d=>nepaView==="all"?true:nepaView==="over"?d.flag:d.phcn!=null);
+    const dHeaders=["Date","Store","NEPA - PHCN (h)","NEPA - store recorded (h)","Recorded from","Generator (h)","Diesel used (L)","NEPA + generator (h)","Over 24 h by (h)","Note"];
+    const dRows=shown.map(d=>[d.date,d.store,f1(d.phcn),f1(d.rec),d.recSrc||"-",d.gen==null?"-":(d.kh?"~":"")+f1(d.gen),d.used==null?"-":d.used.toLocaleString(),f1(d.total),d.flag?f1(d.overlap):"-",d.note||""]);
+    const naira=pc.overlapL&&avgDieselPrice?fmt(Math.round(pc.overlapL*avgDieselPrice)):null;
+    return(<div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:window.innerWidth<768?"1fr 1fr":"repeat(4,1fr)",gap:14}}>
+        <Kpi icon={Calendar} label="Store-days Checked" value={pc.judged} sub="PHCN hours + a generator reading"/>
+        <Kpi icon={Zap} label="Generator On While NEPA Was On" value={f1(pc.overlapH)+" h"} sub={pc.overlapDays+" store-day"+(pc.overlapDays===1?"":"s")+" over 24 h"} accent={pc.overlapDays?"#DA1E28":undefined}/>
+        <Kpi icon={Fuel} label="Diesel for Those Hours" value={"~"+Math.round(pc.overlapL).toLocaleString()+" L"} sub={naira?"about "+naira+" at the average price":"at each generator's usual rate"}/>
+        <Kpi icon={TrendingDown} label="Generator Follows NEPA" value={followWord(pc.r)} sub={pc.r!=null?"correlation "+pc.r.toFixed(2)+" (-1 = perfect)":"needs 5 days or more"}/>
+      </div>
+      <div style={{...card,padding:"12px 16px",fontSize:12,color:"#525252",lineHeight:1.55}}>PHCN = NEPA. A day only has 24 hours, so <b>NEPA (PHCN) hours + generator hours over 24</b> means the generator ran while PHCN says power was on (counted from {OVERLAP_MIN_H} hour). PHCN's hours are for the whole feeder, so a store can still be without usable power while its feeder is on (low voltage, a fault on its line) - ask the store before concluding. Not judged: a day whose generator hours cover several days (it was not logged the day before), and Akure 4's meter, which counts in 10-hour steps. PHCN's hours are entered in Diesel Management → NEPA supply.</div>
+      {!sl.length?<div style={{...card,padding:24,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No PHCN hours entered for this period{storeScoped?" at the chosen stores":""}. Enter them in Diesel Management → NEPA supply (type them, or paste the PHCN analysis sheet).</div>:<>
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}><h4 style={{fontSize:14,fontWeight:700,margin:0}}>By store</h4><div style={{display:"flex",gap:6}}>{exBtn(()=>csvExport(sHeaders,sRows,"nepa-vs-generator-by-store"),"CSV")}{exBtn(()=>pdfExport("NEPA vs Generator by store, "+dateFrom+" to "+dateTo,sHeaders,sRows),"PDF")}</div></div>
+        <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:1050}}><thead><tr style={{background:"#F4F4F4"}}>{sHeaders.map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>
+          {sl.map((x,i)=>(<tr key={x.store} style={{background:x.overlapDays?"#FFF8F8":"transparent"}}>{sRows[i].map((v,j)=>(<td key={j} style={{...tc,whiteSpace:"nowrap",fontWeight:j===0?700:400,color:j>=6&&j<=8&&x.overlapDays?"#DA1E28":"#161616"}}>{v}</td>))}</tr>))}
+        </tbody></table></div>
+      </div>
+      <div style={card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}><div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}><h4 style={{fontSize:14,fontWeight:700,margin:"0 8px 0 0"}}>Day by day</h4>{[["phcn","Days with PHCN hours"],["over","Only over 24 h"],["all","All days"]].map(([v,l])=>(<button key={v} onClick={()=>setNepaView(v)} style={{padding:"5px 12px",borderRadius:6,border:nepaView===v?"1.5px solid "+P:"1.5px solid #E0E0E0",background:nepaView===v?"#D0E2FF":"#fff",color:nepaView===v?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>))}</div><div style={{display:"flex",gap:6}}>{exBtn(()=>csvExport(dHeaders,dRows,"nepa-vs-generator-days"),"CSV")}{exBtn(()=>pdfExport("NEPA vs Generator day by day, "+dateFrom+" to "+dateTo,dHeaders,dRows),"PDF")}</div></div>
+        <div style={{overflow:"auto",maxHeight:560}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:1100}}><thead><tr>{dHeaders.map(h=>(<th key={h} style={{...th,whiteSpace:"nowrap",position:"sticky",top:0,background:"#F4F4F4",zIndex:1}}>{h}</th>))}</tr></thead><tbody>
+          {shown.length===0?<tr><td colSpan={dHeaders.length} style={{...tc,textAlign:"center",color:"#8D8D8D"}}>Nothing to show</td></tr>
+          :shown.map((d,i)=>(<tr key={d.store+"|"+d.date} style={{background:d.flag?"#FFF8F8":"transparent"}}>{dRows[i].map((v,j)=>(<td key={j} style={{...tc,whiteSpace:j===9?"normal":"nowrap",fontWeight:j===1?600:(j===8&&d.flag)?700:400,color:(j===8&&d.flag)?"#DA1E28":(j===4||j===9)?"#6F6F6F":"#161616",fontSize:(j===4||j===9)?12:13}}>{v}</td>))}</tr>))}
+        </tbody></table></div>
+      </div></>}
+    </div>);};
   const renderStoreCompare=()=>{
     const byStore={};
     fDR.forEach(r=>{const s=byStore[r.storeLoc]=byStore[r.storeLoc]||{readings:0,hrs:0,litres:0,flags:0,evaluated:0,photo:0};s.readings++;s.hrs+=(r.hoursRun||0);s.litres+=(r.usedL||0);if(r.discrepancyLitres!=null)s.evaluated++;if(r.discrepancyFlag)s.flags++;if(r.genSource==="photo")s.photo++;});
@@ -1621,9 +1716,9 @@ function ReportsPage({vehicles:allVehicles,generators:allGenerators,drivers,work
   return(<div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
       <div style={{display:"flex",gap:6}}>{tabs.map(([id,label])=>(<button key={id} onClick={()=>setReport(id)} style={{padding:"7px 16px",borderRadius:7,border:report===id?`1.5px solid ${P}`:"1.5px solid #E0E0E0",background:report===id?"#D0E2FF":"#fff",color:report===id?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"}}>{label}</button>))}</div>
-      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{report==="fuel"&&<div style={{display:"flex",gap:4}}>{["All","Diesel","Petrol"].map(ft=>(<button key={ft} onClick={()=>setFuelTypeFilter(ft)} style={{padding:"5px 12px",borderRadius:6,border:fuelTypeFilter===ft?"1.5px solid "+P:"1.5px solid #E0E0E0",background:fuelTypeFilter===ft?"#D0E2FF":"#fff",color:fuelTypeFilter===ft?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{ft}</button>))}</div>}{(DIESEL_REPORTS.includes(report)||report==="gas")&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Stores:</span><StoreMultiSelect stores={report==="gas"?gasStores:dieselStores} value={storeFilter} onChange={setStoreFilter}/></>)}{GROUPABLE_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Group:</span><select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{...inp,width:160,padding:"6px 10px",fontSize:12}}><option value="All">All vehicles</option>{(vehicleGroups||[]).map(g=>(<option key={g} value={g}>{g}</option>))}<option value="__none">(No group)</option></select></>)}<span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Date Range:</span><input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/><span style={{color:"#8D8D8D"}}>to</span><input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/></div>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{report==="fuel"&&<div style={{display:"flex",gap:4}}>{["All","Diesel","Petrol"].map(ft=>(<button key={ft} onClick={()=>setFuelTypeFilter(ft)} style={{padding:"5px 12px",borderRadius:6,border:fuelTypeFilter===ft?"1.5px solid "+P:"1.5px solid #E0E0E0",background:fuelTypeFilter===ft?"#D0E2FF":"#fff",color:fuelTypeFilter===ft?P:"#525252",fontSize:11,fontWeight:600,cursor:"pointer"}}>{ft}</button>))}</div>}{(DIESEL_REPORTS.includes(report)||report==="gas"||report==="nepa")&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Stores:</span><StoreMultiSelect stores={report==="gas"?gasStores:report==="nepa"?nepaStores:dieselStores} value={storeFilter} onChange={setStoreFilter}/></>)}{GROUPABLE_REPORTS.includes(report)&&(<><span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Group:</span><select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{...inp,width:160,padding:"6px 10px",fontSize:12}}><option value="All">All vehicles</option>{(vehicleGroups||[]).map(g=>(<option key={g} value={g}>{g}</option>))}<option value="__none">(No group)</option></select></>)}<span style={{fontSize:12,color:"#6F6F6F",fontWeight:500}}>Date Range:</span><input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/><span style={{color:"#8D8D8D"}}>to</span><input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...inp,width:140,padding:"6px 10px",fontSize:12}}/></div>
     </div>
-    {DIESEL_REPORTS.includes(report)&&dieselExcluded.length>0&&<div style={{marginBottom:12}}><ImplausibleReadingsNote items={dieselExcluded}/></div>}{report==="fleet"&&renderFleet()}{report==="fuel"&&renderFuel()}{report==="dieselusage"&&renderDieselUsage()}{report==="dieselcost"&&renderDieselCost()}{report==="storecompare"&&renderStoreCompare()}{report==="gas"&&renderGas()}{report==="maintenance"&&renderMaint()}{report==="driver"&&renderDriver()}
+    {DIESEL_REPORTS.includes(report)&&dieselExcluded.length>0&&<div style={{marginBottom:12}}><ImplausibleReadingsNote items={dieselExcluded}/></div>}{report==="fleet"&&renderFleet()}{report==="fuel"&&renderFuel()}{report==="dieselusage"&&renderDieselUsage()}{report==="dieselcost"&&renderDieselCost()}{report==="storecompare"&&renderStoreCompare()}{report==="nepa"&&renderNepa()}{report==="gas"&&renderGas()}{report==="maintenance"&&renderMaint()}{report==="driver"&&renderDriver()}
   </div>);
 }
 
@@ -4275,6 +4370,124 @@ function GasPage({user,locations,gasCylinders,setGasCylinders,gasReady,gasPurcha
 // ============================================
 // DAILY STOCK TAB (Diesel Management, fleet admins) -- main tank, tanker, stores
 // ============================================
+// NEPA supply hours (20261117_nepa_supply.sql): the hours PHCN (NEPA) says it
+// supplied each store each day, typed into a month grid (a cell also takes a
+// block pasted from Excel, filling down and right) or pasted from Internal
+// Control's PHCN analysis sheet. Managers edit; everyone else reads.
+const storeKeyOf=v=>String(v||"").toLowerCase().replace(/chicken\s*republic|\/\s*warehouse|\bcr\b/g,"").replace(/[^a-z0-9]/g,"");
+const matchStore=(name,locations)=>{const k=storeKeyOf(name);if(!k)return null;const m=new Map();
+  (locations||[]).forEach(l=>{const lk=storeKeyOf(l);if(lk&&!m.has(lk))m.set(lk,l);});return m.get(k)||m.get(k.replace(/1$/,""))||null;};
+const NON_STORE_HEADS=/^(days?|date|total|average|s\/?n|no\.?)$/i;
+// Excel copies a block as tab-separated text: finds the row of store names, the
+// "PHCN HRS" column under each store (or the store's own column when there is
+// no second header row) and the day number (1-31) in the first column.
+const parsePhcnPaste=(text,locations,month)=>{
+  const lines=String(text||"").replace(/\r/g,"").split("\n").map(l=>l.split("\t"));
+  const nDays=new Date(Date.UTC(+month.slice(0,4),+month.slice(5,7),0)).getUTCDate();
+  let hi=-1;for(let i=0;i<Math.min(lines.length,12);i++){if(lines[i].some((c,j)=>j>0&&matchStore(c,locations))){hi=i;break;}}
+  if(hi<0)return{blocks:[],error:"No store names found. Copy from the row with the store names at the top, down to the last day."};
+  const starts=[];lines[hi].forEach((c,j)=>{const t=String(c||"").trim();if(j>0&&t&&!NON_STORE_HEADS.test(t))starts.push({j,name:t});});
+  const sub=lines[hi+1]&&lines[hi+1].some(c=>/phcn|nepa|gen/i.test(c||""))?lines[hi+1]:null;
+  const blocks=starts.map((st,k)=>{const end=k+1<starts.length?starts[k+1].j:Infinity;let col=st.j;
+    if(sub){col=sub.findIndex((c,j)=>j>=st.j&&j<end&&/phcn|nepa/i.test(c||""));}
+    return{name:st.name,store:matchStore(st.name,locations),col,values:[],problems:[]};});
+  for(let i=hi+(sub?2:1);i<lines.length;i++){const row=lines[i];const c0=String(row[0]||"").trim();if(!/^\d{1,2}$/.test(c0))continue;const d=+c0;
+    if(d<1||d>nDays)continue;const date=month+"-"+String(d).padStart(2,"0");
+    blocks.forEach(b=>{if(b.col<0)return;const v=String(row[b.col]??"").trim().replace(/,/g,"");if(v==="")return;const h=Number(v);
+      if(!isFinite(h)||h<0||h>24){b.problems.push("day "+d+": "+v);return;}b.values.push({date,hours:Math.round(h*100)/100});});}
+  return{blocks:blocks.filter(b=>b.values.length||b.problems.length),error:null};};
+function NepaSupplyTab({supply,setSupply,ready,locations,canManage,isSuper}){
+  const [month,setMonth]=useState(()=>ngDate(Date.now()).slice(0,7));
+  const [pick,setPick]=useState([]);   // stores shown (none picked = all)
+  const [edits,setEdits]=useState({});   // "store|date" -> what was typed
+  const [busy,setBusy]=useState(false);const [msg,setMsg]=useState("");
+  const [paste,setPaste]=useState(null);   // {text, map:{sheet name -> store}}
+  const card={background:"#fff",borderRadius:14,border:"1px solid #E8ECF1",padding:isMob()?14:18,marginBottom:14};
+  const btn2={display:"inline-flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:8,border:"1.5px solid #E0E0E0",background:"#fff",color:"#525252",fontSize:12,fontWeight:600,cursor:"pointer"};
+  const btnP={...btn2,border:"1.5px solid "+P,background:P,color:"#fff"};
+  if(!ready)return(<div style={card}><div style={{fontSize:15,fontWeight:700,marginBottom:6}}>NEPA supply hours</div><div style={{fontSize:13,color:"#525252"}}>{isSuper?<>Not switched on yet. Run <code>supabase/migrations/20261117_nepa_supply.sql</code> in the Supabase SQL editor (it should end with <b>4 | 1</b>), then refresh.</>:"Not switched on yet - the Super Admin has to switch it on."}</div></div>);
+  const y=+month.slice(0,4),m=+month.slice(5,7);const nDays=new Date(Date.UTC(y,m,0)).getUTCDate();
+  const dates=Array.from({length:nDays},(_,i)=>month+"-"+String(i+1).padStart(2,"0"));
+  const cur={};(supply||[]).forEach(x=>{if(x.date.startsWith(month))cur[x.storeLoc+"|"+x.date]=x;});
+  // stores with hours this month first, then the other shops, bakeries last (the PHCN sheet has no bakeries)
+  const withHours=new Set(Object.values(cur).map(x=>x.storeLoc));
+  const stores=pick.length?pick:(locations||[]).map((l,i)=>[l,i]).sort((a,b)=>(withHours.has(a[0])?0:1)-(withHours.has(b[0])?0:1)||(/bakery/i.test(a[0])?1:0)-(/bakery/i.test(b[0])?1:0)||a[1]-b[1]).map(x=>x[0]);
+  const valOf=k=>edits[k]!==undefined?edits[k]:(cur[k]?String(cur[k].hours):"");
+  const bad=v=>{const t=String(v).trim();if(t==="")return false;const n=Number(t);return!isFinite(n)||n<0||n>24;};
+  const changed=Object.keys(edits).filter(k=>{const e=String(edits[k]).trim();return e===""?!!cur[k]:(!cur[k]||Number(e)!==cur[k].hours);});
+  const changedSet=new Set(changed);const badN=changed.filter(k=>bad(edits[k])).length;
+  const monthLabel=new Date(Date.UTC(y,m-1,15)).toLocaleDateString("en-GB",{month:"long",year:"numeric",timeZone:"UTC"});
+  const goMonth=delta=>{if(changed.length&&!confirm("You have "+changed.length+" change(s) not saved. Leave "+monthLabel+" without saving them?"))return;
+    setEdits({});setMsg("");setMonth(new Date(Date.UTC(y,m-1+delta,1)).toISOString().slice(0,7));};
+  const save=async()=>{if(badN){setMsg("Fix the red boxes first: hours must be between 0 and 24.");return;}
+    const ups=[],dels=[];changed.forEach(k=>{const i=k.lastIndexOf("|");const t=String(edits[k]).trim();
+      if(t==="")dels.push(cur[k].id);else ups.push({store_location:k.slice(0,i),date:k.slice(i+1),hours:Math.round(Number(t)*100)/100});});
+    setBusy(true);setMsg("");
+    try{const saved=ups.length?(await db.saveNepaSupply(ups)).map(toNS):[];if(dels.length)await db.deleteNepaSupply(dels);
+      const kOf=x=>x.storeLoc+"|"+x.date;const sk=new Set(saved.map(kOf)),dk=new Set(dels);
+      setSupply(prev=>[...prev.filter(x=>!dk.has(x.id)&&!sk.has(kOf(x))),...saved]);setEdits({});
+      setMsg("Saved "+changed.length+" day"+(changed.length===1?"":"s")+".");}
+    catch(e){setMsg("Error: "+e.message);}setBusy(false);};
+  const onCellPaste=(e,di,si)=>{const t=e.clipboardData.getData("text");if(!/[\t\n]/.test(t.replace(/\s+$/,"")))return;e.preventDefault();
+    const rows=t.replace(/\r/g,"").replace(/\n+$/,"").split("\n").map(r=>r.split("\t"));const next={...edits};let n=0;
+    rows.forEach((r,ri)=>r.forEach((c,ci)=>{const d=dates[di+ri],st=stores[si+ci];if(!d||!st)return;const v=String(c).trim().replace(/,/g,"");if(v==="")return;next[st+"|"+d]=v;n++;}));
+    setEdits(next);setMsg(n+" box"+(n===1?"":"es")+" filled from the paste - check them, then Save changes.");};
+  const num=v=>{const t=String(v).trim();return t===""||bad(t)?null:Number(t);};
+  const colStats=stores.map(st=>{const vs=dates.map(d=>num(valOf(st+"|"+d))).filter(v=>v!=null);return{total:vs.reduce((a,b)=>a+b,0),n:vs.length};});
+  const pr=paste&&paste.text.trim()?parsePhcnPaste(paste.text,locations,month):null;
+  const storeFor=b=>paste&&paste.map[b.name]!==undefined?paste.map[b.name]:b.store;
+  const pasteN=pr?pr.blocks.reduce((a,b)=>a+(storeFor(b)?b.values.length:0),0):0;
+  const pasteOver=pr?pr.blocks.reduce((a,b)=>{const st=storeFor(b);return a+(st?b.values.filter(v=>cur[st+"|"+v.date]&&cur[st+"|"+v.date].hours!==v.hours).length:0);},0):0;
+  const applyPaste=()=>{const next={...edits};const add=new Set();
+    pr.blocks.forEach(b=>{const st=storeFor(b);if(!st)return;add.add(st);b.values.forEach(v=>{next[st+"|"+v.date]=String(v.hours);});});
+    setEdits(next);if(pick.length)setPick([...new Set([...pick,...add])]);setPaste(null);
+    setMsg(pasteN+" day"+(pasteN===1?"":"s")+" put into the grid for "+monthLabel+" - check them, then Save changes.");};
+  const sth={...th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:2,background:"#F4F4F4",padding:"8px 8px"};
+  const stc={...tc,padding:"4px 6px",whiteSpace:"nowrap"};
+  const navBtn={...btn2,padding:"6px 8px"};
+  return(<div>
+    <div style={card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+        <div><div style={{fontSize:15,fontWeight:700}}>NEPA supply hours</div>
+          <div style={{fontSize:12,color:"#6F6F6F",marginTop:4,maxWidth:620,lineHeight:1.5}}>The hours PHCN (NEPA) says it supplied each store, day by day, from Internal Control's PHCN analysis. Reports → NEPA vs Generator sets them beside the hours each store recorded and its generator hours.{canManage?" Type in the boxes, or paste: a block copied from Excel into a box fills down and to the right.":""}</div></div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>goMonth(-1)} style={navBtn} title="Previous month"><ChevronLeft size={14}/></button><b style={{fontSize:13,minWidth:120,textAlign:"center"}}>{monthLabel}</b><button onClick={()=>goMonth(1)} style={navBtn} title="Next month"><ChevronRight size={14}/></button>
+          <span style={{fontSize:12,color:"#6F6F6F"}}>Stores:</span><StoreMultiSelect stores={locations||[]} value={pick} onChange={setPick}/>
+          {canManage&&<button onClick={()=>setPaste({text:"",map:{}})} style={btn2}><Upload size={13}/> Paste the PHCN sheet</button>}
+        </div></div>
+      {msg&&<div style={{marginTop:10,fontSize:12,fontWeight:600,color:/^(Error|Fix)/.test(msg)?"#DA1E28":"#24A148"}}>{msg}</div>}
+    </div>
+    <div style={{...card,padding:0,overflow:"auto",maxHeight:"70vh"}}>
+      <table style={{borderCollapse:"collapse",fontSize:12}}>
+        <thead><tr><th style={{...sth,left:0,zIndex:3}}>Day</th>{stores.map(st=>(<th key={st} style={sth}>{st}</th>))}</tr></thead>
+        <tbody>{dates.map((d,di)=>(<tr key={d}><td style={{...stc,position:"sticky",left:0,background:"#fff",fontWeight:600,zIndex:1,padding:"4px 10px"}}>{fmtDayLabel(d)}</td>
+          {stores.map((st,si)=>{const k=st+"|"+d;const v=valOf(k);const ch=changedSet.has(k);return(<td key={st} style={stc}>{canManage
+            ?<input value={v} onChange={e=>setEdits({...edits,[k]:e.target.value})} onPaste={e=>onCellPaste(e,di,si)} inputMode="decimal" aria-label={st+" "+d}
+              style={{width:58,padding:"5px 6px",borderRadius:6,border:"1.5px solid "+(bad(v)?"#DA1E28":ch?"#F1C21B":"#E0E0E0"),background:ch?"#FFF8E1":"#fff",fontSize:12,textAlign:"right",fontFamily:"inherit",outline:"none"}}/>
+            :<span style={{display:"block",textAlign:"right",minWidth:44}}>{v||"-"}</span>}</td>);})}</tr>))}
+          <tr><td style={{...stc,position:"sticky",left:0,background:"#F4F4F4",fontWeight:700,padding:"6px 10px"}}>Total</td>{colStats.map((c,i)=>(<td key={i} style={{...stc,background:"#F4F4F4",textAlign:"right",fontWeight:700}}>{c.n?(Math.round(c.total*10)/10).toLocaleString():"-"}</td>))}</tr>
+          <tr><td style={{...stc,position:"sticky",left:0,background:"#F4F4F4",fontWeight:700,padding:"6px 10px"}}>Average a day</td>{colStats.map((c,i)=>(<td key={i} style={{...stc,background:"#F4F4F4",textAlign:"right"}}>{c.n?(c.total/c.n).toFixed(1):"-"}</td>))}</tr>
+        </tbody></table></div>
+    {canManage&&changed.length>0&&<div style={{position:"sticky",bottom:10,display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap",background:"#fff",border:"1px solid #E8ECF1",borderRadius:12,padding:"10px 14px",boxShadow:"0 4px 16px rgba(0,0,0,.08)"}}>
+      <span style={{fontSize:12,color:badN?"#DA1E28":"#525252",marginRight:"auto"}}>{changed.length} change{changed.length===1?"":"s"} not saved yet{badN?" - "+badN+" not between 0 and 24":""}</span>
+      <button onClick={()=>{setEdits({});setMsg("");}} style={btn2}>Undo changes</button>
+      <button disabled={busy} onClick={save} style={{...btnP,opacity:busy?0.6:1}}><Save size={13}/> {busy?"Saving...":"Save changes"}</button></div>}
+    {paste&&<Modal title="Paste the PHCN analysis sheet" onClose={()=>setPaste(null)}>
+      <div style={{fontSize:12,color:"#525252",lineHeight:1.5,marginBottom:8}}>In Excel, select from the row with the store names down to the last day (include the day numbers on the left), copy, and paste below. Only the <b>PHCN HRS</b> column under each store is taken. The days go into <b>{monthLabel}</b>. If that's the wrong month, close this and change the month first.</div>
+      <textarea value={paste.text} onChange={e=>setPaste({...paste,text:e.target.value})} rows={5} placeholder="Paste here" style={{...inp,fontFamily:"monospace",fontSize:11}}/>
+      {pr&&(pr.error?<div style={{color:"#DA1E28",fontSize:12,marginTop:8}}>{pr.error}</div>:<div style={{marginTop:10}}>
+        <div style={{overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{background:"#F4F4F4"}}>{["In the sheet","FleetPro store","Days","Total hours","Not taken"].map(h=>(<th key={h} style={{...th,padding:"6px 8px"}}>{h}</th>))}</tr></thead><tbody>
+          {pr.blocks.map(b=>{const st=storeFor(b);return(<tr key={b.name+b.col}><td style={{...tc,padding:"6px 8px",fontWeight:600}}>{b.name}</td>
+            <td style={{...tc,padding:"4px 8px"}}><select value={st||""} onChange={e=>setPaste({...paste,map:{...paste.map,[b.name]:e.target.value||null}})} style={{...inp,padding:"5px 8px",fontSize:12,color:st?"#161616":"#DA1E28"}}><option value="">-- leave out --</option>{(locations||[]).map(l=>(<option key={l} value={l}>{l}</option>))}</select></td>
+            <td style={{...tc,padding:"6px 8px"}}>{b.values.length}</td><td style={{...tc,padding:"6px 8px"}}>{(Math.round(b.values.reduce((a,v)=>a+v.hours,0)*10)/10).toLocaleString()}</td>
+            <td style={{...tc,padding:"6px 8px",color:b.problems.length?"#DA1E28":"#8D8D8D",whiteSpace:"normal"}}>{b.problems.length?b.problems.join(", ")+" (not between 0 and 24)":"-"}</td></tr>);})}
+        </tbody></table></div>
+        {pasteOver>0&&<div style={{fontSize:12,color:"#B45309",marginTop:6}}>{pasteOver} of these days already have different hours saved - they will be replaced when you save.</div>}
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:12}}><button onClick={()=>setPaste(null)} style={btn2}>Cancel</button><button disabled={!pasteN} onClick={applyPaste} style={{...btnP,opacity:pasteN?1:0.5}}>Put {pasteN} day{pasteN===1?"":"s"} into the grid</button></div>
+      </div>)}
+    </Modal>}
+  </div>);
+}
 function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purchases,deliveries,readings,transfers,generators,baselines,locations,canManage,isSuper,seeHistory}){
   const todayStr=ngDate(Date.now());
   const yesterdayStr=ngDate(Date.now()-864e5);
@@ -4520,7 +4733,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
 }
 
 // ============================================
-function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,setDieselReadings,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs,stockChecks,setStockChecks,tankerLoads,setTankerLoads,depotReady,routesReady,losses,setLosses,lossesReady}){
+function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,setDieselReadings,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs,stockChecks,setStockChecks,tankerLoads,setTankerLoads,depotReady,routesReady,losses,setLosses,lossesReady,nepaSupply,setNepaSupply,nepaSupplyReady}){
   // Store-staff scope: filter everything to their own store. Admin/Fleet Manager see all.
   const isStaff=user?.role==="Store Staff";
   // Purchase/delivery edits are a manager's job. Before 2026-10-05 the row buttons
@@ -4719,7 +4932,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
     }
     }catch(e){setMsg("Error: "+e.message);}setSaving(false);
   };
-  const tabs=scopeStore?["readings","compliance","transfers","distributions","stores","baselines","discrepancies"]:["overview","daily stock","watchtower","readings","compliance","transfers","purchases","distributions","stores","baselines","discrepancies"];
+  const tabs=scopeStore?["readings","compliance","transfers","distributions","stores","baselines","discrepancies"]:["overview","daily stock","watchtower","readings","compliance","nepa supply","transfers","purchases","distributions","stores","baselines","discrepancies"];
   // Staff KPI values (their store only)
   const staffReceived=dieselDistributions.reduce((s,d)=>s+(d.litres||0),0);
   const staffConsumed=dieselReadings.reduce((s,r)=>s+(r.usedL||0),0);
@@ -4805,7 +5018,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         <div style={{marginTop:6,fontSize:12,color:"#525252"}}>If a count was wrong, the Super Admin corrects it in Daily stock. If the diesel is really gone, only the Super Admin can accept the loss, on the purchase (Overview or Purchases).</div>
       </div>);})()}
     <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
-      {tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 18px",borderRadius:8,border:tab===t?"1.5px solid "+P:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t}</button>))}
+      {tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} style={{padding:"8px 18px",borderRadius:8,border:tab===t?"1.5px solid "+P:"1.5px solid #E0E0E0",background:tab===t?"#D0E2FF":"#fff",color:tab===t?P:"#525252",fontSize:12,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t==="nepa supply"?"NEPA supply":t}</button>))}
       <div style={{flex:1}}/>
       {canManage&&<><button onClick={()=>{setPf(blankPf());setShowAddPurchase(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,background:P,color:"#fff",border:"none",fontSize:12,fontWeight:600,cursor:"pointer"}}><Plus size={14}/>Log Purchase</button>
       <button onClick={()=>{setDistSource("tanker");setDistPurchaseId(oldestWithDiesel());setDistAuto(true);setShowDistribute(true);}} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 16px",borderRadius:9,border:"1.5px solid "+P,background:"#D0E2FF",color:P,fontSize:12,fontWeight:600,cursor:"pointer"}}><Send size={14}/>Distribute</button>
@@ -4925,6 +5138,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         </div>}
       </div>);
     })()}
+    {tab==="nepa supply"&&!scopeStore&&<NepaSupplyTab supply={nepaSupply||[]} setSupply={setNepaSupply} ready={!!nepaSupplyReady} locations={locations} canManage={canManage} isSuper={user?.role==="Super Admin"}/>}
     {tab==="compliance"&&(()=>{
       const [cy,cm]=cmpMonth.split("-").map(Number);
       const daysInMonth=new Date(cy,cm,0).getDate();
@@ -5343,6 +5557,12 @@ function FleetProAppInner(){
     try{const rows=await db.getGasStockCounts();if(live){setGasCounts(rows.map(toGSC));setGasCountsReady(true);}}
     catch(e){console.warn("Gas stock counts not available:",e?.message);if(live)setGasCountsReady(false);}
   })();return()=>{live=false;};},[user?.uid]);
+  // NEPA (PHCN) supply hours (20261117_nepa_supply.sql); not ready until it is run.
+  const [nepaSupply,setNepaSupply]=useState([]);const [nepaSupplyReady,setNepaSupplyReady]=useState(false);
+  useEffect(()=>{if(!user?.uid)return;let live=true;(async()=>{
+    try{const rows=await db.getNepaSupply();if(live){setNepaSupply(rows.map(toNS));setNepaSupplyReady(true);}}
+    catch(e){console.warn("NEPA supply hours not available:",e?.message);if(live)setNepaSupplyReady(false);}
+  })();return()=>{live=false;};},[user?.uid]);
   // Fleet imprest (20261027_imprest.sql); imprestReady stays false until it is run.
   const [imprest,setImprest]=useState([]);
   const [imprestChain,setImprestChain]=useState(IMP_DEFAULT_CHAIN);
@@ -5495,7 +5715,7 @@ function FleetProAppInner(){
         <Route path="/" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<DashPage vehicles={vehicles} generators={generators} workOrders={workOrders} go={setPage} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} papers={papers} svcReminders={svcReminders} depotAlert={depotAlert} gasCylinders={gasCylinders} imprestAlerts={imprestAlerts}/>}/>
         <Route path="/diesel" element={<DieselLogPage generators={generators} setGenerators={setGenerators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} dieselStock={dieselStock} user={user} locations={locations} odoLog={odoLog} setOdoLog={setOdoLog} genBaselines={genBaselines} setGenBaselines={setGenBaselines} nepaPeriodLogs={nepaPeriodLogs} setNepaPeriodLogs={setNepaPeriodLogs} dieselLocks={dieselLocks} appSettings={appSettings} vehicles={vehicles} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} powerPeriods={powerPeriods} setPowerPeriods={setPowerPeriods} powerReady={powerReady} storeTransfersReady={storeTransfersReady} pansReady={pansReady}/>}/>
         <Route path="/staff-dashboard" element={<StaffDashboardPage generators={generators} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} dieselPurchases={dieselPurchases} dieselStock={dieselStock} user={user} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} storeTransfersReady={storeTransfersReady} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasSupplyReady={gasSupplyReady}/>}/>
-        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady}/>}/>
+        <Route path="/diesel-mgmt" element={<DieselMgmtPage dieselPurchases={dieselPurchases} setDieselPurchases={setDieselPurchases} dieselDistributions={dieselDistributions} setDieselDistributions={setDieselDistributions} locations={locations} vendors={vendors} user={user} dieselReadings={dieselReadings} setDieselReadings={setDieselReadings} generators={generators} genBaselines={genBaselines} setGenBaselines={setGenBaselines} dieselTransfers={dieselTransfers} setDieselTransfers={setDieselTransfers} vehicles={vehicles} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} stockChecks={stockChecks} setStockChecks={setStockChecks} tankerLoads={tankerLoads} setTankerLoads={setTankerLoads} depotReady={depotReady} routesReady={routesReady} losses={dieselLosses} setLosses={setDieselLosses} lossesReady={lossesReady} nepaSupply={nepaSupply} setNepaSupply={setNepaSupply} nepaSupplyReady={nepaSupplyReady}/>}/>
         <Route path="/vehicles" element={<VehiclesPage vehicles={vehicles} setVehicles={setVehicles} locations={locations} vehicleGroups={vehicleGroups} saveVehicleGroups={saveVehicleGroups} fuelLogs={fuelLogs} workOrders={workOrders} inspections={inspections} papers={papers} svcReminders={svcReminders} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog}/>}/>
         <Route path="/snap" element={<div style={{maxWidth:500,margin:"20px auto"}}><MeterSnap generators={generators} setGenerators={setGenerators} odoLog={odoLog} setOdoLog={setOdoLog}/></div>}/>
         <Route path="/generators" element={<GenPage generators={isStoreStaff?generators.filter(g=>g.loc===user?.store_location):generators} setGenerators={setGenerators} locations={locations} fuelLogs={fuelLogs} canEdit={canEdit} odoLog={odoLog} setOdoLog={setOdoLog} dieselReadings={dieselReadings}/>}/>
@@ -5506,7 +5726,7 @@ function FleetProAppInner(){
         <Route path="/service" element={<ServicePage vehicles={vehicles} svcReminders={svcReminders} setSvcReminders={setSvcReminders} canEdit={canEdit}/>}/>
         <Route path="/inspections" element={<InspectionPage vehicles={vehicles} drivers={drivers} inspections={inspections} setInspections={setInspections} canEdit={canEdit} inspItems={inspItems} setInspItems={setInspItems}/>}/>
         <Route path="/vendors" element={<VendorsPage vendors={vendors} setVendors={setVendors} vendorTypes={vendorTypes} canEdit={canEdit}/>}/>
-        <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders}/>}/>
+        <Route path="/reports" element={<ReportsPage vehicles={vehicles} generators={generators} vehicleGroups={vehicleGroups} drivers={drivers} workOrders={workOrders} fuelLogs={fuelLogs} dieselReadings={dieselReadings} dieselPurchases={dieselPurchases} dieselDistributions={dieselDistributions} dieselTransfers={dieselTransfers} gasCylinders={gasCylinders} genBaselines={genBaselines} powerPeriods={powerPeriods} nepaPeriodLogs={nepaPeriodLogs} nepaSupply={nepaSupply} nepaSupplyReady={nepaSupplyReady} user={user}/>}/>
         <Route path="/live-map" element={isStoreStaff?<Navigate to="/staff-dashboard" replace/>:<LiveMapPage/>}/>
         <Route path="/imprest" element={impCanSee(user)?<ImprestPage user={user} users={users} vouchers={imprest} setVouchers={setImprest} cash={imprestCash} setCash={setImprestCash} cashReady={imprestCashReady} requests={imprestReq} setRequests={setImprestReq} requestsReady={imprestReqReady} chain={imprestChain} vehicles={vehicles} drivers={drivers} docReady={!!(docUploads.fuel||docUploads.wo||docUploads.papers)} ready={imprestReady} carry={imprestCarry}/>:<Navigate to="/" replace/>}/>
         <Route path="/gas" element={<GasPage user={user} locations={locations} gasCylinders={gasCylinders} setGasCylinders={setGasCylinders} gasReady={gasReady} gasPurchases={gasPurchases} setGasPurchases={setGasPurchases} supplyReady={gasSupplyReady} gasCounts={gasCounts} setGasCounts={setGasCounts} countsReady={gasCountsReady}/>}/>
