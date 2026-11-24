@@ -4517,7 +4517,14 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
   const diffWord=(diff,tol)=>diff==null?null:Math.abs(diff)<=tol?{t:"Matches",c:"#24A148",bg:"#DEFBE6"}:diff<0?{t:Math.abs(diff).toLocaleString()+" L missing",c:"#DA1E28",bg:"#FFF1F1"}:{t:diff.toLocaleString()+" L more than the books",c:"#DA1E28",bg:"#FFF1F1"};
   const pill=(w)=>w?<span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:w.bg,color:w.c,whiteSpace:"nowrap"}}>{w.t}</span>:<span style={{color:"#A8A8A8"}}>-</span>;
 
-  // ---- latest checks
+  // ---- latest checks. A tank's card says when it was last counted and what that count found, in
+  // grey: every count is already inside the one bottom line (netVar, "All our diesel"), so a red
+  // "missing" here read as a second, separate shortfall (Makinde 2026-11-24: "420 L missing on one
+  // end, 124 L on another, 33 L extra"). Not counted for over a week = an amber nudge.
+  const daysSince=d=>Math.round((new Date(todayStr+"T12:00:00Z")-new Date(d+"T12:00:00Z"))/864e5);
+  const lastCountSub=(verb,date,litres,diff)=>{const n=daysSince(date);
+    return(<>{verb} {fmtDayLabel(date)}: {L(litres)}<span style={{color:"#8D8D8D"}}>{diff?" - "+Math.abs(diff).toLocaleString()+" L "+(diff<0?"under":"over")+" the books that day":" - matched the books"}</span>
+      {n>7&&<div style={{marginTop:4}}>{pill({t:"Not counted for "+n+" days",c:"#B45309",bg:"#FFF8E1"})}</div>}</>);};
   const lastMainRow=[...ledger.days].reverse().find(r=>r.mainCheck);
   const lastTankRow=[...ledger.days].reverse().find(r=>r.tankerCheck);
   // ---- store tanks right now: each tank's latest level
@@ -4535,7 +4542,8 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
   // ---- forms
   const openModal=(kind)=>{setMsg("");const date=todayStr;const ex=kind==="load"?null:(checks||[]).find(c=>c.tank===kind&&c.date===date);
     setModal({kind,date,litres:ex?String(ex.litres):"",sub:"load",notes:ex?ex.notes:"",photo:null,preview:ex?ex.photoUrl:"",existingId:ex?ex.id:null});};
-  const setDate=(date)=>{const ex=modal.kind==="load"?null:(checks||[]).find(c=>c.tank===modal.kind&&c.date===date);
+  const openEditLoad=(x)=>{setMsg("");setModal({kind:"load",date:x.date,litres:String(x.litres),sub:x.kind||"load",notes:x.notes||"",photo:null,preview:"",existingId:null,loadId:x.id});};
+  const setDate=(date)=>{if(modal.kind==="load"){setModal({...modal,date});return;}const ex=(checks||[]).find(c=>c.tank===modal.kind&&c.date===date);
     setModal({...modal,date,litres:ex?String(ex.litres):"",notes:ex?ex.notes:"",preview:ex?ex.photoUrl:"",photo:null,existingId:ex?ex.id:null});};
   // what the ledger expects on the modal's morning (ignoring a reading already saved for that day)
   const expectedFor=(kind,date)=>{const l=depotLedger({checks:(checks||[]).filter(c=>!(c.tank===kind&&c.date===date)),loads,purchases,deliveries,losses,today:date});const row=l.days.find(r=>r.date===date);return row?(kind==="main"?row.mainExpected:row.tankerExpected):null;}; // main: that morning; tanker: end of that day
@@ -4544,11 +4552,15 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
     if(!m.date){setMsg("Choose the date.");return;}
     if(isNaN(litres)||litres<0||(m.kind==="load"&&litres<=0)){setMsg("Enter the litres.");return;}
     if(m.kind==="main"&&litres>35000&&!confirm(`${litres.toLocaleString()} L is more than the main tank's gauge goes up to (33,000 L). Save anyway?`))return;
+    // a loading can't take more than the main tank has on the books (2026-11-24: 55,000 typed for 5,500 put the main tank at -44,500)
+    if(m.kind==="load"&&m.sub==="load"){const l=depotLedger({checks,loads:(loads||[]).filter(x=>x.id!==m.loadId),purchases,deliveries,losses,today:m.date>todayStr?m.date:todayStr});
+      if(l.start&&m.date>=l.start){let min=null;for(const r of l.days){if(r.date<m.date)continue;if(r.date>m.date&&r.mainCheck)break;min=min==null?r.mainEnd:Math.min(min,r.mainEnd);}
+        if(min!=null&&litres>Math.max(0,min)&&!confirm(`The main tank only has ${L(Math.max(0,min))} on the books${min!==l.days.find(r=>r.date===m.date)?.mainEnd?" (at its lowest after "+fmtDayLabel(m.date)+")":" on "+fmtDayLabel(m.date)}. Loading ${litres.toLocaleString()} L would take it below nothing (${L(min-litres)}).\n\nIs the figure right? For example 5,500 typed as 55,000. If a purchase into the main tank is missing, log it first.\n\nSave anyway?`))return;}}
     setBusy(true);setMsg("");
     try{
       if(m.kind==="load"){
-        const saved=await db.addTankerLoad({date:m.date,kind:m.sub,litres,notes:m.notes||""});
-        setLoads(prev=>[...prev,toTL(saved)]);
+        if(m.loadId){const saved=await db.updateTankerLoad(m.loadId,{date:m.date,kind:m.sub,litres,notes:m.notes||""});setLoads(prev=>prev.map(y=>y.id===m.loadId?toTL(saved):y));}
+        else{const saved=await db.addTankerLoad({date:m.date,kind:m.sub,litres,notes:m.notes||""});setLoads(prev=>[...prev,toTL(saved)]);}
       }else{
         let photoUrl=m.preview&&!m.photo?m.preview:"";
         if(m.photo){const up=await uploadMeterPhoto(m.photo,m.kind==="main"?"main-tank":"tanker","depot");if(up.error&&!confirmWithoutPhoto("gauge photo",up.error)){setBusy(false);return;}photoUrl=up.url||"";}
@@ -4592,10 +4604,10 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
 
     {depotReady&&<>
     <div style={{display:"grid",gridTemplateColumns:isMob()?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:14}}>
-      <Kpi icon={Package} label="Main tank" value={L(ledger.mainNow)} sub={lastMainRow?<>Read {fmtDayLabel(lastMainRow.date)}: {L(lastMainRow.mainCheck.litres)} {ledger.netVar===0&&lastMainRow.mainDiff?pill({t:diffWord(lastMainRow.mainDiff,MAIN_TOL_L).t+" - signed off",c:"#B45309",bg:"#FFF8E1"}):pill(diffWord(lastMainRow.mainDiff,MAIN_TOL_L))}</>:"No reading yet"}/>
-      <Kpi icon={Truck} label="In the diesel tanker" value={L(ledger.tankerNow)} sub={lastTankRow?<>Checked {fmtDayLabel(lastTankRow.date)}: {L(lastTankRow.tankerCheck.litres)} {ledger.netVar===0&&lastTankRow.tankerDiff?pill({t:diffWord(lastTankRow.tankerDiff,TANKER_TOL_L).t+" - signed off",c:"#B45309",bg:"#FFF8E1"}):pill(diffWord(lastTankRow.tankerDiff,TANKER_TOL_L))}</>:"Loaded and bought in, minus delivered (never checked)"}/>
+      <Kpi icon={Package} label="Main tank" value={L(ledger.mainNow)} sub={lastMainRow?lastCountSub("Counted",lastMainRow.date,lastMainRow.mainCheck.litres,lastMainRow.mainDiff):"No reading yet"} accent={ledger.mainNow<0?"#DA1E28":undefined}/>
+      <Kpi icon={Truck} label="In the diesel tanker" value={L(ledger.tankerNow)} sub={lastTankRow?lastCountSub("Checked",lastTankRow.date,lastTankRow.tankerCheck.litres,lastTankRow.tankerDiff):"Loaded and bought in, minus delivered (never checked)"} accent={ledger.tankerNow<0?"#DA1E28":undefined}/>
       <Kpi icon={Fuel} label="In store tanks" value={L(storeNow)} sub="Each tank's latest reading"/>
-      <Kpi icon={Droplet} label="All our diesel" value={L((ledger.mainNow||0)+(ledger.tankerNow||0)+storeNow)} sub={ledger.netVar?<>Main tank + diesel tanker + stores {pill(ledger.netVar<0?{t:Math.abs(ledger.netVar).toLocaleString()+" L not yet explained",c:"#DA1E28",bg:"#FFF1F1"}:{t:ledger.netVar.toLocaleString()+" L more than the books",c:"#B45309",bg:"#FFF8E1"})}</>:"Main tank + diesel tanker + stores"}/>
+      <Kpi icon={Droplet} label="All our diesel" value={L((ledger.mainNow||0)+(ledger.tankerNow||0)+storeNow)} sub={<>Main tank + diesel tanker + stores{ledger.counts.length>0&&<div style={{marginTop:4}} title="Every main tank count and diesel tanker check since tracking started, added together">{pill(ledger.netVar<0?{t:"Counts: "+Math.abs(ledger.netVar).toLocaleString()+" L missing",c:"#DA1E28",bg:"#FFF1F1"}:ledger.netVar>0?{t:"Counts: "+ledger.netVar.toLocaleString()+" L more than the books",c:"#B45309",bg:"#FFF8E1"}:{t:"Counts match the books",c:"#24A148",bg:"#DEFBE6"})}</div>}</>}/>
     </div>
 
     <div style={card}>
@@ -4652,7 +4664,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
       <div style={{fontSize:11,color:"#8D8D8D",marginTop:8}}>Each closing is the next day's opening. "Counted" is the gauge reading (main tank, morning: it becomes the opening) or the diesel tanker check (end of day: it becomes the closing); the variance is counted minus "should be". Purchases delivered straight to stores are not counted here; purchases pumped straight into the diesel tanker are its "+ Bought". The whole-period variance adds up all the counts in the period.</div>
       {ledger.counts.some(c=>c.diff)&&<div style={{marginTop:8,padding:"8px 12px",borderRadius:8,background:ledger.netVar<0?"#FFF1F1":ledger.netVar>0?"#FFF8E1":"#F4F4F4",color:ledger.netVar<0?"#A2191F":ledger.netVar>0?"#7A4F00":"#525252",fontSize:12}}>
         <b>Not yet explained</b> (main tank + diesel tanker, since tracking started): {ledger.netVar<0?<b>{Math.abs(ledger.netVar).toLocaleString()} L missing</b>:ledger.netVar>0?<b>{ledger.netVar.toLocaleString()} L more than the books</b>:<b>nothing</b>}
-        {" "}= counts {ledger.adjusted<0?"-":"+"}{Math.abs(ledger.adjusted).toLocaleString()} L{ledger.accepted?<>, accepted as a loss {ledger.accepted.toLocaleString()} L</>:null}.
+        {" "}= {ledger.counts.filter(c=>c.diff).map(c=>(c.tank==="main"?"main tank ":"diesel tanker ")+fmtDayLabel(c.date)+" "+(c.diff<0?"-":"+")+Math.abs(c.diff).toLocaleString()).join(", ")} L{ledger.accepted?<>, accepted as a loss +{ledger.accepted.toLocaleString()} L</>:null}. This is the one figure that counts: each tank's own counts are already in it.
       </div>}
       <div style={{fontSize:11,color:"#525252",marginTop:6,display:"flex",gap:5,alignItems:"flex-start"}}><Lock size={12} style={{flexShrink:0,marginTop:1}}/><span>Counted days are locked: once a count is recorded, only the Super Admin can change it, or the purchases, diesel tanker loadings and deliveries it already covers. Record the day's purchases, loadings and deliveries before the next count.</span></div>
       {seeHistory&&afterCount.length>0&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:8,background:"#FFF8E1",border:"1px solid #FFE082"}}>
@@ -4664,12 +4676,13 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
           {c.note&&<div style={{fontSize:11,color:"#8D8D8D"}}>{c.note}</div>}
         </div>))}
       </div>}
+      {ledger.mainNow<0&&<div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12}}>The main tank shows less than nothing: more was loaded into the diesel tanker than the main tank had on the books. Check the latest loadings under Recent entries (a figure typed with an extra 0?) or log a purchase that is missing.</div>}
       {ledger.tankerNow<0&&<div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:"#FFF1F1",color:"#A2191F",fontSize:12}}>The diesel tanker shows less than nothing: more was delivered to stores than was recorded as loaded or bought into it. A loading or purchase is probably missing.</div>}
       </>}
       {recent.length>0&&<details style={{marginTop:12}}><summary style={{fontSize:12,fontWeight:600,color:"#525252",cursor:"pointer"}}>Recent entries ({recent.length})</summary>
         <div style={{marginTop:8}}>{recent.map(({k,x})=>(<div key={k+x.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #F4F4F4",fontSize:12}}>
           <div><b>{fmtDayLabel(x.date)}</b> - {k==="load"?(x.kind==="return"?"poured back into main tank":"loaded into diesel tanker"):(x.tank==="main"?"main tank read":"diesel tanker checked")}: {x.litres.toLocaleString()} L{x.notes?<span style={{color:"#8D8D8D"}}> ({x.notes})</span>:null}</div>
-          {canManage&&(isSuper||(k==="load"&&!lock.load(x))?<button onClick={()=>delEntry(k==="load"?"load":"check",x)} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button>:<span title={lock.why} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:"#8D8D8D"}}><Lock size={11}/>Counted</span>)}
+          {canManage&&(isSuper||(k==="load"&&!lock.load(x))?<span style={{display:"inline-flex",gap:6}}>{k==="load"&&<button onClick={()=>openEditLoad(x)} style={btn("#fff",P,"1.5px solid #E0E0E0")}>Change</button>}<button onClick={()=>delEntry(k==="load"?"load":"check",x)} style={btn("#fff","#DA1E28","1.5px solid #E0E0E0")}>Delete</button></span>:<span title={lock.why} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:"#8D8D8D"}}><Lock size={11}/>Counted</span>)}
         </div>))}</div></details>}
     </div>
     </>}
@@ -4709,7 +4722,7 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
       </tbody></table></div>
     </div>
 
-    {modal&&<Modal title={modal.kind==="main"?"Main tank reading":modal.kind==="tanker"?"Check the diesel tanker":"Load the diesel tanker"} onClose={()=>setModal(null)}>
+    {modal&&<Modal title={modal.kind==="main"?"Main tank reading":modal.kind==="tanker"?"Check the diesel tanker":modal.loadId?"Change a diesel tanker loading":"Load the diesel tanker"} onClose={()=>setModal(null)}>
       <Field label="Date"><input type="date" style={inp} value={modal.date} max={todayStr} onChange={e=>setDate(e.target.value)}/></Field>
       {modal.kind==="load"&&<Field label="What happened"><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{[["load","Loaded from the main tank into the diesel tanker"],["return","Poured back from the diesel tanker into the main tank"]].map(([v,t])=>(<button key={v} onClick={()=>setModal({...modal,sub:v})} style={btn(modal.sub===v?"#D0E2FF":"#fff",modal.sub===v?P:"#525252","1.5px solid "+(modal.sub===v?P:"#E0E0E0"))}>{t}</button>))}</div></Field>}
       <Field label={modal.kind==="main"?"Litres on the gauge (morning, before loading)":modal.kind==="tanker"?"Litres left in the diesel tanker (end of the day, after deliveries)":"Litres"}>

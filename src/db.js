@@ -352,6 +352,7 @@ export const db = {
   async deleteStockCheck(id) { return deleteRow('diesel_stock_checks', id); },
   async getTankerLoads() { return fetchAll('tanker_loads', 'date', true); },
   async addTankerLoad(l) { return insertRow('tanker_loads', l); },
+  async updateTankerLoad(id, l) { return updateRow('tanker_loads', id, l); },
   async deleteTankerLoad(id) { return deleteRow('tanker_loads', id); },
 
   // Accepted diesel losses (Super Admin only -- the database enforces it).
