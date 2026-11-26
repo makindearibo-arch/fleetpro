@@ -4746,6 +4746,24 @@ function DailyStockTab({checks,setChecks,loads,setLoads,losses,depotReady,purcha
 }
 
 // ============================================
+// Every photo saved with a diesel reading: the hour meter (gen_photo_url), the tank gauge
+// (diesel_level_photo_url) and the NEPA meter (nepa_photo_url). The readings table used to link only
+// the hour-meter photo, so a reading with a tank photo alone showed no camera at all (2026-11-26).
+const readingPhotos=r=>[
+  {key:"gen",label:"Hour meter",url:r.genPhotoUrl},
+  {key:"tank",label:"Tank level",url:r.dieselLevelPhotoUrl},
+  {key:"nepa",label:"NEPA meter",url:r.nepaPhotoUrl},
+].filter(p=>p.url&&String(p.url).trim());
+function ReadingPhotoCard({label,url,typed}){
+  const [bad,setBad]=useState(false);
+  return(<div style={{border:"1px solid #E8ECF1",borderRadius:10,overflow:"hidden",background:"#fff"}}>
+    <div style={{padding:"8px 10px",borderBottom:"1px solid #F4F4F4"}}><div style={{fontSize:11,fontWeight:700,color:"#525252",textTransform:"uppercase",letterSpacing:"0.04em"}}>{label}</div>
+      {typed&&<div style={{fontSize:12,color:"#161616",marginTop:2}}>{typed}</div>}</div>
+    {bad?<div style={{padding:"30px 10px",textAlign:"center",fontSize:12,color:"#8D8D8D",background:"#F7F8FA"}}>This photo could not be loaded.</div>
+      :<a href={url} target="_blank" rel="noreferrer" title="Open full size" style={{display:"block",background:"#F4F4F4"}}><img src={url} alt={label+" photo"} loading="lazy" onError={()=>setBad(true)} style={{display:"block",width:"100%",height:300,objectFit:"contain"}}/></a>}
+    <div style={{padding:"6px 10px",textAlign:"right"}}><a href={url} target="_blank" rel="noreferrer" style={{fontSize:12,color:P,fontWeight:600}}>Open full size</a></div>
+  </div>);
+}
 function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributions:_dd,setDieselDistributions,locations:_locs,vendors,user,dieselReadings:_dr,setDieselReadings,generators:_gens,genBaselines:_gb,setGenBaselines,dieselTransfers:_dt,setDieselTransfers,vehicles,powerPeriods,nepaPeriodLogs,stockChecks,setStockChecks,tankerLoads,setTankerLoads,depotReady,routesReady,losses,setLosses,lossesReady,nepaSupply,setNepaSupply,nepaSupplyReady}){
   // Store-staff scope: filter everything to their own store. Admin/Fleet Manager see all.
   const isStaff=user?.role==="Store Staff";
@@ -4817,6 +4835,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
   const [rdPageSize,setRdPageSize]=useState(25);
   const [dscRow,setDscRow]=useState(null); // flagged reading being explained (+ its opening level)
   const [noteRow,setNoteRow]=useState(null); // reading whose notes/transfers popup is open
+  const [photoRow,setPhotoRow]=useState(null); // reading whose photos are open
   const [dscPeriod,setDscPeriod]=useState(30); // Discrepancies tab: days back (0 = all time)
   const [dscStore,setDscStore]=useState("");
   // Per reading: days since the same asset's previous reading + that reading's
@@ -4997,6 +5016,18 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
         <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}><button onClick={()=>setDscRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Got it</button></div>
       </Modal>);
     })()}
+    {photoRow&&(()=>{const r=photoRow,km=r.meterKh?" Kh":"",num=v=>v!=null?Number(v).toLocaleString():"-";
+      const typed={gen:r.genHoursClosing!=null?"Typed: "+num(r.genHoursOpening)+km+" \u2192 "+num(r.genHoursClosing)+km+(r.hoursRun!=null&&!r.meterKh?" ("+Number(r.hoursRun).toFixed(1)+" h run)":""):null,
+        tank:r.dieselLevelActual!=null?"Typed: "+num(r.dieselLevelActual)+" L in the tank":"No tank level typed",
+        nepa:r.nepaMeterClosing!=null?"Typed: "+num(r.nepaMeterOpening)+" \u2192 "+num(r.nepaMeterClosing):null};
+      const ph=readingPhotos(r);
+      return(<Modal title={ph.length>1?"Reading photos ("+ph.length+")":"Reading photo"} onClose={()=>setPhotoRow(null)}>
+        <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14}}>{((generators||[]).find(x=>x.id===r.generatorId)||{}).name||r.generatorId}{" \u2014 "}{r.storeLoc}{" \u2014 "}{fmtDayLabel(r.date)}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
+          {ph.map(p=><ReadingPhotoCard key={p.key} label={p.label} url={p.url} typed={typed[p.key]}/>)}
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}><button onClick={()=>setPhotoRow(null)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:P,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Close</button></div>
+      </Modal>);})()}
     {noteRow&&(<Modal title="Reading notes" onClose={()=>setNoteRow(null)}>
       <div style={{fontSize:12,color:"#8D8D8D",marginBottom:14}}>{noteRow.gen} — {noteRow.store} — {noteRow.date}</div>
       {noteRow.notes&&<div style={{marginBottom:noteRow.transfers.length?16:0}}><div style={{fontSize:11,fontWeight:700,color:"#525252",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Note</div><div style={{fontSize:13,lineHeight:1.5}}>{noteRow.notes}</div></div>}
@@ -5391,7 +5422,7 @@ function DieselMgmtPage({dieselPurchases:_dp,setDieselPurchases,dieselDistributi
           {rows.length===0?<div style={{padding:30,textAlign:"center",color:"#8D8D8D",fontSize:13}}>No readings for this filter. Pick a branch/generator/date range above.</div>
           :<><div style={{overflow:"auto",maxHeight:"60vh"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:1000}}><thead><tr>{cols.map(h=>(<th key={h} style={sth}>{h}</th>))}</tr></thead>
           <tbody>{pageRows.map(r=>(<tr key={r.id} style={{borderBottom:"1px solid #F4F4F4",background:r.discrepancyFlag?"#FFF6F6":""}}>
-            <td style={{...tc,whiteSpace:"nowrap"}}><span style={{display:"inline-flex",alignItems:"center",gap:5}}>{r.discrepancyFlag&&<button onClick={()=>setDscRow({...r,openLevel:openMap[r.id]})} title="Why is this flagged? Click to explain" style={{display:"inline-flex",alignItems:"center",padding:2,border:"none",background:"none",cursor:"pointer"}}><AlertTriangle size={13} color="#DA1E28"/></button>}{r.date}{r.genPhotoUrl?<a href={r.genPhotoUrl} target="_blank" rel="noreferrer" title="View meter photo" style={{display:"inline-flex"}}><Camera size={12} color={P}/></a>:null}</span></td>
+            <td style={{...tc,whiteSpace:"nowrap"}}><span style={{display:"inline-flex",alignItems:"center",gap:5}}>{r.discrepancyFlag&&<button onClick={()=>setDscRow({...r,openLevel:openMap[r.id]})} title="Why is this flagged? Click to explain" style={{display:"inline-flex",alignItems:"center",padding:2,border:"none",background:"none",cursor:"pointer"}}><AlertTriangle size={13} color="#DA1E28"/></button>}{r.date}{(()=>{const ph=readingPhotos(r);return ph.length?<button onClick={()=>setPhotoRow(r)} title={"View photo"+(ph.length>1?"s":"")+": "+ph.map(p=>p.label.toLowerCase()).join(" + ")} style={{display:"inline-flex",alignItems:"center",gap:2,padding:2,border:"none",background:"none",cursor:"pointer",color:P,fontSize:10,fontWeight:700}}><Camera size={12} color={P}/>{ph.length>1?ph.length:null}</button>:null;})()}</span></td>
             <td style={tc}>{r.storeLoc}</td>
             <td style={{...tc,fontWeight:600}}>{genName(r.generatorId)}</td>
             <td style={tc}>{r.genHoursOpening!=null?r.genHoursOpening.toLocaleString()+(r.meterKh?" Kh":""):"-"}</td>
